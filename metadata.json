@@ -1,0 +1,6 @@
+{
+  "name": "TStream.online",
+  "description": "High-performance streaming platform for movies and TV shows with verified pagination, TMDB metadata, multi-server playback, and subtitle integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan and architectural roadmap for TStream.online, detailing pagination fixes, the visual Details page matching reference, hybrid TMDB metadata engine, fmov.my stream player with server switching, multi-provider subtitle integration, and guest-first local storage library.",
+  "updatedAt": "2026-10-14T15:33:33.022003698Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
