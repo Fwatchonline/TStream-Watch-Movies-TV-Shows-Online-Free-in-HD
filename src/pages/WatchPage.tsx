@@ -28,6 +28,8 @@ import { StreamingPlayer } from '../components/StreamingPlayer';
 import { MediaCard } from '../components/MediaCard';
 import { CastCarousel } from '../components/CastCarousel';
 import { autoDiscoverMovieFranchise, DiscoveredCollection } from '../services/collectionStore';
+import { createMediaSlug } from '../utils/slug';
+import { updateMediaSEO } from '../utils/seo';
 
 interface WatchPageProps {
   mediaId: number;
@@ -80,15 +82,24 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       if (isMounted) {
         setDetail(data);
         if (data) {
+          updateMediaSEO(data, { season: currentSeason, episode: currentEpisode, isWatching: true });
           setInWatchlist(isInWatchlist(data.id));
+          const slug = createMediaSlug(data.title || (data as any).name, data.id);
           if (data.mediaType === 'movie') {
             setActiveTab('story');
-            // Auto discover collection for movies
+            const expectedUrl = `/watch/movie/${slug}`;
+            if (window.location.pathname !== expectedUrl) {
+              window.history.replaceState({}, '', expectedUrl);
+            }
             autoDiscoverMovieFranchise(data).then(col => {
               if (isMounted && col) setFranchiseCollection(col);
             });
           } else {
             setActiveTab('episodes');
+            const expectedUrl = `/watch/tv/${slug}/${season}/${episode}`;
+            if (!window.location.pathname.includes(slug)) {
+              window.history.replaceState({}, '', expectedUrl);
+            }
           }
         }
         setLoading(false);
@@ -99,6 +110,13 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       isMounted = false;
     };
   }, [mediaId, mediaType]);
+
+  // Update SEO when TV season/episode changes
+  useEffect(() => {
+    if (detail && detail.mediaType === 'tv') {
+      updateMediaSEO(detail, { season: currentSeason, episode: currentEpisode, isWatching: true });
+    }
+  }, [currentSeason, currentEpisode, detail]);
 
   // Load TV episodes for the season
   useEffect(() => {
@@ -133,6 +151,10 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   const handleEpisodeChange = (s: number, e: number) => {
     setCurrentSeason(s);
     setCurrentEpisode(e);
+    if (detail) {
+      const slug = createMediaSlug(detail.title || (detail as any).name, detail.id);
+      window.history.replaceState({}, '', `/watch/tv/${slug}/${s}/${e}`);
+    }
   };
 
   const handleToggleWatchlist = () => {

@@ -22,6 +22,29 @@ export interface ResolveResponse {
   error?: string;
 }
 
+/**
+ * Universal client-side sanitizer to eliminate technical scraper names (showbox, febbox, vidapi, etc.)
+ */
+export function cleanServerDisplay(name: string): string {
+  if (!name) return 'Zeus (1080p)';
+  let s = name;
+  s = s.replace(/api\.fmov\.my/gi, 'Zeus Ultra');
+  s = s.replace(/fmov/gi, 'Zeus');
+  s = s.replace(/showbox/gi, 'Zeus 4K');
+  s = s.replace(/febbox/gi, 'Quantum');
+  s = s.replace(/vidapi/gi, 'Apollo');
+  s = s.replace(/vaplayer/gi, 'Zeus Core');
+  s = s.replace(/vidlink/gi, 'Hermes');
+  s = s.replace(/castletv/gi, 'Athena');
+  s = s.replace(/4khdhub/gi, 'Apollo 4K');
+  s = s.replace(/streamflix/gi, 'Ares Edge');
+  s = s.replace(/netmirror/gi, 'Chronos Mirror');
+  s = s.replace(/dahmermovies/gi, 'Ares');
+  s = s.replace(/onetouchtv/gi, 'Titan');
+  s = s.replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
+  return s;
+}
+
 export async function fetchDirectStreams(params: {
   tmdbId: number;
   mediaType: 'movie' | 'tv';
@@ -49,7 +72,18 @@ export async function fetchDirectStreams(params: {
 
     const data: ResolveResponse = await res.json();
     if (data.success && Array.isArray(data.results)) {
-      return data.results;
+      return data.results
+        .filter(r => !r.provider?.toLowerCase().includes('castle') && !r.providerName?.toLowerCase().includes('castle'))
+        .map(r => ({
+          ...r,
+          providerName: cleanServerDisplay(r.providerName),
+          streams: (r.streams || [])
+            .filter(st => !st.server?.toLowerCase().includes('castle') && !st.url?.toLowerCase().includes('castle'))
+            .map(st => ({
+              ...st,
+              server: cleanServerDisplay(st.server)
+            }))
+        }));
     }
     return [];
   } catch (err) {

@@ -32,3 +32,38 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Vertical Poster Carousel Marquees for Login / Register */
+@keyframes marqueeUp {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-50%);
+  }
+}
+
+@keyframes marqueeDown {
+  0% {
+    transform: translateY(-50%);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+.animate-marquee-up {
+  animation: marqueeUp 32s linear infinite;
+  will-change: transform;
+}
+
+.animate-marquee-down {
+  animation: marqueeDown 38s linear infinite;
+  will-change: transform;
+}
+
+.animate-marquee-up-fast {
+  animation: marqueeUp 26s linear infinite;
+  will-change: transform;
+}
+

@@ -13,18 +13,17 @@ import {
 } from 'lucide-react';
 import {
   getWatchlist,
-  getContinueWatching,
   getHistory,
   clearHistory,
-  removeContinueWatching,
   toggleWatchlist,
   getUserSettings,
   updateUserSettings,
   UserSettings
 } from '../services/storage';
-import { MediaItem, WatchlistItem, ContinueWatchingItem, HistoryItem } from '../types/media';
-import { EXPANDED_CATALOG } from '../services/catalogData';
+import { MediaItem, WatchlistItem, HistoryItem } from '../types/media';
 import { STREAMING_PROVIDERS } from '../services/providers';
+import { useAuth } from '../context/AuthContext';
+import { ContinueWatchingSection } from '../components/ContinueWatchingSection';
 
 interface LibraryPageProps {
   onSelectMedia: (item: MediaItem) => void;
@@ -37,15 +36,14 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
   onWatchMedia,
   onExplore
 }) => {
+  const { user, continueWatching } = useAuth();
   const [activeTab, setActiveTab] = useState<'watchlist' | 'continue' | 'history' | 'settings'>('watchlist');
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(getWatchlist);
-  const [continueWatching, setContinueWatching] = useState<ContinueWatchingItem[]>(getContinueWatching);
   const [history, setHistory] = useState<HistoryItem[]>(getHistory);
   const [settings, setSettings] = useState<UserSettings>(getUserSettings);
 
   const refreshData = () => {
     setWatchlist(getWatchlist());
-    setContinueWatching(getContinueWatching());
     setHistory(getHistory());
     setSettings(getUserSettings());
   };
@@ -66,11 +64,6 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
       releaseDate: item.releaseDate,
       voteAverage: item.voteAverage
     });
-  };
-
-  const handleRemoveContinue = (e: React.MouseEvent, id: number) => {
-    e.stopPropagation();
-    removeContinueWatching(id);
   };
 
   const handleClearHistory = () => {
@@ -117,7 +110,7 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
             }`}
           >
             <Clock className="w-3.5 h-3.5" />
-            <span>Continue Watching ({continueWatching.length})</span>
+            <span>Continue Watching {user ? `(${continueWatching.length})` : '(Registered)'}</span>
           </button>
 
           <button
@@ -218,92 +211,13 @@ export const LibraryPage: React.FC<LibraryPageProps> = ({
         </div>
       )}
 
-      {/* Continue Watching View */}
+      {/* Continue Watching View (Exclusively for Registered Users) */}
       {activeTab === 'continue' && (
-        <div>
-          {continueWatching.length === 0 ? (
-            <div className="min-h-[40vh] flex flex-col items-center justify-center p-8 text-center bg-[#141418] rounded-2xl border border-white/5">
-              <Clock className="w-12 h-12 text-slate-600 mb-3" />
-              <h3 className="text-base font-bold text-white">No In-Progress Streams</h3>
-              <p className="text-xs text-slate-400 max-w-sm mt-1 mb-4 leading-relaxed">
-                When you play a film or TV episode, your playback progress will automatically save here so you can resume anytime.
-              </p>
-              <button
-                onClick={onExplore}
-                className="px-5 py-2.5 rounded-xl bg-[#F5C400] text-black text-xs font-bold hover:bg-[#e0b400] transition-colors cursor-pointer"
-              >
-                Start Watching
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {continueWatching.map(item => {
-                const targetMedia = EXPANDED_CATALOG.find(m => m.id === item.id) || {
-                  id: item.id,
-                  tmdbId: item.id,
-                  title: item.title,
-                  overview: '',
-                  posterPath: item.posterPath,
-                  backdropPath: item.backdropPath,
-                  releaseDate: '',
-                  voteAverage: 8.0,
-                  voteCount: 100,
-                  popularity: 100,
-                  genres: [],
-                  mediaType: item.mediaType
-                };
-
-                return (
-                  <div
-                    key={`${item.id}_${item.seasonNumber}_${item.episodeNumber}`}
-                    className="bg-[#29292D] rounded-xl overflow-hidden border border-[#3A3A40] group cursor-pointer hover:border-[#F5C400] transition-all flex flex-col"
-                    onClick={() => onWatchMedia(targetMedia, item.seasonNumber, item.episodeNumber)}
-                  >
-                    <div className="relative aspect-video w-full bg-[#232326] overflow-hidden">
-                      <img
-                        src={item.backdropPath || item.posterPath}
-                        alt={item.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                        referrerPolicy="no-referrer"
-                      />
-                      <button
-                        onClick={(e) => handleRemoveContinue(e, item.id)}
-                        className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/70 hover:bg-[#F5C400] hover:text-black text-white transition-colors"
-                        title="Dismiss"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <div className="w-10 h-10 rounded-full bg-[#F5C400] flex items-center justify-center text-black">
-                          <Play className="w-5 h-5 fill-black ml-0.5" />
-                        </div>
-                      </div>
-                      <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-white/20">
-                        <div
-                          className="h-full bg-[#F5C400]"
-                          style={{ width: `${item.percentage}%` }}
-                        />
-                      </div>
-                    </div>
-                    <div className="p-3.5 flex items-center justify-between">
-                      <div>
-                        <h4 className="text-sm font-semibold text-white group-hover:text-red-400">
-                          {item.title}
-                        </h4>
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          {item.episodeName || (item.seasonNumber ? `Season ${item.seasonNumber} · Episode ${item.episodeNumber}` : 'Film')}
-                        </p>
-                      </div>
-                      <span className="text-xs font-bold text-red-500 tabular-nums">
-                        {item.percentage}%
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <ContinueWatchingSection
+          onWatchMedia={onWatchMedia}
+          onSelectMedia={onSelectMedia}
+          variant="library"
+        />
       )}
 
       {/* History View */}

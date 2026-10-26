@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile document with identification and account timestamps",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "email"]
+    },
+    "WatchlistItem": {
+      "title": "WatchlistItem",
+      "description": "Individual movie or TV series saved in the user's watchlist",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "tmdbId": { "type": "string" },
+        "mediaType": { "type": "string" },
+        "title": { "type": "string" },
+        "posterPath": { "type": "string" },
+        "voteAverage": { "type": "number" },
+        "releaseDate": { "type": "string" },
+        "addedAt": { "type": "string" }
+      },
+      "required": ["userId", "tmdbId", "mediaType", "title"]
+    },
+    "ContinueWatchingItem": {
+      "title": "ContinueWatchingItem",
+      "description": "Playback progress item saved in Firestore exclusively for registered users",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "tmdbId": { "type": "string" },
+        "mediaType": { "type": "string" },
+        "title": { "type": "string" },
+        "posterPath": { "type": "string" },
+        "backdropPath": { "type": "string" },
+        "progressSeconds": { "type": "number" },
+        "durationSeconds": { "type": "number" },
+        "percentage": { "type": "number" },
+        "seasonNumber": { "type": "number" },
+        "episodeNumber": { "type": "number" },
+        "episodeName": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "tmdbId", "mediaType", "title", "progressSeconds", "durationSeconds", "percentage", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile document storing basic user details"
+    },
+    "/users/{userId}/watchlist/{itemId}": {
+      "schema": { "$ref": "#/entities/WatchlistItem" },
+      "description": "User private watchlist items"
+    },
+    "/users/{userId}/continueWatching/{itemId}": {
+      "schema": { "$ref": "#/entities/ContinueWatchingItem" },
+      "description": "User private continue watching progress records"
+    }
+  }
+}

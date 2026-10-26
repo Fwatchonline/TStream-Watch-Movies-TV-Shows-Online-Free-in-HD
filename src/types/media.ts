@@ -132,7 +132,7 @@ export interface SubtitleTrack {
   label: string;
   format: 'srt' | 'vtt';
   url: string;
-  source: 'vdrk_v1' | 'vdrk_v2' | 'opensubtitles_v3';
+  source?: 'vdrk_v1' | 'vdrk_v2' | 'opensubtitles_v3' | string;
 }
 
 export interface ContinueWatchingItem {

@@ -12,6 +12,7 @@ import { MediaItem } from '../types/media';
 import { ALL_GENRES } from '../services/catalogData';
 import { fetchCatalog } from '../services/tmdb';
 import { PLATFORMS_LIST } from '../services/platformData';
+import { ContinueWatchingSection } from '../components/ContinueWatchingSection';
 
 interface HomePageProps {
   onSelectMedia: (item: MediaItem) => void;
@@ -230,6 +231,13 @@ export const HomePage: React.FC<HomePageProps> = ({
             </div>
           </div>
         )}
+
+        {/* Continue Watching for Registered Users */}
+        <ContinueWatchingSection
+          onWatchMedia={onWatchMedia}
+          onSelectMedia={onSelectMedia}
+          variant="home"
+        />
 
         {/* 3. Trending Poster Carousel (Real TMDB Trending Items - As on Reference Image 2) */}
         <div>

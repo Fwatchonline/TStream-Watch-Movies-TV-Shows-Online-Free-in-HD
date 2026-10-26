@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { MediaDetail, MediaType, MediaItem } from '../types/media';
 import { isInWatchlist, toggleWatchlist, isWatched, toggleWatched } from '../services/storage';
+import { useAuth } from '../context/AuthContext';
 
 interface DetailsHeroProps {
   media: MediaDetail;
@@ -28,17 +29,26 @@ export const DetailsHero: React.FC<DetailsHeroProps> = ({
   onOpenTrailer,
   onSelectTag
 }) => {
-  const [inWatchlist, setInWatchlist] = useState(() => isInWatchlist(media.id));
+  const { user, isInWatchlist: isCloudInWatchlist, toggleWatchlist: toggleCloudWatchlist } = useAuth();
+  const [inWatchlist, setInWatchlist] = useState(() => (user ? isCloudInWatchlist(media.id) : isInWatchlist(media.id)));
   const [watched, setWatched] = useState(() => isWatched(media.id));
   const [copied, setCopied] = useState(false);
   const [posterError, setPosterError] = useState(false);
+
+  // Keep state updated if cloud watchlist changes
+  React.useEffect(() => {
+    if (user) {
+      setInWatchlist(isCloudInWatchlist(media.id));
+    }
+  }, [user, isCloudInWatchlist, media.id]);
 
   const isMovie = media.mediaType === 'movie';
   const releaseYear = media.releaseDate ? new Date(media.releaseDate).getFullYear() : '—';
   const hasTrailer = media.videos && media.videos.length > 0;
 
-  const handleWatchlistToggle = () => {
-    const nextState = toggleWatchlist({
+  const handleWatchlistToggle = async () => {
+    // Local storage toggle
+    const localNext = toggleWatchlist({
       id: media.id,
       mediaType: media.mediaType,
       title: media.title,
@@ -47,7 +57,21 @@ export const DetailsHero: React.FC<DetailsHeroProps> = ({
       releaseDate: media.releaseDate,
       voteAverage: media.voteAverage
     });
-    setInWatchlist(nextState);
+
+    if (user) {
+      const cloudNext = await toggleCloudWatchlist({
+        id: media.id,
+        mediaType: media.mediaType,
+        title: media.title,
+        posterPath: media.posterPath,
+        voteAverage: media.voteAverage,
+        releaseDate: media.releaseDate,
+        overview: media.overview || ''
+      });
+      setInWatchlist(cloudNext);
+    } else {
+      setInWatchlist(localNext);
+    }
   };
 
   const handleWatchedToggle = () => {

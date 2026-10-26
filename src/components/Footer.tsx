@@ -1,5 +1,6 @@
 import React from 'react';
-import { Film, Play } from 'lucide-react';
+import { Film } from 'lucide-react';
+import { TStreamLogo } from './TStreamLogo';
 
 interface FooterProps {
   onNavigateLegal: (page: string) => void;
@@ -12,13 +13,8 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateLegal }) => {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 pb-10 border-b border-[#3A3A40]">
           {/* Brand Info */}
           <div className="md:col-span-1">
-            <div className="flex items-center gap-2 text-base font-extrabold text-white mb-2">
-              <div className="w-7 h-7 rounded-lg bg-[#F5C400] flex items-center justify-center text-black font-black shadow-md shadow-amber-500/10">
-                <Play className="w-3.5 h-3.5 fill-black text-black ml-0.5" />
-              </div>
-              <span className="font-extrabold text-lg tracking-tight text-white font-sans">
-                T <span className="text-[#F5C400]">Stream</span>
-              </span>
+            <div className="mb-3">
+              <TStreamLogo size="md" />
             </div>
             <p className="text-[#A6A6AC] text-xs leading-relaxed max-w-sm">
               Free streaming service providing real-time metadata, trailers, subtitle search, and multi-server video playback for films and television series.

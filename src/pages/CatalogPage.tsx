@@ -12,6 +12,7 @@ interface CatalogPageProps {
   initialQuery?: string;
   initialPlatform?: string;
   initialLetter?: string;
+  initialGenreId?: number;
   onSelectMedia: (item: MediaItem) => void;
   onWatchMedia: (item: MediaItem) => void;
   onSelectPlatform?: (platformId: string) => void;
@@ -24,6 +25,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
   initialQuery = '',
   initialPlatform,
   initialLetter,
+  initialGenreId,
   onSelectMedia,
   onWatchMedia,
   onSelectPlatform
@@ -32,7 +34,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
   const getInitialParams = (): FilterOptions => {
     const params = new URLSearchParams(window.location.search);
     const parsedPage = parseInt(params.get('page') || '1', 10);
-    const parsedGenre = params.get('genreId') ? parseInt(params.get('genreId')!, 10) : undefined;
+    const parsedGenre = params.get('genreId') ? parseInt(params.get('genreId')!, 10) : initialGenreId;
     const parsedYear = params.get('year') ? parseInt(params.get('year')!, 10) : undefined;
     const parsedMinRating = params.get('minRating') ? parseFloat(params.get('minRating')!) : undefined;
     const defaultSort = category === 'top-rated' ? 'vote_average.desc' : 'popularity.desc';
@@ -42,9 +44,13 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     const parsedLetter = params.get('letter') || initialLetter || (category === 'az' ? 'A' : undefined);
 
     let mediaType: MediaType | 'all' = 'all';
-    if (category === 'movies') mediaType = 'movie';
-    else if (category === 'tv-shows') mediaType = 'tv';
-    else if (params.get('mediaType')) mediaType = params.get('mediaType') as any;
+    if (params.get('mediaType')) {
+      mediaType = params.get('mediaType') as any;
+    } else if (category === 'movies') {
+      mediaType = 'movie';
+    } else if (category === 'tv-shows') {
+      mediaType = 'tv';
+    }
 
     return {
       page: isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage,
@@ -104,12 +110,17 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     window.history.replaceState({}, '', newUrl);
   }, []);
 
+  // Sync initialGenreId prop if passed
+  useEffect(() => {
+    if (initialGenreId !== undefined) {
+      setFilters(prev => ({ ...prev, genreId: initialGenreId, page: 1 }));
+    }
+  }, [initialGenreId]);
+
   // Fetch items based on active filters and page
   const loadData = useCallback(async () => {
     setLoading(true);
-    let targetType: MediaType | 'all' = filters.mediaType || 'all';
-    if (category === 'movies') targetType = 'movie';
-    if (category === 'tv-shows') targetType = 'tv';
+    const targetType: MediaType | 'all' = filters.mediaType || (category === 'movies' ? 'movie' : category === 'tv-shows' ? 'tv' : 'all');
 
     const catParam = (category === 'platform' || filters.platform)
       ? 'platform'
@@ -117,13 +128,13 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
       ? 'az'
       : category === 'top-rated'
       ? 'top-movies'
-      : category === 'movies'
-      ? 'popular-movies'
-      : category === 'tv-shows'
+      : targetType === 'tv'
       ? 'popular-tv'
+      : targetType === 'movie'
+      ? 'popular-movies'
       : category === 'trending'
       ? 'trending'
-      : 'search';
+      : 'movies';
 
     const result = await fetchCatalog(catParam, filters.page || 1, {
       ...filters,

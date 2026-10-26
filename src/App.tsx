@@ -10,9 +10,15 @@ import { LibraryPage } from './pages/LibraryPage';
 import { AdminPage } from './pages/AdminPage';
 import { CollectionsPage } from './pages/CollectionsPage';
 import { TagsPage } from './pages/TagsPage';
+import { RandomPage } from './pages/RandomPage';
 import { SurpriseModal } from './components/SurpriseModal';
 import { LegalModal } from './components/LegalModal';
+import { AuthModal } from './components/AuthModal';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { AuthProvider } from './context/AuthContext';
 import { MediaItem, MediaDetail } from './types/media';
+import { createMediaSlug, parseMediaSlug } from './utils/slug';
+import { updateSEO } from './utils/seo';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<string>('home');
@@ -22,6 +28,7 @@ export default function App() {
   const [watchEpisode, setWatchEpisode] = useState<number>(1);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedGenreId, setSelectedGenreId] = useState<number | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
   const [selectedLetter, setSelectedLetter] = useState<string>('A');
   const [surpriseOpen, setSurpriseOpen] = useState(false);
@@ -33,6 +40,13 @@ export default function App() {
     const handleLocation = () => {
       const path = window.location.pathname.replace(/^\//, '');
       const params = new URLSearchParams(window.location.search);
+
+      if (params.has('genreId')) {
+        const gid = parseInt(params.get('genreId')!, 10);
+        if (!isNaN(gid)) setSelectedGenreId(gid);
+      } else {
+        setSelectedGenreId(null);
+      }
 
       if (path === 'movies') {
         setCurrentView('movies');
@@ -70,24 +84,26 @@ export default function App() {
         if (params.get('q')) setSearchQuery(params.get('q')!);
       } else if (path === 'library') {
         setCurrentView('library');
+      } else if (path === 'random') {
+        setCurrentView('random');
       } else if (path === 'admin') {
         setCurrentView('admin');
       } else if (path.startsWith('movie/') || path.startsWith('tv/')) {
         const parts = path.split('/');
-        const type = parts[0] as 'movie' | 'tv';
-        const id = parseInt(parts[1], 10);
-        if (!isNaN(id)) {
+        const type = (parts[0] === 'tv' ? 'tv' : 'movie') as 'movie' | 'tv';
+        const parsed = parseMediaSlug(parts[1]);
+        if (parsed && !isNaN(parsed.id)) {
           setSelectedMediaType(type);
-          setSelectedMediaId(id);
+          setSelectedMediaId(parsed.id);
           setCurrentView('details');
         }
       } else if (path.startsWith('watch/')) {
         const parts = path.split('/');
-        const type = parts[1] as 'movie' | 'tv';
-        const id = parseInt(parts[2], 10);
-        if (!isNaN(id)) {
+        const type = (parts[1] === 'tv' ? 'tv' : 'movie') as 'movie' | 'tv';
+        const parsed = parseMediaSlug(parts[2]);
+        if (parsed && !isNaN(parsed.id)) {
           setSelectedMediaType(type);
-          setSelectedMediaId(id);
+          setSelectedMediaId(parsed.id);
           setCurrentView('watch');
           if (parts[3]) setWatchSeason(parseInt(parts[3], 10) || 1);
           if (parts[4]) setWatchEpisode(parseInt(parts[4], 10) || 1);
@@ -102,6 +118,74 @@ export default function App() {
     return () => window.removeEventListener('popstate', handleLocation);
   }, []);
 
+  // Update SEO for main catalog pages
+  useEffect(() => {
+    if (currentView === 'home') {
+      updateSEO();
+    } else if (currentView === 'movies') {
+      updateSEO({
+        title: 'Popular & Latest Movies Free HD',
+        description: 'Browse and watch thousands of blockbuster movies online in HD 1080p and 4K on T Stream.'
+      });
+    } else if (currentView === 'tv-shows') {
+      updateSEO({
+        title: 'TV Shows & Full Episodes Free',
+        description: 'Stream full seasons and episodes of your favorite TV series and dramas on T Stream.'
+      });
+    } else if (currentView === 'trending') {
+      updateSEO({
+        title: 'Trending Movies & TV Shows Today',
+        description: 'Discover the hottest and most popular movies and series streaming right now on T Stream.'
+      });
+    } else if (currentView === 'top-rated') {
+      updateSEO({
+        title: 'Top Rated Movies & Shows of All Time',
+        description: 'Explore the highest critically-acclaimed films and television series on T Stream.'
+      });
+    } else if (currentView === 'collections') {
+      updateSEO({
+        title: 'Movie Franchises & Sagas',
+        description: 'Explore complete cinematic universes and movie franchises on T Stream.'
+      });
+    } else if (currentView === 'platform') {
+      const name = (selectedPlatform || 'streaming').toUpperCase();
+      updateSEO({
+        title: `${name} Hub — Movies & TV Series`,
+        description: `Stream movies and television series from ${name} on T Stream.`
+      });
+    } else if (currentView === 'az') {
+      updateSEO({
+        title: `Titles Starting With ${selectedLetter} — A-Z Directory`,
+        description: `Browse movies and TV shows alphabetically starting with letter ${selectedLetter} on T Stream.`
+      });
+    } else if (currentView === 'tags') {
+      updateSEO({
+        title: selectedTag ? `Tag: #${selectedTag}` : 'Explore Movies & TV by Tag',
+        description: 'Explore movies and TV series by genre tropes, moods, aesthetics, and tags.'
+      });
+    } else if (currentView === 'search') {
+      updateSEO({
+        title: searchQuery ? `Search: "${searchQuery}"` : 'Search Movies & TV Shows',
+        description: 'Search across tens of thousands of movies, series, actors, and sagas on T Stream.'
+      });
+    } else if (currentView === 'library') {
+      updateSEO({
+        title: 'My Watchlist & Library',
+        description: 'Access your saved bookmarks, watchlist, and watched history on T Stream.'
+      });
+    } else if (currentView === 'random') {
+      updateSEO({
+        title: 'Random Movie & TV Show Picker — Reshuffle 20 Titles',
+        description: 'Spin the wheel and pick from 20 random movies and TV series to watch online in HD on T Stream.'
+      });
+    } else if (currentView === 'admin') {
+      updateSEO({
+        title: 'Server & Player Settings',
+        description: 'Configure custom streaming server priorities and player preferences on T Stream.'
+      });
+    }
+  }, [currentView, searchQuery, selectedLetter, selectedPlatform, selectedTag]);
+
   const navigateTo = (view: string, extra?: any) => {
     setCurrentView(view);
     let newPath = '/';
@@ -109,34 +193,59 @@ export default function App() {
     if (view === 'home') {
       newPath = '/';
       setSelectedMediaId(null);
+      setSelectedGenreId(null);
     } else if (view === 'movies') {
-      newPath = '/movies';
+      if (extra?.genreId != null) {
+        setSelectedGenreId(extra.genreId);
+        newPath = `/movies?genreId=${extra.genreId}`;
+      } else {
+        setSelectedGenreId(null);
+        newPath = '/movies';
+      }
     } else if (view === 'tv-shows') {
-      newPath = '/tv-shows';
+      if (extra?.genreId != null) {
+        setSelectedGenreId(extra.genreId);
+        newPath = `/tv-shows?genreId=${extra.genreId}`;
+      } else {
+        setSelectedGenreId(null);
+        newPath = '/tv-shows';
+      }
     } else if (view === 'trending') {
       newPath = '/trending';
+      setSelectedGenreId(null);
     } else if (view === 'top-rated') {
       newPath = '/top-rated';
+      setSelectedGenreId(null);
     } else if (view === 'collections') {
       newPath = '/collections';
+      setSelectedGenreId(null);
     } else if (view === 'platform') {
       const plat = extra?.platform || selectedPlatform || 'netflix';
       setSelectedPlatform(plat);
       newPath = `/platform/${plat}`;
+      setSelectedGenreId(null);
     } else if (view === 'az') {
       const letter = (extra?.letter || selectedLetter || 'A').toUpperCase();
       setSelectedLetter(letter);
       newPath = letter === 'ALL' ? '/movies' : `/az/${letter}`;
+      setSelectedGenreId(null);
     } else if (view === 'tags') {
       newPath = extra?.tag ? `/tags?tag=${encodeURIComponent(extra.tag)}` : '/tags';
       setSelectedTag(extra?.tag || null);
+      setSelectedGenreId(null);
     } else if (view === 'search') {
       newPath = extra?.query ? `/search?q=${encodeURIComponent(extra.query)}` : '/search';
       if (extra?.query) setSearchQuery(extra.query);
+      setSelectedGenreId(null);
     } else if (view === 'library') {
       newPath = '/library';
+      setSelectedGenreId(null);
+    } else if (view === 'random') {
+      newPath = '/random';
+      setSelectedGenreId(null);
     } else if (view === 'admin') {
       newPath = '/admin';
+      setSelectedGenreId(null);
     }
 
     window.history.pushState({}, '', newPath);
@@ -144,23 +253,27 @@ export default function App() {
   };
 
   const handleSelectMedia = (item: MediaItem) => {
-    setSelectedMediaId(item.id || item.tmdbId);
+    const id = item.id || item.tmdbId;
+    setSelectedMediaId(id);
     setSelectedMediaType(item.mediaType);
     setCurrentView('details');
-    window.history.pushState({}, '', `/${item.mediaType}/${item.id || item.tmdbId}`);
+    const slug = createMediaSlug(item.title || (item as any).name, id);
+    window.history.pushState({}, '', `/${item.mediaType}/${slug}`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleWatchMedia = (item: MediaItem, season = 1, episode = 1) => {
-    setSelectedMediaId(item.id || item.tmdbId);
+    const id = item.id || item.tmdbId;
+    setSelectedMediaId(id);
     setSelectedMediaType(item.mediaType);
     setWatchSeason(season);
     setWatchEpisode(episode);
     setCurrentView('watch');
 
+    const slug = createMediaSlug(item.title || (item as any).name, id);
     const watchUrl = item.mediaType === 'movie'
-      ? `/watch/movie/${item.id || item.tmdbId}`
-      : `/watch/tv/${item.id || item.tmdbId}/${season}/${episode}`;
+      ? `/watch/movie/${slug}`
+      : `/watch/tv/${slug}/${season}/${episode}`;
 
     window.history.pushState({}, '', watchUrl);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -174,13 +287,16 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#232326] text-[#F3F3F3] font-sans selection:bg-[#F5C400] selection:text-black">
+    <AuthProvider>
+      <div className="min-h-screen flex flex-col bg-[#232326] text-[#F3F3F3] font-sans selection:bg-[#F5C400] selection:text-black">
       {/* Universal T Stream Header on all pages */}
       <HomeHeader
         onToggleSidebar={() => setSidebarOpen(prev => !prev)}
         onNavigate={navigateTo}
         onSearch={handleSearch}
-        onSurpriseMe={() => setSurpriseOpen(true)}
+        onSelectMedia={handleSelectMedia}
+        onSelectGenre={(genreId) => navigateTo('movies', { genreId })}
+        onSurpriseMe={() => navigateTo('random')}
         onOpenFilter={() => navigateTo('movies')}
         currentView={currentView}
       />
@@ -190,6 +306,8 @@ export default function App() {
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onNavigate={navigateTo}
+        onSelectGenre={(genreId) => navigateTo('movies', { genreId })}
+        selectedGenreId={selectedGenreId}
         onSelectPlatform={(platId) => navigateTo('platform', { platform: platId })}
         selectedPlatform={selectedPlatform || undefined}
         currentView={currentView}
@@ -202,10 +320,10 @@ export default function App() {
             onSelectMedia={handleSelectMedia}
             onWatchMedia={handleWatchMedia}
             onNavigate={navigateTo}
-            onSurpriseMe={() => setSurpriseOpen(true)}
+            onSurpriseMe={() => navigateTo('random')}
             onSearch={handleSearch}
             onOpenLegal={(page) => {
-              if (['movies', 'tv-shows', 'trending', 'collections', 'tags'].includes(page)) {
+              if (['movies', 'tv-shows', 'trending', 'collections', 'tags', 'random'].includes(page)) {
                 navigateTo(page);
               } else {
                 setLegalPage(page as any);
@@ -222,6 +340,7 @@ export default function App() {
             onWatchNow={(detail, season, ep) => handleWatchMedia(detail, season || 1, ep || 1)}
             onSelectMedia={handleSelectMedia}
             onSelectTag={(tag) => navigateTo('tags', { tag })}
+            onSelectGenre={(genreId) => navigateTo('movies', { genreId })}
             onNavigateCollections={() => navigateTo('collections')}
             onSelectPlatform={(platId) => navigateTo('platform', { platform: platId })}
           />
@@ -259,6 +378,7 @@ export default function App() {
         {currentView === 'movies' && (
           <CatalogPage
             category="movies"
+            initialGenreId={selectedGenreId || undefined}
             onSelectMedia={handleSelectMedia}
             onWatchMedia={handleWatchMedia}
           />
@@ -267,6 +387,7 @@ export default function App() {
         {currentView === 'tv-shows' && (
           <CatalogPage
             category="tv-shows"
+            initialGenreId={selectedGenreId || undefined}
             onSelectMedia={handleSelectMedia}
             onWatchMedia={handleWatchMedia}
           />
@@ -324,6 +445,13 @@ export default function App() {
           />
         )}
 
+        {currentView === 'random' && (
+          <RandomPage
+            onSelectMedia={handleSelectMedia}
+            onWatchMedia={handleWatchMedia}
+          />
+        )}
+
         {currentView === 'admin' && (
           <AdminPage />
         )}
@@ -332,7 +460,7 @@ export default function App() {
       {/* Footer for non-home pages */}
       {currentView !== 'home' && (
         <Footer onNavigateLegal={(page) => {
-          if (['movies', 'tv-shows', 'trending', 'top-rated', 'platform', 'az', 'collections', 'tags'].includes(page)) {
+          if (['movies', 'tv-shows', 'trending', 'top-rated', 'platform', 'az', 'collections', 'tags', 'random'].includes(page)) {
             navigateTo(page);
           } else {
             setLegalPage(page as any);
@@ -353,6 +481,13 @@ export default function App() {
         page={legalPage}
         onClose={() => setLegalPage(null)}
       />
+
+      {/* Cloud Authentication, Profile & Watchlist Modal */}
+      <AuthModal onSelectMedia={handleSelectMedia} />
+
+      {/* Offline Status Toast */}
+      <OfflineIndicator />
     </div>
+  </AuthProvider>
   );
 }

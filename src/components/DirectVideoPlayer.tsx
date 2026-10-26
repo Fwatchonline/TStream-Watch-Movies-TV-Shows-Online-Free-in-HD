@@ -12,35 +12,32 @@ import {
   Minimize,
   Settings,
   Subtitles,
-  Sparkles,
   RefreshCw,
   AlertTriangle,
   ChevronRight,
   ChevronLeft,
-  Server,
-  Tv,
-  Film,
-  Check,
   PictureInPicture2,
-  Sliders,
-  Layers,
-  Radio,
+  SlidersHorizontal,
+  Database,
   Moon,
-  Maximize2,
-  ChevronDown,
-  ChevronUp,
-  Zap,
-  Globe,
-  Search
+  Maximize2
 } from 'lucide-react';
-import { ResolvedStream, DirectProviderResult } from '../services/directStreamClient';
-import { SubtitleTrack } from '../types/media';
+import { ResolvedStream, DirectProviderResult, cleanServerDisplay } from '../services/directStreamClient';
+import { SubtitleTrack, Episode } from '../types/media';
+import {
+  PlaybackSettingsModal,
+  SettingsSubView
+} from './PlaybackSettingsModal';
 
 interface DirectVideoPlayerProps {
   title: string;
   isMovie: boolean;
   currentSeason?: number;
   currentEpisode?: number;
+  totalSeasons?: number;
+  seasonsList?: any[];
+  episodesList?: Episode[];
+  onSelectEpisode?: (season: number, episode: number) => void;
   providerResults: DirectProviderResult[];
   availableSubtitles?: SubtitleTrack[];
   onNextEpisode?: () => void;
@@ -48,6 +45,8 @@ interface DirectVideoPlayerProps {
   hasNextEpisode?: boolean;
   hasPrevEpisode?: boolean;
   storageKey?: string;
+  initialResumeSeek?: number;
+  onProgressUpdate?: (currentTime: number, duration: number) => void;
   onRefreshStreams?: () => void;
   isTheaterMode?: boolean;
   onToggleTheater?: () => void;
@@ -58,8 +57,12 @@ interface DirectVideoPlayerProps {
 export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   title,
   isMovie,
-  currentSeason,
-  currentEpisode,
+  currentSeason = 1,
+  currentEpisode = 1,
+  totalSeasons = 1,
+  seasonsList,
+  episodesList = [],
+  onSelectEpisode,
   providerResults,
   availableSubtitles = [],
   onNextEpisode,
@@ -67,6 +70,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   hasNextEpisode,
   hasPrevEpisode,
   storageKey,
+  initialResumeSeek,
+  onProgressUpdate,
   onRefreshStreams,
   isTheaterMode,
   onToggleTheater,
@@ -78,13 +83,24 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Flatten all direct streams with server info
+  // Flatten all direct streams with sanitized server info (excluding castle completely)
   const allStreams: Array<ResolvedStream & { providerName: string; providerKey: string }> = [];
   for (const pr of providerResults) {
+    if (pr.provider?.toLowerCase().includes('castle') || pr.providerName?.toLowerCase().includes('castle')) {
+      continue;
+    }
     for (const st of pr.streams) {
+      if (
+        st.server?.toLowerCase().includes('castle') ||
+        st.url?.toLowerCase().includes('castle') ||
+        (st as any).providerKey?.toLowerCase().includes('castle')
+      ) {
+        continue;
+      }
       allStreams.push({
         ...st,
-        providerName: pr.providerName,
+        server: cleanServerDisplay(st.server),
+        providerName: cleanServerDisplay(pr.providerName),
         providerKey: pr.provider
       });
     }
@@ -107,25 +123,38 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Menus on the Player
-  const [showServerMenu, setShowServerMenu] = useState<boolean>(false);
-  const [showSettingsMenu, setShowSettingsMenu] = useState<boolean>(false);
-  const [showSubtitlesMenu, setShowSubtitlesMenu] = useState<boolean>(false);
+  // Playback Settings Modal state (matching image_bb8944d1.png)
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [settingsSubView, setSettingsSubView] = useState<SettingsSubView>('main');
 
-  // Accordion state for direct server providers
-  const [openProviderKeys, setOpenProviderKeys] = useState<Record<string, boolean>>({
-    vidapi: true,
-    vidrock: true,
-    vidlink: true,
-    direct_hls_backup: true
+  // Player Accent Color (Defaults to #F5C400 yellow matching the site brand)
+  const [accentColor, setAccentColor] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('vyla_player_accent');
+      if (saved && saved !== '#3B82F6') return saved;
+      return '#F5C400';
+    } catch {
+      return '#F5C400';
+    }
   });
 
-  // Accordion state for subtitle language groups
-  const [openSubLanguages, setOpenSubLanguages] = useState<Record<string, boolean>>({
-    Croatian: true,
-    English: true
-  });
-  const [subSearchQuery, setSubSearchQuery] = useState<string>('');
+  const handleSetAccentColor = (color: string) => {
+    setAccentColor(color);
+    try {
+      localStorage.setItem('vyla_player_accent', color);
+    } catch {}
+  };
+
+  // Quality state
+  const [selectedQuality, setSelectedQuality] = useState<string>('Auto');
+
+  // Audio track state
+  const [availableAudioTracks, setAvailableAudioTracks] = useState<Array<{ id: number; name: string }>>([
+    { id: 0, name: 'Default (Original Studio)' },
+    { id: 1, name: 'Stereo 2.0 Direct' },
+    { id: 2, name: 'Dolby Digital 5.1' }
+  ]);
+  const [selectedAudioTrackId, setSelectedAudioTrackId] = useState<number>(0);
 
   // Subtitles
   const [activeSubTrackUrl, setActiveSubTrackUrl] = useState<string | null>(null);
@@ -168,9 +197,11 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     const streamUrl = activeStream.playUrl || activeStream.url;
     const isHls = activeStream.type === 'hls' || streamUrl.includes('.m3u8');
 
-    // Preserve current seek position across server switch
+    // Preserve current seek position across server switch or registered user continue watching
     let initialSeek = video.currentTime > 0 ? video.currentTime : 0;
-    if (initialSeek === 0 && resumeKey) {
+    if (initialSeek === 0 && initialResumeSeek && initialResumeSeek > 10) {
+      initialSeek = initialResumeSeek;
+    } else if (initialSeek === 0 && resumeKey) {
       try {
         const saved = localStorage.getItem(resumeKey);
         if (saved) {
@@ -195,6 +226,15 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setIsLoading(false);
+        // Detect audio tracks
+        if (hls.audioTracks && hls.audioTracks.length > 0) {
+          const detected = hls.audioTracks.map((t, idx) => ({
+            id: idx,
+            name: t.name || t.lang || `Audio Track ${idx + 1}`
+          }));
+          setAvailableAudioTracks(detected);
+        }
+
         if (initialSeek > 0) {
           video.currentTime = initialSeek;
         }
@@ -205,21 +245,20 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              console.warn('HLS Network error, attempting recovery...');
+              console.warn('HLS Network error, recovering...');
               hls.startLoad();
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              console.warn('HLS Media error, attempting recovery...');
+              console.warn('HLS Media error, recovering...');
               hls.recoverMediaError();
               break;
             default:
               console.error('Fatal HLS error:', data);
               hls.destroy();
-              // Auto-advance to next direct server if available!
               if (selectedStreamIndex < allStreams.length - 1) {
                 setSelectedStreamIndex(prev => prev + 1);
               } else {
-                setLoadError(`Direct stream interrupted on ${activeStream?.server || 'current server'}. Select another server.`);
+                setLoadError(`Direct stream interrupted on ${cleanServerDisplay(activeStream?.server)}. Please select another source.`);
                 setIsLoading(false);
               }
               break;
@@ -227,7 +266,6 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         }
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl') && isHls) {
-      // Native Safari HLS
       video.src = streamUrl;
       video.addEventListener('loadedmetadata', () => {
         setIsLoading(false);
@@ -235,7 +273,6 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         video.play().catch(() => setIsPlaying(false));
       }, { once: true });
     } else {
-      // Direct MP4
       video.src = streamUrl;
       video.addEventListener('loadedmetadata', () => {
         setIsLoading(false);
@@ -257,6 +294,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
+    let lastReportTime = 0;
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
       if (resumeKey && video.currentTime > 5) {
@@ -265,20 +303,29 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       if (video.buffered.length > 0) {
         setBufferedTime(video.buffered.end(video.buffered.length - 1));
       }
+      const now = Date.now();
+      if (now - lastReportTime > 6000 && onProgressUpdate && video.currentTime > 3) {
+        lastReportTime = now;
+        onProgressUpdate(video.currentTime, video.duration || 0);
+      }
     };
 
     const onDurationChange = () => setDuration(video.duration);
     const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
+    const onPause = () => {
+      setIsPlaying(false);
+      if (onProgressUpdate && video.currentTime > 3) {
+        onProgressUpdate(video.currentTime, video.duration || 0);
+      }
+    };
     const onWaiting = () => setIsLoading(true);
     const onPlaying = () => setIsLoading(false);
     const onError = () => {
-      console.warn(`Playback error on ${activeStream?.server || 'source'}`);
       if (selectedStreamIndex < allStreams.length - 1) {
         setSelectedStreamIndex(prev => prev + 1);
       } else {
         setIsLoading(false);
-        setLoadError(`Direct stream error on ${activeStream?.server || 'server'}. Please select another server.`);
+        setLoadError(`Stream feed error. Select another source from playback settings.`);
       }
     };
 
@@ -306,11 +353,11 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     controlsTimeoutRef.current = setTimeout(() => {
-      if (isPlaying && !showSettingsMenu && !showSubtitlesMenu && !showServerMenu) {
+      if (isPlaying && !showSettingsModal) {
         setShowControls(false);
       }
     }, 3200);
-  }, [isPlaying, showSettingsMenu, showSubtitlesMenu, showServerMenu]);
+  }, [isPlaying, showSettingsModal]);
 
   // 4. Keyboard Shortcuts
   useEffect(() => {
@@ -356,24 +403,30 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           break;
         case 'm':
           e.preventDefault();
-          setIsMuted(m => {
-            video.muted = !m;
-            return !m;
-          });
+          toggleMute();
           break;
         case 'f':
           e.preventDefault();
           toggleFullscreen();
           break;
+        case 's':
+          e.preventDefault();
+          setSettingsSubView('main');
+          setShowSettingsModal(prev => !prev);
+          break;
+        case 'escape':
+          if (showSettingsModal) {
+            setShowSettingsModal(false);
+          }
+          break;
       }
-      handleMouseMove();
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleMouseMove]);
+  }, [showSettingsModal]);
 
-  // Toggle Play / Pause
+  // Control handlers
   const togglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -381,16 +434,39 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     else video.pause();
   };
 
-  // Seek
+  const toggleMute = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+    video.muted = nextMuted;
+    if (!nextMuted && volume === 0) {
+      setVolume(0.5);
+      video.volume = 0.5;
+    }
+  };
+
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const video = videoRef.current;
+    const val = parseFloat(e.target.value);
+    setVolume(val);
+    if (video) {
+      video.volume = val;
+      video.muted = val === 0;
+    }
+    setIsMuted(val === 0);
+  };
+
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     const video = videoRef.current;
     if (!video || !duration) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    video.currentTime = pos * duration;
+    const pos = (e.clientX - rect.left) / rect.width;
+    const target = Math.max(0, Math.min(duration, pos * duration));
+    video.currentTime = target;
+    setCurrentTime(target);
   };
 
-  // Hover Seek Bar
   const handleScrubberMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!duration) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -399,282 +475,82 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     setHoverTime(pos * duration);
   };
 
-  const handleScrubberMouseLeave = () => setHoverPosition(null);
+  const handleScrubberMouseLeave = () => {
+    setHoverPosition(null);
+  };
 
-  // Skip +/- 10s
   const handleSkip = (seconds: number) => {
     const video = videoRef.current;
     if (!video) return;
-    video.currentTime = Math.max(0, Math.min(duration || 0, video.currentTime + seconds));
+    video.currentTime = Math.max(0, Math.min(duration, video.currentTime + seconds));
   };
 
-  // Volume
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setVolume(val);
-    if (videoRef.current) {
-      videoRef.current.volume = val;
-      videoRef.current.muted = val === 0;
-    }
-    setIsMuted(val === 0);
-  };
-
-  const toggleMute = () => {
-    if (!videoRef.current) return;
-    if (isMuted) {
-      videoRef.current.muted = false;
-      videoRef.current.volume = volume || 0.5;
-      setIsMuted(false);
-    } else {
-      videoRef.current.muted = true;
-      setIsMuted(true);
-    }
-  };
-
-  // Speed
   const handleSpeedChange = (speed: number) => {
+    const video = videoRef.current;
     setPlaybackSpeed(speed);
-    if (videoRef.current) videoRef.current.playbackRate = speed;
-    setShowSettingsMenu(false);
+    if (video) video.playbackRate = speed;
   };
 
-  // Fullscreen
   const toggleFullscreen = () => {
-    if (!containerRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
+
     if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
+      container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
     } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
     }
   };
 
-  // Picture in Picture
   const togglePiP = async () => {
     const video = videoRef.current;
     if (!video) return;
     try {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
-      } else if (video !== document.pictureInPictureElement) {
+      } else if (document.pictureInPictureEnabled) {
         await video.requestPictureInPicture();
       }
-    } catch (e) {
-      console.warn('PiP not supported or failed', e);
+    } catch (err) {
+      console.warn('PiP failed:', err);
     }
-  };
-
-  // Switch Stream Server directly on the player
-  const handleSelectStream = (index: number) => {
-    setSelectedStreamIndex(index);
-    setShowServerMenu(false);
-    setLoadError(null);
   };
 
   const handleNextStream = () => {
     if (allStreams.length <= 1) return;
-    const nextIdx = (selectedStreamIndex + 1) % allStreams.length;
-    handleSelectStream(nextIdx);
+    setSelectedStreamIndex((selectedStreamIndex + 1) % allStreams.length);
   };
 
-  // Combine Subtitles from Provider + App Subtitles
-  const combinedSubtitles: Array<{ label: string; url: string; language?: string; isVtt?: boolean }> = [];
+  // Combine subtitles from API + stream metadata
+  const combinedSubtitles: SubtitleTrack[] = [];
+  const seenUrls = new Set<string>();
+
   for (const pr of providerResults) {
-    for (const sub of pr.subtitles || []) {
-      if (!combinedSubtitles.some(s => s.url === sub.url)) {
-        combinedSubtitles.push({
-          label: sub.label,
-          url: sub.url,
-          language: sub.language
-        });
+    if (Array.isArray(pr.subtitles)) {
+      for (const sub of pr.subtitles) {
+        if (sub?.url && !seenUrls.has(sub.url)) {
+          seenUrls.add(sub.url);
+          combinedSubtitles.push({
+            id: sub.url,
+            label: sub.label || sub.language || 'Subtitles',
+            language: sub.language || 'en',
+            languageCode: sub.language || 'en',
+            url: sub.url,
+            format: 'vtt'
+          });
+        }
       }
     }
   }
+
   for (const sub of availableSubtitles) {
-    if (!combinedSubtitles.some(s => s.url === sub.url)) {
-      combinedSubtitles.push({
-        label: sub.label,
-        url: sub.url,
-        language: sub.languageCode,
-        isVtt: sub.format === 'vtt'
-      });
+    if (sub?.url && !seenUrls.has(sub.url)) {
+      seenUrls.add(sub.url);
+      combinedSubtitles.push(sub);
     }
   }
 
-  // Group streams by provider for Provider Accordions (VidAPI, VidRock, VidLink, etc.)
-  interface ProviderGroup {
-    key: string;
-    name: string;
-    streams: Array<{
-      stream: ResolvedStream & { providerName: string; providerKey: string };
-      globalIndex: number;
-    }>;
-  }
-
-  const providerGroups: ProviderGroup[] = [];
-  allStreams.forEach((st, idx) => {
-    const rawKey = (st.providerKey || 'vidapi').toLowerCase();
-    let group = providerGroups.find(g => g.key.toLowerCase() === rawKey);
-    if (!group) {
-      let displayName = st.providerName;
-      if (!displayName || displayName.toLowerCase() === rawKey) {
-        if (rawKey === 'vidapi') displayName = 'VidAPI Direct';
-        else if (rawKey === 'vidrock') displayName = 'VidRock Multi-CDN';
-        else if (rawKey === 'vidlink') displayName = 'VidLink Direct';
-        else displayName = `${rawKey.toUpperCase()} Stream`;
-      }
-      group = {
-        key: rawKey,
-        name: displayName,
-        streams: []
-      };
-      providerGroups.push(group);
-    }
-    group.streams.push({ stream: st, globalIndex: idx });
-  });
-
-  const toggleProviderGroup = (key: string) => {
-    setOpenProviderKeys(prev => ({
-      ...prev,
-      [key]: !prev[key]
-    }));
-  };
-
-  // Helper to normalize and group subtitles by language
-  const getSubLanguageGroup = (label: string, langCode?: string): string => {
-    const norm = label.toLowerCase().trim();
-
-    if (norm.includes('chinese') && (norm.includes('simplified') || norm.includes('hans'))) return 'Chinese (Simplified)';
-    if (norm.includes('chinese') && (norm.includes('traditional') || norm.includes('hant'))) return 'Chinese (Traditional)';
-    if (norm.includes('spanish') && (norm.includes('latin') || norm.includes('latam'))) return 'Spanish (Latin)';
-    if (norm.includes('portuguese') && (norm.includes('brazil') || norm.includes('br'))) return 'Portuguese (Brazil)';
-
-    // Strip parentheses e.g. (V1), (CC), (SDH) and trailing digits e.g. Croatian2 -> Croatian
-    let clean = label.replace(/\s*\([^)]*\)/g, '').trim();
-    clean = clean.replace(/\d+$/, '').trim();
-
-    const lower = clean.toLowerCase();
-    const knownMap: Record<string, string> = {
-      croat: 'Croatian',
-      hrv: 'Croatian',
-      serb: 'Serbian',
-      srp: 'Serbian',
-      bosn: 'Bosnian',
-      bos: 'Bosnian',
-      sloven: 'Slovenian',
-      macedon: 'Macedonian',
-      alban: 'Albanian',
-      engl: 'English',
-      span: 'Spanish',
-      espan: 'Spanish',
-      fren: 'French',
-      franc: 'French',
-      germ: 'German',
-      deut: 'German',
-      ital: 'Italian',
-      portug: 'Portuguese',
-      russ: 'Russian',
-      arab: 'Arabic',
-      bulgar: 'Bulgarian',
-      greek: 'Greek',
-      turk: 'Turkish',
-      pol: 'Polish',
-      czech: 'Czech',
-      hungar: 'Hungarian',
-      roman: 'Romanian',
-      dutch: 'Dutch',
-      swed: 'Swedish',
-      norweg: 'Norwegian',
-      dan: 'Danish',
-      finn: 'Finnish',
-      hebr: 'Hebrew',
-      hind: 'Hindi',
-      indones: 'Indonesian',
-      japan: 'Japanese',
-      korean: 'Korean',
-      thai: 'Thai',
-      vietnam: 'Vietnamese',
-      ukrain: 'Ukrainian'
-    };
-
-    for (const [prefix, name] of Object.entries(knownMap)) {
-      if (lower.startsWith(prefix)) return name;
-    }
-
-    if (langCode) {
-      const code = langCode.toLowerCase().slice(0, 2);
-      const codeMap: Record<string, string> = {
-        hr: 'Croatian',
-        sr: 'Serbian',
-        bs: 'Bosnian',
-        en: 'English',
-        it: 'Italian',
-        ar: 'Arabic',
-        bg: 'Bulgarian',
-        es: 'Spanish',
-        fr: 'French',
-        de: 'German',
-        ru: 'Russian',
-        zh: 'Chinese',
-        pt: 'Portuguese',
-        tr: 'Turkish',
-        el: 'Greek',
-        pl: 'Polish'
-      };
-      if (codeMap[code]) return codeMap[code];
-    }
-
-    return clean ? clean.charAt(0).toUpperCase() + clean.slice(1) : 'Other';
-  };
-
-  interface SubtitleGroup {
-    language: string;
-    tracks: Array<{
-      label: string;
-      url: string;
-      language?: string;
-      isVtt?: boolean;
-    }>;
-  }
-
-  const subtitleGroups: SubtitleGroup[] = [];
-  for (const sub of combinedSubtitles) {
-    const lang = getSubLanguageGroup(sub.label, sub.language);
-    let group = subtitleGroups.find(g => g.language.toLowerCase() === lang.toLowerCase());
-    if (!group) {
-      group = { language: lang, tracks: [] };
-      subtitleGroups.push(group);
-    }
-    group.tracks.push(sub);
-  }
-
-  // Priority order: Croatian, Serbian, Bosnian, English first, then alphabetical
-  const priorityLangs = ['croatian', 'serbian', 'bosnian', 'english'];
-  subtitleGroups.sort((a, b) => {
-    const aIdx = priorityLangs.indexOf(a.language.toLowerCase());
-    const bIdx = priorityLangs.indexOf(b.language.toLowerCase());
-    if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-    if (aIdx !== -1) return -1;
-    if (bIdx !== -1) return 1;
-    return a.language.localeCompare(b.language);
-  });
-
-  const toggleSubLanguage = (lang: string) => {
-    setOpenSubLanguages(prev => ({
-      ...prev,
-      [lang]: !prev[lang]
-    }));
-  };
-
-  const filteredSubtitleGroups = subSearchQuery.trim()
-    ? subtitleGroups.filter(g =>
-        g.language.toLowerCase().includes(subSearchQuery.toLowerCase()) ||
-        g.tracks.some(t => t.label.toLowerCase().includes(subSearchQuery.toLowerCase()))
-      )
-    : subtitleGroups;
-
-  // Real-time custom subtitle parser
+  // Parse custom VTT or SRT subtitle tracks
   useEffect(() => {
     if (!activeSubTrackUrl) {
       setCustomSubtitleText('');
@@ -682,154 +558,212 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     }
 
     let isMounted = true;
-    async function loadSub() {
+    async function fetchSub() {
       try {
-        const res = await fetch(activeSubTrackUrl!);
+        const proxyUrl = `/api/subtitle-proxy?url=${encodeURIComponent(activeSubTrackUrl!)}`;
+        const res = await fetch(proxyUrl);
+        if (!res.ok) throw new Error('Sub load failed');
         const text = await res.text();
-        if (!isMounted) return;
-
-        const cues: Array<{ start: number; end: number; text: string }> = [];
-        const lines = text.split('\n');
-
-        const parseTime = (str: string) => {
-          const parts = str.trim().replace(',', '.').split(':');
-          if (parts.length === 3) {
-            return parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
-          }
-          if (parts.length === 2) {
-            return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
-          }
-          return 0;
-        };
-
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (line.includes('-->')) {
-            const [startStr, endStr] = line.split('-->');
-            const start = parseTime(startStr) + subDelay;
-            const end = parseTime(endStr) + subDelay;
-            let cueText = '';
-            i++;
-            while (i < lines.length && lines[i].trim() !== '') {
-              cueText += (cueText ? ' ' : '') + lines[i].trim();
-              i++;
-            }
-            cues.push({ start, end, text: cueText.replace(/<[^>]+>/g, '') });
-          }
+        if (isMounted) {
+          parseSubtitles(text);
         }
-
-        const video = videoRef.current;
-        if (!video) return;
-
-        const checkCue = () => {
-          const t = video.currentTime;
-          const currentCue = cues.find(c => t >= c.start && t <= c.end);
-          setCustomSubtitleText(currentCue ? currentCue.text : '');
-        };
-
-        video.addEventListener('timeupdate', checkCue);
-        return () => video.removeEventListener('timeupdate', checkCue);
       } catch (err) {
-        console.warn('Subtitle load error:', err);
+        console.warn('Failed to load subtitle:', err);
       }
     }
 
-    loadSub();
+    fetchSub();
     return () => {
       isMounted = false;
     };
-  }, [activeSubTrackUrl, subDelay]);
+  }, [activeSubTrackUrl]);
+
+  interface ParsedCue {
+    start: number;
+    end: number;
+    text: string;
+  }
+  const [cues, setCues] = useState<ParsedCue[]>([]);
+
+  const parseSubtitles = (raw: string) => {
+    const list: ParsedCue[] = [];
+    const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    let i = 0;
+
+    const timeRegex = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})/;
+
+    while (i < lines.length) {
+      const line = lines[i].trim();
+      const match = line.match(timeRegex);
+      if (match) {
+        const h1 = parseInt(match[1] || '0', 10);
+        const m1 = parseInt(match[2], 10);
+        const s1 = parseInt(match[3], 10);
+        const ms1 = parseInt(match[4], 10);
+        const start = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000;
+
+        const h2 = parseInt(match[5] || '0', 10);
+        const m2 = parseInt(match[6], 10);
+        const s2 = parseInt(match[7], 10);
+        const ms2 = parseInt(match[8], 10);
+        const end = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000;
+
+        i++;
+        const textLines: string[] = [];
+        while (i < lines.length && lines[i].trim() !== '') {
+          textLines.push(lines[i].trim());
+          i++;
+        }
+        list.push({
+          start,
+          end,
+          text: textLines.join('\n').replace(/<[^>]+>/g, '')
+        });
+      }
+      i++;
+    }
+    setCues(list);
+  };
+
+  // Sync subtitle cues with video playback time
+  useEffect(() => {
+    if (!cues.length || !activeSubTrackUrl) {
+      setCustomSubtitleText('');
+      return;
+    }
+    const adjustedTime = currentTime - subDelay;
+    const currentCue = cues.find(c => adjustedTime >= c.start && adjustedTime <= c.end);
+    setCustomSubtitleText(currentCue ? currentCue.text : '');
+  }, [currentTime, cues, subDelay, activeSubTrackUrl]);
+
+  // Quality switch handler
+  const handleQualityChange = (q: string) => {
+    setSelectedQuality(q);
+    if (hlsRef.current) {
+      if (q === 'Auto') {
+        hlsRef.current.currentLevel = -1;
+      } else {
+        const heightTarget = parseInt(q, 10);
+        if (!isNaN(heightTarget) && hlsRef.current.levels) {
+          const matchedLevel = hlsRef.current.levels.findIndex(l => l.height === heightTarget);
+          if (matchedLevel !== -1) {
+            hlsRef.current.currentLevel = matchedLevel;
+          }
+        }
+      }
+    }
+
+    // Also match any direct stream with that quality
+    const streamMatch = allStreams.findIndex(s => s.quality.toLowerCase().includes(q.toLowerCase()));
+    if (streamMatch !== -1 && streamMatch !== selectedStreamIndex) {
+      setSelectedStreamIndex(streamMatch);
+    }
+  };
+
+  const progressPercent = duration ? (currentTime / duration) * 100 : 0;
 
   return (
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      className={`relative w-full aspect-video bg-black rounded-2xl overflow-hidden select-none group border border-white/10 shadow-2xl transition-all ${
-        isFullscreen ? 'rounded-none border-0' : ''
-      }`}
+      className="relative w-full aspect-video bg-black select-none overflow-hidden group/player"
+      style={{ '--player-accent': accentColor } as React.CSSProperties}
     >
-      {/* Native HTML5 Video Element */}
+      {/* Native HTML5 <video> */}
       <video
         ref={videoRef}
-        playsInline
         onClick={togglePlay}
-        onDoubleClick={toggleFullscreen}
-        className="w-full h-full object-contain cursor-pointer bg-black"
+        playsInline
+        className="w-full h-full object-contain cursor-pointer"
       />
 
-      {/* Custom Subtitles Overlay */}
+      {/* Synchronized Subtitle Overlay */}
       {customSubtitleText && (
-        <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-20 pointer-events-none px-6 text-center max-w-[85%]">
-          <span className="inline-block bg-black/85 text-yellow-300 font-bold text-sm sm:text-lg md:text-xl px-3.5 py-1.5 rounded-lg shadow-2xl leading-relaxed tracking-wide drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] border border-black/40">
+        <div className="absolute bottom-16 sm:bottom-20 inset-x-0 z-20 flex justify-center px-4 pointer-events-none">
+          <div className="px-4 py-1.5 rounded-lg bg-black/85 text-white font-medium text-sm sm:text-base md:text-lg tracking-wide text-center max-w-[85%] leading-relaxed shadow-lg border border-white/10 backdrop-blur-xs">
             {customSubtitleText}
-          </span>
+          </div>
         </div>
       )}
 
-      {/* Top Header Overlay with Title & Quick Server Info */}
+      {/* Top Header Bar ON THE PLAYER */}
       <div
-        className={`absolute top-0 inset-x-0 z-30 p-3 sm:p-4 bg-gradient-to-b from-black/95 via-black/60 to-transparent transition-opacity duration-300 flex items-center justify-between gap-2 pointer-events-auto ${
+        className={`absolute top-0 inset-x-0 z-30 p-3 sm:p-4 bg-gradient-to-b from-black/90 via-black/60 to-transparent transition-opacity duration-300 flex items-center justify-between gap-3 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#232326]/90 border border-[#3A3A40] text-[10px] font-extrabold uppercase tracking-widest text-[#F5C400] shadow-md backdrop-blur-md">
-            <Radio className="w-3 h-3 animate-pulse text-[#F5C400]" />
-            <span>100% DIRECT HLS</span>
-          </span>
-          <span className="text-white font-bold text-xs sm:text-sm truncate drop-shadow-md hidden xs:inline">
-            {isMovie ? title : `${title} · S${currentSeason} E${currentEpisode}`}
-          </span>
-          {activeStream && (
-            <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#232326]/80 text-[#F5C400] text-[10px] font-bold border border-[#3A3A40] backdrop-blur-md">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#F5C400] animate-pulse" />
-              {activeStream.server} · {activeStream.quality}
+        {/* Left: Title & Season/Episode */}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span
+            className="w-2.5 h-2.5 rounded-full shrink-0 animate-pulse"
+            style={{ backgroundColor: accentColor }}
+          />
+          <h2 className="text-xs sm:text-sm font-bold text-white truncate max-w-[200px] sm:max-w-md drop-shadow">
+            {title}
+          </h2>
+          {!isMovie && (
+            <span
+              className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full text-white shrink-0"
+              style={{ backgroundColor: `${accentColor}33`, borderColor: accentColor }}
+            >
+              S{currentSeason} · E{currentEpisode}
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
+        {/* Right: Quick Action Buttons */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {/* Quick TV Episode Stepper */}
-          {!isMovie && (hasPrevEpisode != null || hasNextEpisode != null) && (
-            <div className="hidden sm:flex items-center gap-1 bg-[#232326]/90 border border-[#3A3A40] rounded-lg p-0.5 backdrop-blur-md">
-              {onPrevEpisode && (
+          {!isMovie && (
+            <div className="hidden sm:flex items-center gap-1 mr-1">
+              {hasPrevEpisode && (
                 <button
                   onClick={onPrevEpisode}
-                  disabled={!hasPrevEpisode}
+                  className="p-1.5 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-slate-300 hover:text-white border border-[#3A3A40] transition-colors cursor-pointer"
                   title="Previous Episode"
-                  className="p-1 rounded text-white hover:text-[#F5C400] disabled:opacity-30 disabled:hover:text-white cursor-pointer"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                 </button>
               )}
-              <span className="text-[10px] font-bold text-[#F5C400] px-1.5 tabular-nums">
-                E{currentEpisode}
-              </span>
-              {onNextEpisode && (
+              {hasNextEpisode && (
                 <button
                   onClick={onNextEpisode}
-                  disabled={!hasNextEpisode}
+                  className="px-2 py-1 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-white text-[11px] font-bold border border-[#3A3A40] transition-colors flex items-center gap-1 cursor-pointer"
                   title="Next Episode"
-                  className="p-1 rounded text-white hover:text-[#F5C400] disabled:opacity-30 disabled:hover:text-white cursor-pointer"
                 >
+                  <span>Next Ep</span>
                   <ChevronRight className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
           )}
 
-          {/* Server List Modal Toggle Button */}
+          {/* Primary Playback Settings Toggle (Matches User Screenshot) */}
           <button
             onClick={() => {
-              setShowServerMenu(!showServerMenu);
-              setShowSettingsMenu(false);
-              setShowSubtitlesMenu(false);
+              setSettingsSubView('main');
+              setShowSettingsModal(true);
             }}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-white text-[11px] font-bold backdrop-blur-md border border-[#3A3A40] hover:border-[#F5C400] transition-all cursor-pointer shadow-sm"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-white text-[11px] font-bold backdrop-blur-md border border-[#3A3A40] hover:border-white/30 transition-all cursor-pointer shadow-sm"
           >
-            <Server className="w-3.5 h-3.5 text-[#F5C400]" />
-            <span className="hidden xs:inline">HLS Servers</span>
-            <span className="w-4 h-4 rounded-full bg-[#F5C400] text-black text-[9px] font-black flex items-center justify-center">
+            <SlidersHorizontal className="w-3.5 h-3.5" style={{ color: accentColor }} />
+            <span>Playback Settings</span>
+          </button>
+
+          {/* Video Sources Shortcut */}
+          <button
+            onClick={() => {
+              setSettingsSubView('sources');
+              setShowSettingsModal(true);
+            }}
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-white text-[11px] font-bold backdrop-blur-md border border-[#3A3A40] hover:border-white/30 transition-all cursor-pointer shadow-sm"
+          >
+            <Database className="w-3.5 h-3.5" style={{ color: accentColor }} />
+            <span>Video Sources</span>
+            <span
+              className="w-4 h-4 rounded-full text-black text-[9px] font-black flex items-center justify-center"
+              style={{ backgroundColor: accentColor }}
+            >
               {allStreams.length}
             </span>
           </button>
@@ -838,8 +772,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           {onRefreshStreams && (
             <button
               onClick={onRefreshStreams}
-              title="Rescan HLS Streams"
-              className="p-1.5 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-[#A6A6AC] hover:text-[#F5C400] border border-[#3A3A40] transition-colors cursor-pointer backdrop-blur-md"
+              title="Rescan Streams"
+              className="p-1.5 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-[#A6A6AC] hover:text-white border border-[#3A3A40] transition-colors cursor-pointer backdrop-blur-md"
             >
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
@@ -852,9 +786,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               title={isLightsDimmed ? 'Turn on lights' : 'Cinema lights off'}
               className={`p-1.5 rounded-lg border transition-colors cursor-pointer backdrop-blur-md ${
                 isLightsDimmed
-                  ? 'bg-[#F5C400] text-black border-[#F5C400]'
+                  ? 'text-black border-transparent'
                   : 'bg-[#232326]/90 text-[#A6A6AC] hover:text-white border-[#3A3A40]'
               }`}
+              style={isLightsDimmed ? { backgroundColor: accentColor } : {}}
             >
               <Moon className="w-3.5 h-3.5" />
             </button>
@@ -867,9 +802,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               title={isTheaterMode ? 'Standard view' : 'Theater mode'}
               className={`hidden md:flex p-1.5 rounded-lg border transition-colors cursor-pointer backdrop-blur-md ${
                 isTheaterMode
-                  ? 'bg-[#F5C400] text-black border-[#F5C400]'
+                  ? 'text-black border-transparent'
                   : 'bg-[#232326]/90 text-[#A6A6AC] hover:text-white border-[#3A3A40]'
               }`}
+              style={isTheaterMode ? { backgroundColor: accentColor } : {}}
             >
               <Maximize2 className="w-3.5 h-3.5" />
             </button>
@@ -877,150 +813,20 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       </div>
 
-      {/* Full Server Drawer / Modal ON THE PLAYER */}
-      {showServerMenu && (
-        <div className="absolute inset-y-0 right-0 w-80 sm:w-96 bg-[#1a1a1e]/98 border-l border-[#3A3A40] p-4 sm:p-5 z-40 backdrop-blur-2xl overflow-y-auto flex flex-col justify-between shadow-2xl transition-all">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-[#3A3A40] mb-3">
-              <div className="flex items-center gap-2">
-                <Server className="w-4 h-4 text-[#F5C400]" />
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Direct HLS Servers ({allStreams.length})
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowServerMenu(false)}
-                className="p-1 rounded text-[#A6A6AC] hover:text-white text-xs cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="text-[11px] text-[#A6A6AC] mb-3 leading-relaxed">
-              100% Direct HLS video feeds without iframe servers. Click any server to switch stream:
-            </p>
-
-            <div className="space-y-2.5">
-              {providerGroups.map((group) => {
-                const isOpen = openProviderKeys[group.key] ?? true;
-                const hasActiveStream = group.streams.some(s => s.globalIndex === selectedStreamIndex);
-                const isVidApi = group.key.includes('vidapi');
-                const isVidRock = group.key.includes('vidrock');
-                const isVidLink = group.key.includes('vidlink');
-
-                const ProviderIcon = isVidApi ? Zap : isVidRock ? Radio : isVidLink ? Layers : Server;
-                const accentColor = isVidApi ? 'text-[#F5C400]' : isVidRock ? 'text-sky-400' : 'text-emerald-400';
-
-                return (
-                  <div
-                    key={group.key}
-                    className="rounded-xl border border-white/10 bg-[#212126] overflow-hidden shadow-sm transition-all"
-                  >
-                    {/* Provider Accordion Header */}
-                    <button
-                      onClick={() => toggleProviderGroup(group.key)}
-                      className={`w-full text-left px-3.5 py-2.5 flex items-center justify-between text-xs font-bold transition-colors cursor-pointer ${
-                        hasActiveStream
-                          ? 'bg-[#292930] text-white border-b border-white/10'
-                          : 'bg-[#1e1e23] text-slate-300 hover:text-white hover:bg-[#25252b]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <ProviderIcon className={`w-3.5 h-3.5 ${accentColor}`} />
-                        <span className="text-white font-bold">{group.name}</span>
-                        <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-white/10 text-slate-300 font-mono">
-                          {group.streams.length}
-                        </span>
-                        {hasActiveStream && (
-                          <span className="w-2 h-2 rounded-full bg-[#F5C400] animate-pulse" title="Active Provider" />
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {hasActiveStream && (
-                          <span className="text-[10px] font-black uppercase text-[#F5C400] tracking-wider">
-                            Active
-                          </span>
-                        )}
-                        {isOpen ? (
-                          <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
-                        ) : (
-                          <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-                        )}
-                      </div>
-                    </button>
-
-                    {/* Provider Servers List */}
-                    {isOpen && (
-                      <div className="p-2 space-y-1.5 bg-[#17171b]">
-                        {group.streams.map(({ stream: st, globalIndex: idx }) => {
-                          const isActive = idx === selectedStreamIndex;
-                          return (
-                            <button
-                              key={idx}
-                              onClick={() => handleSelectStream(idx)}
-                              className={`w-full text-left p-2.5 rounded-lg text-xs flex items-center justify-between transition-all cursor-pointer border ${
-                                isActive
-                                  ? 'bg-[#F5C400] text-black border-[#F5C400] font-bold shadow-md shadow-amber-500/20'
-                                  : 'bg-white/5 text-slate-300 hover:bg-white/10 border-white/5 hover:text-white'
-                              }`}
-                            >
-                              <div className="flex flex-col min-w-0 pr-2">
-                                <div className="flex items-center gap-1.5">
-                                  {isActive && <span className="w-1.5 h-1.5 rounded-full bg-black animate-pulse shrink-0" />}
-                                  <span className="text-xs font-bold truncate">{st.server}</span>
-                                </div>
-                                <span className={`text-[10px] mt-0.5 truncate ${isActive ? 'text-black/80' : 'text-slate-400'}`}>
-                                  {st.providerName} · {st.type.toUpperCase()} Master
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                                  isActive ? 'bg-black/20 text-black' : 'bg-black/40 text-slate-200'
-                                }`}>
-                                  {st.quality}
-                                </span>
-                                {isActive && <Check className="w-4 h-4 text-black shrink-0" />}
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {onRefreshStreams && (
-            <div className="pt-3 border-t border-white/10 mt-4">
-              <button
-                onClick={onRefreshStreams}
-                className="w-full py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Re-scan Direct Servers</span>
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Loading Spinner */}
       {isLoading && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/70 backdrop-blur-xs pointer-events-none">
           <div className="relative">
-            <RefreshCw className="w-12 h-12 animate-spin text-[#F5C400]" />
+            <RefreshCw className="w-12 h-12 animate-spin" style={{ color: accentColor }} />
             <div className="absolute inset-0 flex items-center justify-center">
               <Play className="w-4 h-4 text-white fill-white" />
             </div>
           </div>
           <span className="text-xs font-bold text-white tracking-wider uppercase mt-4">
-            Loading Direct Stream...
+            Connecting Stream...
           </span>
-          <span className="text-[11px] text-[#F5C400] mt-1 font-mono">
-            {activeStream?.server || 'VidAPI / VidRock'}
+          <span className="text-[11px] mt-1 font-mono" style={{ color: accentColor }}>
+            {cleanServerDisplay(activeStream?.server || 'Zeus Ultra 4K')}
           </span>
         </div>
       )}
@@ -1028,25 +834,27 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       {/* Error Overlay with Auto Next Stream */}
       {loadError && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-black/90 backdrop-blur-md text-white">
-          <AlertTriangle className="w-12 h-12 text-[#F5C400] mb-3 animate-bounce" />
+          <AlertTriangle className="w-12 h-12 mb-3 animate-bounce" style={{ color: accentColor }} />
           <h4 className="text-base font-bold text-white mb-1">Direct Stream Source Interrupted</h4>
           <p className="text-xs text-slate-400 max-w-md mb-4">{loadError}</p>
           <div className="flex items-center gap-3">
             <button
               onClick={handleNextStream}
-              className="px-4 py-2 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] text-black font-extrabold text-xs transition-colors flex items-center gap-1.5 shadow-lg cursor-pointer"
+              className="px-4 py-2 rounded-xl text-black font-extrabold text-xs transition-colors flex items-center gap-1.5 shadow-lg cursor-pointer"
+              style={{ backgroundColor: accentColor }}
             >
-              <Sparkles className="w-4 h-4" />
-              <span>Next Direct Stream ({selectedStreamIndex + 1}/{allStreams.length})</span>
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Try Next Source</span>
             </button>
-            {onRefreshStreams && (
-              <button
-                onClick={onRefreshStreams}
-                className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs transition-colors cursor-pointer"
-              >
-                Reload Streams
-              </button>
-            )}
+            <button
+              onClick={() => {
+                setSettingsSubView('sources');
+                setShowSettingsModal(true);
+              }}
+              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-colors cursor-pointer"
+            >
+              Choose Server
+            </button>
           </div>
         </div>
       )}
@@ -1055,7 +863,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       {!isPlaying && !isLoading && !loadError && (
         <button
           onClick={togglePlay}
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#F5C400]/95 hover:bg-[#F5C400] text-black flex items-center justify-center shadow-2xl transition-transform hover:scale-110 active:scale-95 cursor-pointer shadow-amber-500/30"
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-16 h-16 sm:w-20 sm:h-20 rounded-full text-black flex items-center justify-center shadow-2xl transition-transform hover:scale-110 active:scale-95 cursor-pointer"
+          style={{ backgroundColor: accentColor }}
         >
           <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-black ml-1" />
         </button>
@@ -1072,7 +881,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           onClick={handleSeek}
           onMouseMove={handleScrubberMouseMove}
           onMouseLeave={handleScrubberMouseLeave}
-          className="relative w-full h-2.5 bg-white/20 hover:h-4 rounded-full cursor-pointer transition-all flex items-center group/bar"
+          className="relative w-full h-2.5 bg-white/20 hover:h-3.5 rounded-full cursor-pointer transition-all flex items-center group/bar"
         >
           {/* Buffered Bar */}
           <div
@@ -1082,10 +891,16 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
           {/* Current Progress Bar */}
           <div
-            className="absolute left-0 top-0 bottom-0 bg-[#F5C400] rounded-full flex items-center justify-end"
-            style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+            className="absolute left-0 top-0 bottom-0 rounded-full flex items-center justify-end"
+            style={{
+              width: `${progressPercent}%`,
+              backgroundColor: accentColor
+            }}
           >
-            <div className="w-4 h-4 bg-white rounded-full shadow-lg scale-0 group-hover/bar:scale-100 transition-transform -mr-2" />
+            <div
+              className="w-3.5 h-3.5 bg-white rounded-full shadow-lg scale-0 group-hover/bar:scale-100 transition-transform -mr-1.5"
+              style={{ boxShadow: `0 0 10px ${accentColor}` }}
+            />
           </div>
 
           {/* Hover Time Tooltip */}
@@ -1149,7 +964,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                 step="0.05"
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
-                className="w-16 sm:w-20 h-1.5 bg-white/30 rounded-lg appearance-none cursor-pointer accent-[#F5C400]"
+                className="w-16 sm:w-20 h-1.5 bg-white/30 rounded-lg appearance-none cursor-pointer"
+                style={{ accentColor: accentColor }}
               />
             </div>
 
@@ -1161,255 +977,32 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
             </div>
           </div>
 
-          {/* Right: TV Episode Nav, Subtitles, Settings, Server Menu, PiP, Fullscreen */}
+          {/* Right: Subtitles, Settings, PiP, Fullscreen */}
           <div className="flex items-center gap-1.5 sm:gap-2">
-            {/* TV Episode Quick Controls */}
-            {!isMovie && (
-              <div className="flex items-center gap-1 mr-1">
-                {hasPrevEpisode && (
-                  <button
-                    onClick={onPrevEpisode}
-                    className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                    title="Previous Episode"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                )}
-                {hasNextEpisode && (
-                  <button
-                    onClick={onNextEpisode}
-                    className="px-2 py-1 rounded-lg bg-white/10 hover:bg-[#F5C400] hover:text-black text-white text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
-                    title="Next Episode"
-                  >
-                    <span>Next Ep</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-            )}
+            {/* Subtitles Button -> Opens Settings Modal on Subtitles Tab */}
+            <button
+              onClick={() => {
+                setSettingsSubView('subtitles');
+                setShowSettingsModal(true);
+              }}
+              className="p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/15"
+              style={activeSubTrackUrl ? { color: accentColor } : { color: '#CBD5E1' }}
+              title="Subtitles (CC)"
+            >
+              <Subtitles className="w-4 h-4" />
+            </button>
 
-            {/* Subtitles Menu Toggle */}
-            <div className="relative">
-              <button
-                onClick={() => {
-                  const nextState = !showSubtitlesMenu;
-                  setShowSubtitlesMenu(nextState);
-                  if (nextState && activeSubTrackUrl) {
-                    const activeGroup = subtitleGroups.find(g => g.tracks.some(t => t.url === activeSubTrackUrl));
-                    if (activeGroup) {
-                      setOpenSubLanguages(prev => ({ ...prev, [activeGroup.language]: true }));
-                    }
-                  }
-                  setShowSettingsMenu(false);
-                  setShowServerMenu(false);
-                }}
-                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                  activeSubTrackUrl ? 'text-[#F5C400] bg-white/15' : 'text-slate-300 hover:bg-white/15 hover:text-white'
-                }`}
-                title="Subtitles"
-              >
-                <Subtitles className="w-4 h-4" />
-              </button>
-
-              {/* Subtitles Popup */}
-              {showSubtitlesMenu && (
-                <div className="absolute right-0 bottom-full mb-3 w-72 sm:w-80 bg-[#1c1c20] border border-[#3A3A40] rounded-2xl shadow-2xl p-3 z-40 backdrop-blur-2xl max-h-[380px] overflow-y-auto">
-                  <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider px-1 pb-2 border-b border-[#3A3A40] flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <Subtitles className="w-3.5 h-3.5 text-[#F5C400]" />
-                      <span>Subtitles ({combinedSubtitles.length})</span>
-                    </div>
-                    {activeSubTrackUrl && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F5C400] text-black font-extrabold uppercase">
-                        Active
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Quick Search */}
-                  {combinedSubtitles.length > 5 && (
-                    <div className="relative mt-2.5 mb-1.5">
-                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        placeholder="Search language..."
-                        value={subSearchQuery}
-                        onChange={(e) => setSubSearchQuery(e.target.value)}
-                        className="w-full bg-[#141418] border border-white/10 rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-[#F5C400] transition-colors"
-                      />
-                    </div>
-                  )}
-
-                  {/* Off Option */}
-                  <button
-                    onClick={() => {
-                      setActiveSubTrackUrl(null);
-                      setShowSubtitlesMenu(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 rounded-xl text-xs mt-1.5 flex items-center justify-between cursor-pointer border transition-colors ${
-                      !activeSubTrackUrl
-                        ? 'bg-[#F5C400] text-black border-[#F5C400] font-bold shadow-md shadow-amber-500/20'
-                        : 'bg-white/5 border-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
-                    }`}
-                  >
-                    <span>Off (No Subtitles)</span>
-                    {!activeSubTrackUrl && <Check className="w-3.5 h-3.5 text-black" />}
-                  </button>
-
-                  {/* Subtitle Offset / Sync Controls */}
-                  {activeSubTrackUrl && (
-                    <div className="px-3 py-2 my-2 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between text-xs text-slate-300">
-                      <span>Sync Offset:</span>
-                      <div className="flex items-center gap-1 font-mono">
-                        <button
-                          onClick={() => setSubDelay(d => Math.round((d - 0.5) * 10) / 10)}
-                          className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white font-bold cursor-pointer"
-                        >
-                          -0.5s
-                        </button>
-                        <span className="px-1 text-[11px] font-bold text-[#F5C400]">
-                          {subDelay >= 0 ? `+${subDelay}` : subDelay}s
-                        </span>
-                        <button
-                          onClick={() => setSubDelay(d => Math.round((d + 0.5) * 10) / 10)}
-                          className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white font-bold cursor-pointer"
-                        >
-                          +0.5s
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Grouped Subtitle Languages Accordion */}
-                  <div className="space-y-1.5 mt-2">
-                    {filteredSubtitleGroups.map((group) => {
-                      const isOpen = openSubLanguages[group.language] ?? false;
-                      const hasActiveTrack = group.tracks.some(t => t.url === activeSubTrackUrl);
-
-                      return (
-                        <div
-                          key={group.language}
-                          className="rounded-xl border border-white/10 bg-[#16161a] overflow-hidden transition-all shadow-xs"
-                        >
-                          {/* Language Accordion Header */}
-                          <button
-                            onClick={() => toggleSubLanguage(group.language)}
-                            className={`w-full text-left px-3 py-2 flex items-center justify-between text-xs transition-colors cursor-pointer ${
-                              hasActiveTrack
-                                ? 'bg-[#26262e] text-white font-bold'
-                                : 'bg-[#1b1b20] text-slate-200 hover:bg-[#222228] hover:text-white'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2">
-                              <Globe className={`w-3.5 h-3.5 ${hasActiveTrack ? 'text-[#F5C400]' : 'text-slate-400'}`} />
-                              <span className="font-semibold text-white">{group.language}</span>
-                              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/10 text-slate-300 font-mono">
-                                {group.tracks.length}
-                              </span>
-                              {hasActiveTrack && (
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#F5C400] animate-pulse" />
-                              )}
-                            </div>
-
-                            <div className="flex items-center gap-1.5">
-                              {hasActiveTrack && (
-                                <span className="text-[9px] font-black uppercase text-[#F5C400] tracking-wider">
-                                  Selected
-                                </span>
-                              )}
-                              {isOpen ? (
-                                <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
-                              ) : (
-                                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-                              )}
-                            </div>
-                          </button>
-
-                          {/* Individual Tracks inside this Language */}
-                          {isOpen && (
-                            <div className="p-1.5 space-y-1 bg-[#121215] border-t border-white/5">
-                              {group.tracks.map((sub, sIdx) => {
-                                const isSelected = activeSubTrackUrl === sub.url;
-                                return (
-                                  <button
-                                    key={sIdx}
-                                    onClick={() => {
-                                      setActiveSubTrackUrl(sub.url);
-                                      setShowSubtitlesMenu(false);
-                                    }}
-                                    className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                                      isSelected
-                                        ? 'bg-[#F5C400] text-black font-bold shadow-xs'
-                                        : 'text-slate-300 hover:bg-white/10 hover:text-white'
-                                    }`}
-                                  >
-                                    <span className="truncate pr-2">{sub.label}</span>
-                                    {isSelected && <Check className="w-3.5 h-3.5 text-black shrink-0" />}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-
-                    {filteredSubtitleGroups.length === 0 && (
-                      <div className="py-6 text-center text-xs text-slate-400">
-                        No subtitles match &quot;{subSearchQuery}&quot;
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Settings Menu Toggle (Speed & Quality) */}
-            <div className="relative">
-              <button
-                onClick={() => {
-                  setShowSettingsMenu(!showSettingsMenu);
-                  setShowSubtitlesMenu(false);
-                  setShowServerMenu(false);
-                }}
-                className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                title="Settings"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-
-              {/* Settings Dropdown */}
-              {showSettingsMenu && (
-                <div className="absolute right-0 bottom-full mb-3 w-56 bg-[#232326] border border-[#3A3A40] rounded-xl shadow-2xl p-2 z-40 backdrop-blur-xl">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1.5 border-b border-[#3A3A40]">
-                    Playback Speed
-                  </div>
-                  <div className="grid grid-cols-3 gap-1 mt-1 p-1">
-                    {[0.5, 0.75, 1, 1.25, 1.5, 2].map(speed => (
-                      <button
-                        key={speed}
-                        onClick={() => handleSpeedChange(speed)}
-                        className={`py-1 rounded text-xs text-center font-mono font-medium cursor-pointer ${
-                          playbackSpeed === speed
-                            ? 'bg-[#F5C400] text-black font-bold'
-                            : 'bg-white/5 text-slate-300 hover:bg-white/15'
-                        }`}
-                      >
-                        {speed}x
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1.5 border-t border-b border-white/10 mt-2">
-                    Current Stream
-                  </div>
-                  <div className="px-2 py-1.5 text-xs text-emerald-400 font-mono font-bold flex items-center justify-between">
-                    <span>{activeStream?.server || 'Server'}</span>
-                    <span className="text-[10px] text-slate-400 font-normal">{activeStream?.quality}</span>
-                  </div>
-                </div>
-              )}
-            </div>
+            {/* Playback Settings Button -> Opens Settings Modal on Main View */}
+            <button
+              onClick={() => {
+                setSettingsSubView('main');
+                setShowSettingsModal(true);
+              }}
+              className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
+              title="Playback Settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
 
             {/* Picture in Picture */}
             <button
@@ -1431,6 +1024,45 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* The Unified Playback Settings Modal (Pictured in screenshot image_bb8944d1.png) */}
+      <PlaybackSettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        subView={settingsSubView}
+        setSubView={setSettingsSubView}
+        allStreams={allStreams}
+        selectedStreamIndex={selectedStreamIndex}
+        onSelectStream={(idx) => {
+          setSelectedStreamIndex(idx);
+        }}
+        isMovie={isMovie}
+        currentSeason={currentSeason}
+        currentEpisode={currentEpisode}
+        totalSeasons={totalSeasons}
+        seasonsList={seasonsList}
+        episodesList={episodesList}
+        onSelectEpisode={onSelectEpisode}
+        selectedQuality={selectedQuality}
+        onSelectQuality={handleQualityChange}
+        activeSubTrackUrl={activeSubTrackUrl}
+        combinedSubtitles={combinedSubtitles}
+        onSelectSubtitle={(url) => setActiveSubTrackUrl(url)}
+        subDelay={subDelay}
+        onChangeSubDelay={(delta) => setSubDelay(d => Math.round((d + delta) * 10) / 10)}
+        accentColor={accentColor}
+        onChangeAccentColor={handleSetAccentColor}
+        availableAudioTracks={availableAudioTracks}
+        selectedAudioTrackId={selectedAudioTrackId}
+        onSelectAudioTrack={(id) => {
+          setSelectedAudioTrackId(id);
+          if (hlsRef.current && hlsRef.current.audioTracks && hlsRef.current.audioTracks[id]) {
+            hlsRef.current.audioTrack = id;
+          }
+        }}
+        playbackSpeed={playbackSpeed}
+        onChangeSpeed={handleSpeedChange}
+      />
     </div>
   );
 };

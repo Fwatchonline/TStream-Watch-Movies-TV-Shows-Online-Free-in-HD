@@ -28,6 +28,8 @@ import { TrailerModal } from '../components/TrailerModal';
 import { CastCarousel } from '../components/CastCarousel';
 import { getPlatformById } from '../services/platformData';
 import { autoDiscoverMovieFranchise, DiscoveredCollection } from '../services/collectionStore';
+import { createMediaSlug } from '../utils/slug';
+import { updateMediaSEO } from '../utils/seo';
 
 interface DetailsPageProps {
   mediaId: number;
@@ -36,6 +38,7 @@ interface DetailsPageProps {
   onWatchNow: (media: MediaDetail, season?: number, episode?: number) => void;
   onSelectMedia: (item: MediaItem) => void;
   onSelectTag?: (tag: string) => void;
+  onSelectGenre?: (genreId: number, genreName: string) => void;
   onNavigateCollections?: () => void;
   onSelectPlatform?: (platformId: string) => void;
 }
@@ -47,6 +50,7 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
   onWatchNow,
   onSelectMedia,
   onSelectTag,
+  onSelectGenre,
   onNavigateCollections,
   onSelectPlatform
 }) => {
@@ -73,6 +77,12 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
       if (isMounted) {
         setDetail(data);
         if (data) {
+          updateMediaSEO(data);
+          const slug = createMediaSlug(data.title || (data as any).name, data.id);
+          const expectedUrl = `/${data.mediaType}/${slug}`;
+          if (!window.location.pathname.includes(slug)) {
+            window.history.replaceState({}, '', expectedUrl);
+          }
           setInWatchlist(isInWatchlist(data.id));
           const trailer = data.videos?.find(v => v.type?.toLowerCase() === 'trailer') || data.videos?.[0];
           if (trailer?.key) {
@@ -356,15 +366,21 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
               <span>{detail.productionCountries?.[0] || 'United States of America'}</span>
             </div>
 
-            {/* Genre Badges */}
+            {/* Clickable Genre Badges */}
             <div className="flex flex-wrap items-center gap-2 mt-3">
               {detail.genres.map(g => (
-                <span
+                <button
                   key={g.id}
-                  className="px-2.5 py-1 rounded bg-[#F5C400] text-black text-[11px] font-extrabold"
+                  onClick={() => {
+                    if (onSelectGenre) onSelectGenre(g.id, g.name);
+                    else if (onSelectTag) onSelectTag(g.name);
+                  }}
+                  className="px-2.5 py-1 rounded bg-[#F5C400] hover:bg-[#e0b400] active:scale-95 text-black text-[11px] font-extrabold transition-all cursor-pointer shadow-sm flex items-center gap-1 group"
+                  title={`Browse all ${g.name} titles`}
                 >
-                  {g.name}
-                </span>
+                  <span>{g.name}</span>
+                  <span className="text-[10px] opacity-60 group-hover:opacity-100 transition-opacity">↗</span>
+                </button>
               ))}
             </div>
 

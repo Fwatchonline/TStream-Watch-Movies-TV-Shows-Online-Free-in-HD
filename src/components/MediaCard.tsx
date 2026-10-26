@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Play, Star, Plus, Check } from 'lucide-react';
 import { MediaItem, MediaType } from '../types/media';
 import { isInWatchlist, toggleWatchlist } from '../services/storage';
+import { useAuth } from '../context/AuthContext';
 
 interface MediaCardProps {
   item: MediaItem;
@@ -10,15 +11,22 @@ interface MediaCardProps {
 }
 
 export const MediaCard: React.FC<MediaCardProps> = ({ item, onSelect, onWatch }) => {
-  const [inWatchlist, setInWatchlist] = useState(() => isInWatchlist(item.id));
+  const { user, isInWatchlist: isCloudInWatchlist, toggleWatchlist: toggleCloudWatchlist } = useAuth();
+  const [inWatchlist, setInWatchlist] = useState(() => (user ? isCloudInWatchlist(item.id) : isInWatchlist(item.id)));
   const [imageError, setImageError] = useState(false);
+
+  React.useEffect(() => {
+    if (user) {
+      setInWatchlist(isCloudInWatchlist(item.id));
+    }
+  }, [user, isCloudInWatchlist, item.id]);
 
   const year = item.releaseDate ? new Date(item.releaseDate).getFullYear() : '—';
   const isMovie = item.mediaType === 'movie';
 
-  const handleWatchlistClick = (e: React.MouseEvent) => {
+  const handleWatchlistClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const newState = toggleWatchlist({
+    const localState = toggleWatchlist({
       id: item.id,
       mediaType: item.mediaType,
       title: item.title,
@@ -27,7 +35,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onSelect, onWatch })
       releaseDate: item.releaseDate,
       voteAverage: item.voteAverage
     });
-    setInWatchlist(newState);
+
+    if (user) {
+      const cloudState = await toggleCloudWatchlist(item);
+      setInWatchlist(cloudState);
+    } else {
+      setInWatchlist(localState);
+    }
   };
 
   const handleWatchClick = (e: React.MouseEvent) => {

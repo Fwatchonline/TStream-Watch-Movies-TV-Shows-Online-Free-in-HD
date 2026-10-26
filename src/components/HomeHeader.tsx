@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Menu,
   SlidersHorizontal,
@@ -12,13 +12,24 @@ import {
   X,
   Check,
   Share2,
-  User
+  User,
+  Compass,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
+import { ALL_GENRES } from '../services/catalogData';
+import { fetchCatalog } from '../services/tmdb';
+import { MediaItem } from '../types/media';
+import { useAuth } from '../context/AuthContext';
+import { TStreamLogo } from './TStreamLogo';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface HomeHeaderProps {
   onToggleSidebar: () => void;
   onNavigate: (view: string, extraParams?: any) => void;
   onSearch: (query: string) => void;
+  onSelectMedia?: (item: MediaItem) => void;
+  onSelectGenre?: (genreId: number, genreName: string) => void;
   onSurpriseMe: () => void;
   onOpenFilter?: () => void;
   currentView?: string;
@@ -28,18 +39,66 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
   onToggleSidebar,
   onNavigate,
   onSearch,
+  onSelectMedia,
+  onSelectGenre,
   onSurpriseMe,
   onOpenFilter,
   currentView
 }) => {
+  const { user, profile, watchlist, openAuthModal } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
-  const [loginModalOpen, setLoginModalOpen] = useState(false);
-  const [email, setEmail] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  // Genres menu state
+  const [genresDropdownOpen, setGenresDropdownOpen] = useState(false);
+
+  // Live search state
+  const [liveResults, setLiveResults] = useState<MediaItem[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [liveSearchOpen, setLiveSearchOpen] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  // Debounced live search
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setLiveResults([]);
+      setIsSearching(false);
+      setLiveSearchOpen(false);
+      return;
+    }
+
+    setIsSearching(true);
+    setLiveSearchOpen(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetchCatalog('search', 1, { query: q });
+        setLiveResults(res.results.slice(0, 7));
+      } catch (err) {
+        console.warn('Live search error:', err);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 220);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Click outside to close live search & genres dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setLiveSearchOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
+      setLiveSearchOpen(false);
       onSearch(searchQuery.trim());
     }
   };
@@ -61,29 +120,39 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             {/* T Stream Logo */}
             <button
               onClick={() => onNavigate('home')}
-              className="flex items-center gap-2 group focus:outline-none text-left cursor-pointer"
+              className="flex items-center group focus:outline-none text-left cursor-pointer transition-transform hover:opacity-95"
+              aria-label="T Stream Home"
             >
-              <div className="w-7 h-7 rounded-lg bg-[#F5C400] flex items-center justify-center text-black font-black shadow-md shadow-amber-500/10 group-hover:scale-105 transition-transform">
-                <svg className="w-3.5 h-3.5 fill-black ml-0.5" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </div>
-              <span className="font-extrabold text-lg tracking-tight text-white font-sans">
-                T <span className="text-[#F5C400]">Stream</span>
-              </span>
+              <TStreamLogo size="md" />
             </button>
           </div>
 
-          {/* Search bar with Filter button inside */}
-          <div className="hidden sm:flex items-center max-w-xs md:max-w-sm lg:max-w-md w-full relative">
+          {/* Search bar with Live Search Dropdown */}
+          <div ref={searchContainerRef} className="hidden sm:flex items-center max-w-xs md:max-w-sm lg:max-w-md w-full relative">
             <form onSubmit={handleSearchSubmit} className="relative w-full flex items-center">
               <input
                 type="text"
-                placeholder="Search..."
+                placeholder="Live search movies, series..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full h-8 pl-3 pr-18 rounded bg-[#232326] border border-[#3A3A40] text-xs text-white placeholder:text-[#A6A6AC] focus:outline-none focus:border-[#F5C400] transition-colors"
+                onFocus={() => {
+                  if (searchQuery.trim().length >= 2) setLiveSearchOpen(true);
+                }}
+                className="w-full h-8 pl-3 pr-22 rounded bg-[#232326] border border-[#3A3A40] text-xs text-white placeholder:text-[#A6A6AC] focus:outline-none focus:border-[#F5C400] transition-colors"
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setLiveResults([]);
+                    setLiveSearchOpen(false);
+                  }}
+                  className="absolute right-14 p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onOpenFilter ? onOpenFilter() : onNavigate('movies')}
@@ -93,11 +162,102 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
                 <span>Filter</span>
               </button>
             </form>
+
+            {/* Live Search Floating Results Dropdown */}
+            {liveSearchOpen && searchQuery.trim().length >= 2 && (
+              <div className="absolute top-full left-0 right-0 mt-1.5 bg-[#1c1c20] border border-[#3A3A40] rounded-xl shadow-2xl overflow-hidden z-50 backdrop-blur-2xl animate-in fade-in duration-150">
+                <div className="px-3 py-1.5 bg-[#25252b] border-b border-white/5 flex items-center justify-between text-[11px] font-bold text-slate-400">
+                  <div className="flex items-center gap-1.5">
+                    <Search className="w-3.5 h-3.5 text-[#F5C400]" />
+                    <span>Live Search Results</span>
+                  </div>
+                  {isSearching && (
+                    <span className="text-[10px] text-[#F5C400] font-mono animate-pulse">Searching...</span>
+                  )}
+                </div>
+
+                <div className="max-h-80 overflow-y-auto divide-y divide-white/5">
+                  {liveResults.length > 0 ? (
+                    liveResults.map((item) => (
+                      <div
+                        key={`${item.mediaType}-${item.id}`}
+                        onClick={() => {
+                          setLiveSearchOpen(false);
+                          if (onSelectMedia) {
+                            onSelectMedia(item);
+                          } else {
+                            onNavigate(item.mediaType === 'movie' ? 'movie' : 'tv', { id: item.id });
+                          }
+                        }}
+                        className="flex items-center gap-3 p-2 hover:bg-[#282830] transition-colors cursor-pointer group"
+                      >
+                        <div className="w-9 h-13 rounded bg-[#121215] shrink-0 overflow-hidden border border-white/10">
+                          {item.posterPath ? (
+                            <img
+                              src={item.posterPath}
+                              alt={item.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-slate-500">
+                              <Film className="w-4 h-4" />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-white group-hover:text-[#F5C400] transition-colors truncate">
+                              {item.title}
+                            </span>
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-white/10 text-slate-300 font-mono uppercase">
+                              {item.mediaType}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
+                            {item.releaseDate && (
+                              <span>{new Date(item.releaseDate).getFullYear() || item.releaseDate}</span>
+                            )}
+                            {item.voteAverage > 0 && (
+                              <span className="flex items-center gap-0.5 text-amber-400 font-semibold">
+                                ★ {item.voteAverage.toFixed(1)}
+                              </span>
+                            )}
+                            {item.genres?.length > 0 && (
+                              <span className="truncate opacity-75">
+                                · {item.genres.slice(0, 2).map(g => g.name).join(', ')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : !isSearching ? (
+                    <div className="p-4 text-center text-xs text-slate-400">
+                      No titles found for &quot;{searchQuery}&quot;
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Footer view all link */}
+                <button
+                  onClick={() => {
+                    setLiveSearchOpen(false);
+                    onSearch(searchQuery.trim());
+                  }}
+                  className="w-full py-2 px-3 bg-[#232328] hover:bg-[#2b2b32] text-xs font-bold text-[#F5C400] flex items-center justify-center gap-1 transition-colors border-t border-white/5 cursor-pointer"
+                >
+                  <span>View all results for &quot;{searchQuery}&quot;</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Center-Right Nav: Ordered per user request (Home, Movies, TV Series, Popular, Top Rated, Random) */}
+          {/* Center-Right Nav: Home, Movies, TV Series, Genres, Popular, Top Rated, Random */}
           <div className="flex items-center gap-3 lg:gap-5">
-            <nav className="hidden md:flex items-center gap-3.5 lg:gap-5 text-[10px] text-white">
+            <nav className="hidden md:flex items-center gap-3 lg:gap-4.5 text-[10px] text-white">
               {/* 1. Home */}
               <button
                 onClick={() => onNavigate('home')}
@@ -131,7 +291,56 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
                 <span className="font-semibold whitespace-nowrap">TV Series</span>
               </button>
 
-              {/* 4. Popular */}
+              {/* 4. Genres Dropdown Menu in Top Bar */}
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    setGenresDropdownOpen(!genresDropdownOpen);
+                    setLiveSearchOpen(false);
+                  }}
+                  className={`flex flex-col items-center group cursor-pointer transition-colors ${
+                    genresDropdownOpen ? 'text-[#F5C400]' : 'text-white hover:text-[#F5C400]'
+                  }`}
+                >
+                  <div className="flex items-center gap-0.5">
+                    <Compass className="w-3.5 h-3.5 text-[#F5C400] mb-0.5" />
+                    <ChevronDown className="w-2.5 h-2.5 text-[#F5C400]" />
+                  </div>
+                  <span className="font-semibold whitespace-nowrap">Genres</span>
+                </button>
+
+                {genresDropdownOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setGenresDropdownOpen(false)}
+                    />
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-72 bg-[#1e1e23] border border-[#3A3A40] rounded-xl shadow-2xl p-2.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-[#A6A6AC] px-2 py-1 border-b border-white/5 mb-1.5 flex items-center justify-between">
+                        <span>All Genres ({ALL_GENRES.length})</span>
+                        <span className="text-[#F5C400]">Click to browse</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 max-h-72 overflow-y-auto no-scrollbar">
+                        {ALL_GENRES.map(g => (
+                          <button
+                            key={g.id}
+                            onClick={() => {
+                              setGenresDropdownOpen(false);
+                              if (onSelectGenre) onSelectGenre(g.id, g.name);
+                              else onNavigate('movies', { genreId: g.id });
+                            }}
+                            className="text-left text-xs px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-black hover:bg-[#F5C400] transition-colors font-semibold truncate cursor-pointer"
+                          >
+                            {g.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* 5. Popular */}
               <button
                 onClick={() => onNavigate('trending')}
                 className={`flex flex-col items-center group cursor-pointer transition-colors ${
@@ -142,7 +351,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
                 <span className="font-semibold whitespace-nowrap">Popular</span>
               </button>
 
-              {/* 5. Top Rated */}
+              {/* 6. Top Rated */}
               <button
                 onClick={() => onNavigate('top-rated')}
                 className={`flex flex-col items-center group cursor-pointer transition-colors ${
@@ -153,97 +362,71 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
                 <span className="font-semibold whitespace-nowrap">Top Rated</span>
               </button>
 
-              {/* 6. Random */}
+              {/* 7. Random */}
               <button
                 onClick={onSurpriseMe}
-                className="flex flex-col items-center group cursor-pointer hover:text-[#F5C400] transition-colors"
+                className={`flex flex-col items-center group cursor-pointer transition-colors ${
+                  currentView === 'random' ? 'text-[#F5C400]' : 'text-white hover:text-[#F5C400]'
+                }`}
               >
                 <Shuffle className="w-3.5 h-3.5 text-[#F5C400] mb-0.5" />
                 <span className="font-semibold whitespace-nowrap">Random</span>
               </button>
             </nav>
 
-            {/* Login Yellow Button on the far right matching image */}
-            <button
-              onClick={() => setLoginModalOpen(true)}
-              className="h-8 px-4 rounded bg-[#F5C400] hover:bg-[#e0b400] active:scale-95 text-black font-bold text-xs flex items-center justify-center transition-all cursor-pointer shadow-sm"
-            >
-              {isLoggedIn ? 'Account' : 'Login'}
-            </button>
-          </div>
-        </div>
-      </header>
+            {/* PWA Install Button */}
+            <PWAInstallButton variant="header" />
 
-      {/* Login Modal */}
-      {loginModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
-          <div className="bg-[#1a1a1e] border border-[#303036] rounded-xl max-w-sm w-full p-6 text-white shadow-2xl relative">
-            <button
-              onClick={() => setLoginModalOpen(false)}
-              className="absolute top-4 right-4 text-[#A6A6AC] hover:text-white"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <div className="flex items-center gap-2 text-base font-bold mb-3 text-[#F5C400]">
-              <User className="w-5 h-5" />
-              <span>{isLoggedIn ? 'User Account' : 'Sign in to T Stream'}</span>
-            </div>
-            {isLoggedIn ? (
-              <div className="space-y-4 text-xs">
-                <p className="text-[#A6A6AC]">You are currently signed in as a registered viewer.</p>
+            {/* Watchlist & Account Buttons */}
+            {user ? (
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={() => {
-                    setIsLoggedIn(false);
-                    setLoginModalOpen(false);
-                  }}
-                  className="w-full py-2 rounded bg-red-600 hover:bg-red-700 text-white font-bold cursor-pointer"
+                  type="button"
+                  onClick={() => openAuthModal('watchlist')}
+                  className="h-8 px-2.5 rounded-lg bg-[#242428] hover:bg-[#303036] text-[#A6A6AC] hover:text-[#F5C400] text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#3A3A40]"
+                  title="My Watchlist"
                 >
-                  Sign Out
+                  <User className="w-3.5 h-3.5" />
+                  <span className="hidden md:inline">Watchlist</span>
+                  <span className="px-1.5 py-0.2 rounded-full bg-[#F5C400] text-black text-[10px] font-black">
+                    {watchlist.length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('profile')}
+                  className="h-8 pl-1.5 pr-3 rounded-lg bg-[#F5C400] hover:bg-[#e0b400] active:scale-95 text-black font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm"
+                  title="My Profile"
+                >
+                  {user.photoURL ? (
+                    <img
+                      src={user.photoURL}
+                      alt="Avatar"
+                      className="w-5 h-5 rounded-full object-cover border border-black/20"
+                    />
+                  ) : (
+                    <div className="w-5 h-5 rounded-full bg-black text-[#F5C400] font-black text-[10px] flex items-center justify-center">
+                      {(profile?.displayName || user.email || 'U')[0].toUpperCase()}
+                    </div>
+                  )}
+                  <span className="max-w-[85px] truncate">
+                    {profile?.displayName || user.displayName || user.email?.split('@')[0] || 'Account'}
+                  </span>
                 </button>
               </div>
             ) : (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  setIsLoggedIn(true);
-                  setLoginModalOpen(false);
-                }}
-                className="space-y-3"
+              <button
+                type="button"
+                onClick={() => openAuthModal('login')}
+                className="h-8 px-4 rounded bg-[#F5C400] hover:bg-[#e0b400] active:scale-95 text-black font-bold text-xs flex items-center justify-center transition-all cursor-pointer shadow-sm"
               >
-                <div>
-                  <label className="text-[11px] text-[#A6A6AC] block mb-1">Email / Username</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="name@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full h-9 px-3 rounded bg-[#121215] border border-[#2d2d33] text-xs text-white focus:outline-none focus:border-[#F5C400]"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#A6A6AC] block mb-1">Password</label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="••••••••"
-                    className="w-full h-9 px-3 rounded bg-[#121215] border border-[#2d2d33] text-xs text-white focus:outline-none focus:border-[#F5C400]"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="w-full py-2.5 rounded bg-[#F5C400] text-black font-bold text-xs hover:bg-[#e0b400] cursor-pointer mt-2"
-                >
-                  Sign In
-                </button>
-                <p className="text-[10px] text-center text-[#888890] mt-2">
-                  No subscription needed. Free streaming for all devices.
-                </p>
-              </form>
+                Sign In / Register
+              </button>
             )}
           </div>
         </div>
-      )}
+      </header>
     </>
   );
 };

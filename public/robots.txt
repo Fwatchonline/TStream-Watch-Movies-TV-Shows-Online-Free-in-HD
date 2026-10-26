@@ -1,0 +1,8 @@
+# Robots.txt for T Stream
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/
+
+# Sitemap
+Sitemap: https://tstream.online/sitemap.xml

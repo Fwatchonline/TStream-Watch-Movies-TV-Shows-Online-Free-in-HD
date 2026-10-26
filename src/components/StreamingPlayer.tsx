@@ -9,10 +9,11 @@ import {
 } from 'lucide-react';
 import { MediaDetail, SubtitleTrack, Episode } from '../types/media';
 import { searchSubtitles } from '../services/subtitles';
-import { saveProgress, getUserSettings } from '../services/storage';
+import { getUserSettings } from '../services/storage';
 import { fetchSeasonEpisodes } from '../services/tmdb';
 import { DirectVideoPlayer } from './DirectVideoPlayer';
 import { fetchDirectStreams, DirectProviderResult } from '../services/directStreamClient';
+import { useAuth } from '../context/AuthContext';
 
 interface StreamingPlayerProps {
   media: MediaDetail;
@@ -35,11 +36,13 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   isLightsDimmed = false,
   onToggleLights
 }) => {
+  const { user, saveContinueWatching, getContinueWatchingItem } = useAuth();
   const settings = getUserSettings();
   const playerContainerRef = useRef<HTMLDivElement>(null);
 
   const [currentSeason, setCurrentSeason] = useState(initialSeason);
   const [currentEpisode, setCurrentEpisode] = useState(initialEpisode);
+  const [savedResumeSeconds, setSavedResumeSeconds] = useState<number | undefined>(undefined);
 
   // Subtitles
   const [subtitles, setSubtitles] = useState<SubtitleTrack[]>([]);
@@ -168,25 +171,45 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     isMovie
   ]);
 
-  // Save progress periodically
+  // Load saved resume position for registered user
   useEffect(() => {
-    const interval = setInterval(() => {
-      saveProgress({
-        id: media.id,
-        mediaType: media.mediaType,
-        title: media.title,
-        posterPath: media.posterPath,
-        backdropPath: media.backdropPath,
-        progressSeconds: 120,
-        durationSeconds: (media.runtime || 120) * 60,
-        seasonNumber: isMovie ? undefined : currentSeason,
-        episodeNumber: isMovie ? undefined : currentEpisode,
-        episodeName: currentEpisodeData?.name
-      });
-    }, 15000);
+    let isMounted = true;
+    if (!user) {
+      setSavedResumeSeconds(undefined);
+      return;
+    }
+    getContinueWatchingItem(media.mediaType, media.tmdbId || media.id).then(rec => {
+      if (isMounted && rec) {
+        if (isMovie) {
+          if (rec.progressSeconds > 10) setSavedResumeSeconds(rec.progressSeconds);
+        } else {
+          if (rec.seasonNumber === currentSeason && rec.episodeNumber === currentEpisode && rec.progressSeconds > 10) {
+            setSavedResumeSeconds(rec.progressSeconds);
+          }
+        }
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [user, media.id, media.tmdbId, media.mediaType, currentSeason, currentEpisode, isMovie, getContinueWatchingItem]);
 
-    return () => clearInterval(interval);
-  }, [media, currentSeason, currentEpisode, currentEpisodeData, isMovie]);
+  const handleProgressUpdate = (progressSeconds: number, durationSeconds: number) => {
+    // Continue watching is strictly for registered users
+    if (!user) return;
+    saveContinueWatching({
+      tmdbId: media.tmdbId || media.id,
+      mediaType: media.mediaType,
+      title: media.title,
+      posterPath: media.posterPath,
+      backdropPath: media.backdropPath,
+      progressSeconds: Math.floor(progressSeconds),
+      durationSeconds: Math.floor(durationSeconds),
+      seasonNumber: isMovie ? undefined : currentSeason,
+      episodeNumber: isMovie ? undefined : currentEpisode,
+      episodeName: currentEpisodeData?.name
+    });
+  };
 
   const maxEpisode = currentSeasonData?.episodeCount || episodesList.length || 10;
   const hasNextEpisode = !isMovie && currentEpisode < maxEpisode;
@@ -239,6 +262,14 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
             isMovie={isMovie}
             currentSeason={currentSeason}
             currentEpisode={currentEpisode}
+            totalSeasons={tvDetail?.seasons?.length || (media as any).numberOfSeasons || 1}
+            seasonsList={tvDetail?.seasons}
+            episodesList={episodesList}
+            onSelectEpisode={(s, e) => {
+              setCurrentSeason(s);
+              setCurrentEpisode(e);
+              if (onEpisodeChange) onEpisodeChange(s, e);
+            }}
             providerResults={directResults}
             availableSubtitles={subtitles}
             onNextEpisode={handleNextEpisode}
@@ -246,6 +277,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
             hasNextEpisode={hasNextEpisode}
             hasPrevEpisode={hasPrevEpisode}
             storageKey={`${media.id}_${currentSeason}_${currentEpisode}`}
+            initialResumeSeek={savedResumeSeconds}
+            onProgressUpdate={handleProgressUpdate}
             onRefreshStreams={loadDirectStreams}
             isTheaterMode={isTheaterMode}
             onToggleTheater={onToggleTheater}

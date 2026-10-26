@@ -12,9 +12,15 @@ import {
   Layers,
   Sparkles,
   Users,
-  Shuffle
+  Shuffle,
+  Bookmark,
+  User as UserIcon,
+  LogOut
 } from 'lucide-react';
 import { ALL_GENRES } from '../services/catalogData';
+import { useAuth } from '../context/AuthContext';
+import { TStreamLogo } from './TStreamLogo';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface HomeSidebarProps {
   isOpen: boolean;
@@ -41,6 +47,7 @@ export const HomeSidebar: React.FC<HomeSidebarProps> = ({
   selectedGenreId,
   currentView = 'home'
 }) => {
+  const { user, profile, watchlist, openAuthModal, logout } = useAuth();
   const [genresExpanded, setGenresExpanded] = useState(true);
 
   if (!isOpen) return null;
@@ -59,16 +66,16 @@ export const HomeSidebar: React.FC<HomeSidebarProps> = ({
       >
         {/* Header */}
         <div className="h-14 px-4 flex items-center justify-between border-b border-[#3A3A40]">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-[#F5C400] flex items-center justify-center text-black font-black">
-              <svg className="w-3 h-3 fill-black ml-0.5" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </div>
-            <span className="font-extrabold text-base tracking-tight text-white font-sans">
-              T <span className="text-[#F5C400]">Stream</span>
-            </span>
-          </div>
+          <button
+            onClick={() => {
+              onNavigate('home');
+              onClose();
+            }}
+            className="flex items-center focus:outline-none cursor-pointer"
+            aria-label="T Stream Home"
+          >
+            <TStreamLogo size="sm" />
+          </button>
 
           <button
             onClick={onClose}
@@ -79,7 +86,83 @@ export const HomeSidebar: React.FC<HomeSidebarProps> = ({
         </div>
 
         {/* Scrollable Navigation */}
-        <div className="flex-1 overflow-y-auto no-scrollbar py-4 px-3 space-y-5">
+        <div className="flex-1 overflow-y-auto no-scrollbar py-4 px-3 space-y-4">
+          {/* PWA In-App Install Button */}
+          <PWAInstallButton variant="sidebar" />
+
+          {/* User Auth Card */}
+          <div className="p-3 rounded-xl bg-[#212124] border border-[#3A3A40]">
+            {user ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2.5">
+                  {user.photoURL ? (
+                    <img
+                      src={user.photoURL}
+                      alt="Avatar"
+                      className="w-9 h-9 rounded-full object-cover border border-[#F5C400]"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 rounded-full bg-[#F5C400] text-black font-black text-sm flex items-center justify-center">
+                      {(profile?.displayName || user.email || 'U')[0].toUpperCase()}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-white truncate">
+                      {profile?.displayName || user.displayName || 'User'}
+                    </p>
+                    <p className="text-[10px] text-[#8E8E93] truncate">{user.email}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      openAuthModal('watchlist');
+                    }}
+                    className="py-1.5 px-2 rounded-lg bg-[#2e2e34] hover:bg-[#383840] text-[11px] font-semibold text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Bookmark className="w-3 h-3 text-[#F5C400]" />
+                    Watchlist ({watchlist.length})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      openAuthModal('profile');
+                    }}
+                    className="py-1.5 px-2 rounded-lg bg-[#2e2e34] hover:bg-[#383840] text-[11px] font-semibold text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <UserIcon className="w-3 h-3 text-[#F5C400]" />
+                    Profile
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-white">
+                  <UserIcon className="w-4 h-4 text-[#F5C400]" />
+                  <span>Account Access</span>
+                </div>
+                <p className="text-[11px] text-[#8E8E93] leading-relaxed">
+                  Sign in or register to sync your watchlist and history across devices.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    openAuthModal('login');
+                  }}
+                  className="w-full py-2 rounded-lg bg-[#F5C400] hover:bg-[#e0b400] text-black font-bold text-xs flex items-center justify-center transition-all cursor-pointer"
+                >
+                  Sign In / Register
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Main Links */}
           <div className="space-y-1">
             <button
@@ -189,6 +272,26 @@ export const HomeSidebar: React.FC<HomeSidebarProps> = ({
               </div>
               <span className="px-1.5 py-0.5 rounded bg-[#F5C400]/20 text-[#F5C400] text-[9px] font-black uppercase tracking-wider">
                 Sagas
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                onNavigate('random');
+                onClose();
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs font-semibold transition-colors cursor-pointer ${
+                currentView === 'random'
+                  ? 'bg-[#303035] text-[#F5C400] font-bold'
+                  : 'text-[#A6A6AC] hover:text-[#F3F3F3] hover:bg-[#303035]'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Shuffle className="w-4 h-4 text-[#F5C400]" />
+                <span>Random Picker</span>
+              </div>
+              <span className="px-1.5 py-0.5 rounded bg-[#F5C400] text-black text-[9px] font-black uppercase tracking-wider">
+                Reshuffle
               </span>
             </button>
           </div>
