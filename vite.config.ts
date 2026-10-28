@@ -83,10 +83,10 @@ function streamApiPlugin(): Plugin {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.end(JSON.stringify({ success: true, results }));
       } catch (err: any) {
-        res.statusCode = 500;
+        res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.end(JSON.stringify({ success: false, error: err.message }));
+        res.end(JSON.stringify({ success: false, error: err.message, results: [] }));
       }
       return;
     }
@@ -160,8 +160,9 @@ function streamApiPlugin(): Plugin {
         res.end();
       } catch (err: any) {
         if (!res.headersSent) {
-          res.statusCode = 502;
-          res.end('Upstream error: ' + err.message);
+          res.statusCode = 404;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: 'Stream temporarily unavailable or offline', message: err.message }));
         }
       }
       return;

@@ -15,7 +15,8 @@ import {
   User,
   Compass,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Users
 } from 'lucide-react';
 import { ALL_GENRES } from '../services/catalogData';
 import { fetchCatalog } from '../services/tmdb';
@@ -371,6 +372,17 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
               >
                 <Shuffle className="w-3.5 h-3.5 text-[#F5C400] mb-0.5" />
                 <span className="font-semibold whitespace-nowrap">Random</span>
+              </button>
+
+              {/* 8. People & Directors */}
+              <button
+                onClick={() => onNavigate('people')}
+                className={`flex flex-col items-center group cursor-pointer transition-colors ${
+                  currentView === 'people' || currentView === 'person' ? 'text-[#F5C400]' : 'text-white hover:text-[#F5C400]'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5 text-[#F5C400] mb-0.5" />
+                <span className="font-semibold whitespace-nowrap">People</span>
               </button>
             </nav>
 

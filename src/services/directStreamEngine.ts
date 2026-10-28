@@ -371,6 +371,16 @@ export async function resolveShowbox(
 }
 
 // -------------------------------------------------------------
+// In-Memory Stream Resolution Cache (avoids 429 rate-limiting)
+// -------------------------------------------------------------
+const STREAM_CACHE = new Map<string, { timestamp: number; data: DirectStreamResult[] }>();
+const CACHE_TTL_MS = 6 * 60 * 1000; // 6 minutes
+
+export function clearStreamResolutionCache() {
+  STREAM_CACHE.clear();
+}
+
+// -------------------------------------------------------------
 // 5. FMov Multi-Source Direct Resolver (https://api.fmov.my)
 // -------------------------------------------------------------
 export async function resolveFmovMy(
@@ -384,62 +394,50 @@ export async function resolveFmovMy(
     const type = isTv ? 'series' : 'movie';
     const seasonQuery = isTv ? `?season=${s}&episode=${e || 1}` : '';
 
-    // Fast verified sub-providers on api.fmov.my (Showbox prioritized first; castle removed)
-    const fmovSubProviders = [
-      'showbox',
-      'vaplayer',
-      'vidlink',
-      'streamflix',
-      '4khdhub',
-      'netmirror',
-      'dahmermovies',
-      'onetouchtv'
-    ];
-
-    // Query specific providers + general endpoint in parallel for fastest response
-    const fetchPromises = fmovSubProviders.map(async (prov) => {
-      try {
-        const provUrl = `${baseUrl}/api/streams/${prov}/${type}/${id}${seasonQuery}`;
-        const res = await fetch(provUrl, {
-          headers: {
-            'User-Agent': USER_AGENT,
-            'Accept': 'application/json'
-          },
-          signal: AbortSignal.timeout(prov === 'showbox' ? 8000 : 6500)
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        if (Array.isArray(data?.streams)) {
-          return data.streams.map((st: any) => ({
-            ...st,
-            subProvider: prov,
-            sourceProvider: prov === 'showbox' ? 'Showbox 4K' : (st.provider || prov)
-          }));
+    // Query showbox + general endpoint only (avoids api.fmov.my 30 req/min rate limit)
+    const fetchPromises = [
+      (async () => {
+        try {
+          const provUrl = `${baseUrl}/api/streams/showbox/${type}/${id}${seasonQuery}`;
+          const res = await fetch(provUrl, {
+            headers: {
+              'User-Agent': USER_AGENT,
+              'Accept': 'application/json'
+            },
+            signal: AbortSignal.timeout(5000)
+          });
+          if (!res.ok) return null;
+          const data = await res.json();
+          if (Array.isArray(data?.streams)) {
+            return data.streams.map((st: any) => ({
+              ...st,
+              subProvider: 'showbox',
+              sourceProvider: 'Showbox 4K'
+            }));
+          }
+          return [];
+        } catch {
+          return null;
         }
-        return [];
-      } catch {
-        return null;
-      }
-    });
-
-    // Also attempt general endpoint with 6s timeout
-    fetchPromises.push((async () => {
-      try {
-        const generalUrl = `${baseUrl}/api/streams/${type}/${id}${seasonQuery}`;
-        const res = await fetch(generalUrl, {
-          headers: {
-            'User-Agent': USER_AGENT,
-            'Accept': 'application/json'
-          },
-          signal: AbortSignal.timeout(6000)
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        return Array.isArray(data?.streams) ? data.streams : [];
-      } catch {
-        return null;
-      }
-    })());
+      })(),
+      (async () => {
+        try {
+          const generalUrl = `${baseUrl}/api/streams/${type}/${id}${seasonQuery}`;
+          const res = await fetch(generalUrl, {
+            headers: {
+              'User-Agent': USER_AGENT,
+              'Accept': 'application/json'
+            },
+            signal: AbortSignal.timeout(5000)
+          });
+          if (!res.ok) return null;
+          const data = await res.json();
+          return Array.isArray(data?.streams) ? data.streams : [];
+        } catch {
+          return null;
+        }
+      })()
+    ];
 
     const settled = await Promise.allSettled(fetchPromises);
     const rawStreams: any[] = [];
@@ -569,19 +567,28 @@ export async function resolveAllDirectStreams(
   e?: number | null,
   preferredProvider?: string
 ): Promise<DirectStreamResult[]> {
+  const cacheKey = `${id}_${s || 0}_${e || 0}_${preferredProvider || 'all'}`;
+  const cached = STREAM_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
   const tasks: Array<Promise<DirectStreamResult | null>> = [];
 
-  // Query Showbox and Hyperion Ultra (api.fmov.my) along with other verified direct streams
+  // Query verified direct streams in priority order
   if (preferredProvider === 'showbox') {
-    tasks.push(resolveShowbox(id, s, e), resolveFmovMy(id, s, e), resolveVidAPI(id, s, e), resolveVidRock(id, s, e), resolveVidLink(id, s, e));
+    tasks.push(resolveShowbox(id, s, e), resolveVidAPI(id, s, e), resolveFmovMy(id, s, e), resolveVidLink(id, s, e), resolveVidRock(id, s, e));
+  } else if (preferredProvider === 'vidapi' || preferredProvider === 'apollo') {
+    tasks.push(resolveVidAPI(id, s, e), resolveShowbox(id, s, e), resolveFmovMy(id, s, e), resolveVidLink(id, s, e), resolveVidRock(id, s, e));
   } else if (preferredProvider === 'fmov') {
-    tasks.push(resolveFmovMy(id, s, e), resolveShowbox(id, s, e), resolveVidAPI(id, s, e), resolveVidRock(id, s, e), resolveVidLink(id, s, e));
-  } else if (preferredProvider === 'vidrock') {
-    tasks.push(resolveVidRock(id, s, e), resolveFmovMy(id, s, e), resolveShowbox(id, s, e), resolveVidAPI(id, s, e), resolveVidLink(id, s, e));
-  } else if (preferredProvider === 'vidlink') {
-    tasks.push(resolveVidLink(id, s, e), resolveFmovMy(id, s, e), resolveShowbox(id, s, e), resolveVidAPI(id, s, e), resolveVidRock(id, s, e));
+    tasks.push(resolveFmovMy(id, s, e), resolveShowbox(id, s, e), resolveVidAPI(id, s, e), resolveVidLink(id, s, e), resolveVidRock(id, s, e));
+  } else if (preferredProvider === 'vidrock' || preferredProvider === 'titan') {
+    tasks.push(resolveVidRock(id, s, e), resolveVidAPI(id, s, e), resolveShowbox(id, s, e), resolveFmovMy(id, s, e), resolveVidLink(id, s, e));
+  } else if (preferredProvider === 'vidlink' || preferredProvider === 'hermes') {
+    tasks.push(resolveVidLink(id, s, e), resolveVidAPI(id, s, e), resolveShowbox(id, s, e), resolveFmovMy(id, s, e), resolveVidRock(id, s, e));
   } else {
-    tasks.push(resolveFmovMy(id, s, e), resolveShowbox(id, s, e), resolveVidAPI(id, s, e), resolveVidRock(id, s, e), resolveVidLink(id, s, e));
+    // Fast balanced order: VidAPI (high-bandwidth direct HLS) + Showbox 4K + Fmov + VidLink + VidRock
+    tasks.push(resolveVidAPI(id, s, e), resolveShowbox(id, s, e), resolveFmovMy(id, s, e), resolveVidLink(id, s, e), resolveVidRock(id, s, e));
   }
 
   const settled = await Promise.allSettled(tasks);
@@ -593,23 +600,8 @@ export async function resolveAllDirectStreams(
     }
   }
 
-  // Guaranteed direct HLS stream fallback so player is always functional
-  if (results.length === 0) {
-    results.push({
-      provider: 'direct_hls_backup',
-      providerName: 'Chronos Orbital Mirror',
-      streams: [
-        {
-          quality: '1080p HLS Master',
-          type: 'hls',
-          url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-          originalUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-          server: 'Chronos Orbital Fallback (1080p)',
-          headers: { 'User-Agent': USER_AGENT }
-        }
-      ],
-      subtitles: []
-    });
+  if (results.length > 0) {
+    STREAM_CACHE.set(cacheKey, { timestamp: Date.now(), data: results });
   }
 
   return results;

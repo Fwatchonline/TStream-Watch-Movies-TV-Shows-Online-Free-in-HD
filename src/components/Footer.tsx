@@ -57,9 +57,6 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateLegal }) => {
             <p className="text-xs text-slate-400 leading-relaxed">
               This product uses the TMDB API but is not endorsed or certified by TMDB. IMDb ratings and external links provided for informational reference.
             </p>
-            <div className="mt-3 text-[11px] text-slate-500">
-              Deployment Target: VPS port 3010 / 3011 · Nginx SSL
-            </div>
           </div>
         </div>
 
@@ -68,10 +65,8 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateLegal }) => {
           <div>
             © {new Date().getFullYear()} T Stream. All rights reserved.
           </div>
-          <div className="flex items-center gap-4">
-            <span>Server: api.fmov.my</span>
-            <span aria-hidden="true">·</span>
-            <span>GA4: G-BHPTSX1FXP</span>
+          <div className="text-slate-500">
+            High Definition Movie &amp; TV Stream Experience
           </div>
         </div>
       </div>

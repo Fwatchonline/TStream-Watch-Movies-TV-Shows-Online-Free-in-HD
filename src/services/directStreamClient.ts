@@ -63,7 +63,7 @@ export async function fetchDirectStreams(params: {
 
     const res = await fetch(`/api/stream-resolve?${query.toString()}`, {
       headers: { 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(12000)
+      signal: AbortSignal.timeout(25000)
     });
 
     if (!res.ok) {

@@ -9,9 +9,24 @@
     <meta name="title" content="T Stream — Watch Movies &amp; TV Shows Online Free in HD" />
     <meta name="description" content="Stream thousands of trending movies and TV series in 4K UHD and 1080p Full HD on T Stream. Fast multi-server HLS playback, multilingual subtitles, and zero ads." />
     <meta name="keywords" content="t stream, watch movies online, watch series online, free streaming, hd movies, 4k streaming, english subtitles, croatian subtitles, cinema stream" />
-    <meta name="author" content="T Stream" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
-    <link rel="canonical" href="https://tstream.online/" />
+    <link rel="canonical" id="tstream-canonical" href="https://tstream.online/" />
+    <script>
+      (function() {
+        try {
+          var p = window.location.pathname || '/';
+          // Clean trailing slash (unless root)
+          var clean = (p.length > 1 && p.endsWith('/')) ? p.slice(0, -1) : p;
+          var canon = 'https://tstream.online' + clean;
+          var el = document.getElementById('tstream-canonical');
+          if (el) el.setAttribute('href', canon);
+          var og = document.querySelector('meta[property="og:url"]');
+          if (og) og.setAttribute('content', canon);
+          var tw = document.querySelector('meta[name="twitter:url"]');
+          if (tw) tw.setAttribute('content', canon);
+        } catch(e) {}
+      })();
+    </script>
 
     <!-- Favicon & Touch Icons -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

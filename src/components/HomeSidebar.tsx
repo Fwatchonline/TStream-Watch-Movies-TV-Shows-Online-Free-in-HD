@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { ALL_GENRES } from '../services/catalogData';
 import { useAuth } from '../context/AuthContext';
+import { isAdminUser } from '../utils/admin';
 import { TStreamLogo } from './TStreamLogo';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -48,6 +49,7 @@ export const HomeSidebar: React.FC<HomeSidebarProps> = ({
   currentView = 'home'
 }) => {
   const { user, profile, watchlist, openAuthModal, logout } = useAuth();
+  const isAdmin = isAdminUser(user?.email);
   const [genresExpanded, setGenresExpanded] = useState(true);
 
   if (!isOpen) return null;
@@ -294,6 +296,48 @@ export const HomeSidebar: React.FC<HomeSidebarProps> = ({
                 Reshuffle
               </span>
             </button>
+
+            <button
+              onClick={() => {
+                onNavigate('people');
+                onClose();
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs font-semibold transition-colors cursor-pointer ${
+                currentView === 'people' || currentView === 'person'
+                  ? 'bg-[#303035] text-[#F5C400] font-bold'
+                  : 'text-[#A6A6AC] hover:text-[#F3F3F3] hover:bg-[#303035]'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Users className="w-4 h-4 text-[#F5C400]" />
+                <span>People &amp; Directors</span>
+              </div>
+              <span className="px-1.5 py-0.5 rounded bg-[#F5C400]/20 text-[#F5C400] text-[9px] font-black uppercase tracking-wider">
+                Cast
+              </span>
+            </button>
+
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  onNavigate('admin');
+                  onClose();
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs font-semibold transition-colors cursor-pointer ${
+                  currentView === 'admin'
+                    ? 'bg-[#303035] text-[#F5C400] font-bold'
+                    : 'text-[#A6A6AC] hover:text-[#F3F3F3] hover:bg-[#303035]'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Sparkles className="w-4 h-4 text-[#F5C400]" />
+                  <span>Admin Panel</span>
+                </div>
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold uppercase tracking-wider">
+                  Admin
+                </span>
+              </button>
+            )}
           </div>
 
           <div className="w-full h-px bg-[#26262c]" />

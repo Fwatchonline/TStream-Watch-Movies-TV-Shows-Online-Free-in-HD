@@ -11,6 +11,8 @@ import { AdminPage } from './pages/AdminPage';
 import { CollectionsPage } from './pages/CollectionsPage';
 import { TagsPage } from './pages/TagsPage';
 import { RandomPage } from './pages/RandomPage';
+import { PeoplePage } from './pages/PeoplePage';
+import { PersonPage } from './pages/PersonPage';
 import { SurpriseModal } from './components/SurpriseModal';
 import { LegalModal } from './components/LegalModal';
 import { AuthModal } from './components/AuthModal';
@@ -31,6 +33,7 @@ export default function App() {
   const [selectedGenreId, setSelectedGenreId] = useState<number | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
   const [selectedLetter, setSelectedLetter] = useState<string>('A');
+  const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
   const [surpriseOpen, setSurpriseOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [legalPage, setLegalPage] = useState<'terms' | 'privacy' | 'dmca' | 'contact' | null>(null);
@@ -86,6 +89,15 @@ export default function App() {
         setCurrentView('library');
       } else if (path === 'random') {
         setCurrentView('random');
+      } else if (path === 'people') {
+        setCurrentView('people');
+      } else if (path.startsWith('person/')) {
+        const parts = path.split('/');
+        const pid = parseInt(parts[1], 10);
+        if (!isNaN(pid)) {
+          setSelectedPersonId(pid);
+          setCurrentView('person');
+        }
       } else if (path === 'admin') {
         setCurrentView('admin');
       } else if (path.startsWith('movie/') || path.startsWith('tv/')) {
@@ -118,70 +130,94 @@ export default function App() {
     return () => window.removeEventListener('popstate', handleLocation);
   }, []);
 
-  // Update SEO for main catalog pages
+  // Update SEO for main catalog pages with explicit canonical URLs and index directives
   useEffect(() => {
     if (currentView === 'home') {
-      updateSEO();
+      updateSEO({ url: '/' });
     } else if (currentView === 'movies') {
       updateSEO({
         title: 'Popular & Latest Movies Free HD',
-        description: 'Browse and watch thousands of blockbuster movies online in HD 1080p and 4K on T Stream.'
+        description: 'Browse and watch thousands of blockbuster movies online in HD 1080p and 4K on T Stream.',
+        url: '/movies'
       });
     } else if (currentView === 'tv-shows') {
       updateSEO({
         title: 'TV Shows & Full Episodes Free',
-        description: 'Stream full seasons and episodes of your favorite TV series and dramas on T Stream.'
+        description: 'Stream full seasons and episodes of your favorite TV series and dramas on T Stream.',
+        url: '/tv-shows'
       });
     } else if (currentView === 'trending') {
       updateSEO({
         title: 'Trending Movies & TV Shows Today',
-        description: 'Discover the hottest and most popular movies and series streaming right now on T Stream.'
+        description: 'Discover the hottest and most popular movies and series streaming right now on T Stream.',
+        url: '/trending'
       });
     } else if (currentView === 'top-rated') {
       updateSEO({
         title: 'Top Rated Movies & Shows of All Time',
-        description: 'Explore the highest critically-acclaimed films and television series on T Stream.'
+        description: 'Explore the highest critically-acclaimed films and television series on T Stream.',
+        url: '/top-rated'
       });
     } else if (currentView === 'collections') {
       updateSEO({
         title: 'Movie Franchises & Sagas',
-        description: 'Explore complete cinematic universes and movie franchises on T Stream.'
+        description: 'Explore complete cinematic universes and movie franchises on T Stream.',
+        url: '/collections'
       });
     } else if (currentView === 'platform') {
-      const name = (selectedPlatform || 'streaming').toUpperCase();
+      const name = (selectedPlatform || 'netflix').toUpperCase();
       updateSEO({
         title: `${name} Hub — Movies & TV Series`,
-        description: `Stream movies and television series from ${name} on T Stream.`
+        description: `Stream movies and television series from ${name} on T Stream.`,
+        url: `/platform/${selectedPlatform || 'netflix'}`
       });
     } else if (currentView === 'az') {
       updateSEO({
         title: `Titles Starting With ${selectedLetter} — A-Z Directory`,
-        description: `Browse movies and TV shows alphabetically starting with letter ${selectedLetter} on T Stream.`
+        description: `Browse movies and TV shows alphabetically starting with letter ${selectedLetter} on T Stream.`,
+        url: `/az/${selectedLetter || 'A'}`
       });
     } else if (currentView === 'tags') {
       updateSEO({
         title: selectedTag ? `Tag: #${selectedTag}` : 'Explore Movies & TV by Tag',
-        description: 'Explore movies and TV series by genre tropes, moods, aesthetics, and tags.'
+        description: 'Explore movies and TV series by genre tropes, moods, aesthetics, and tags.',
+        url: '/tags'
       });
-    } else if (currentView === 'search') {
+    } else if (currentView === 'people') {
       updateSEO({
-        title: searchQuery ? `Search: "${searchQuery}"` : 'Search Movies & TV Shows',
-        description: 'Search across tens of thousands of movies, series, actors, and sagas on T Stream.'
-      });
-    } else if (currentView === 'library') {
-      updateSEO({
-        title: 'My Watchlist & Library',
-        description: 'Access your saved bookmarks, watchlist, and watched history on T Stream.'
+        title: 'Actors & Film Directors Directory',
+        description: 'Explore popular film and TV cast members, directors, and filmographies on T Stream.',
+        url: '/people'
       });
     } else if (currentView === 'random') {
       updateSEO({
         title: 'Random Movie & TV Show Picker — Reshuffle 20 Titles',
-        description: 'Spin the wheel and pick from 20 random movies and TV series to watch online in HD on T Stream.'
+        description: 'Spin the wheel and pick from 20 random movies and TV series to watch online in HD on T Stream.',
+        url: '/random'
+      });
+    } else if (currentView === 'search') {
+      // Search result pages must be noindex to prevent Google crawl traps & thin content
+      updateSEO({
+        title: searchQuery ? `Search: "${searchQuery}"` : 'Search Movies & TV Shows',
+        description: 'Search across tens of thousands of movies, series, actors, and sagas on T Stream.',
+        noindex: true,
+        url: '/search'
+      });
+    } else if (currentView === 'library') {
+      // Personal user library must never be indexed
+      updateSEO({
+        title: 'My Watchlist & Library',
+        description: 'Access your saved bookmarks, watchlist, and watched history on T Stream.',
+        noindex: true,
+        url: '/library'
       });
     } else if (currentView === 'admin') {
+      // Operations panel must never be indexed
       updateSEO({
         title: 'Server & Player Settings',
-        description: 'Configure custom streaming server priorities and player preferences on T Stream.'
+        description: 'Configure custom streaming server priorities and player preferences on T Stream.',
+        noindex: true,
+        url: '/admin'
       });
     }
   }, [currentView, searchQuery, selectedLetter, selectedPlatform, selectedTag]);
@@ -243,12 +279,22 @@ export default function App() {
     } else if (view === 'random') {
       newPath = '/random';
       setSelectedGenreId(null);
+    } else if (view === 'people') {
+      newPath = '/people';
+      setSelectedGenreId(null);
     } else if (view === 'admin') {
       newPath = '/admin';
       setSelectedGenreId(null);
     }
 
     window.history.pushState({}, '', newPath);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSelectPerson = (personId: number) => {
+    setSelectedPersonId(personId);
+    setCurrentView('person');
+    window.history.pushState({}, '', `/person/${personId}`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -339,6 +385,7 @@ export default function App() {
             onBack={() => navigateTo('home')}
             onWatchNow={(detail, season, ep) => handleWatchMedia(detail, season || 1, ep || 1)}
             onSelectMedia={handleSelectMedia}
+            onSelectPerson={handleSelectPerson}
             onSelectTag={(tag) => navigateTo('tags', { tag })}
             onSelectGenre={(genreId) => navigateTo('movies', { genreId })}
             onNavigateCollections={() => navigateTo('collections')}
@@ -452,6 +499,24 @@ export default function App() {
           />
         )}
 
+        {currentView === 'people' && (
+          <PeoplePage
+            onSelectPerson={handleSelectPerson}
+          />
+        )}
+
+        {currentView === 'person' && (
+          <PersonPage
+            personId={selectedPersonId || 1083010}
+            onBack={() => {
+              setCurrentView('people');
+              window.history.pushState({}, '', '/people');
+            }}
+            onSelectMedia={handleSelectMedia}
+            onWatchMedia={handleWatchMedia}
+          />
+        )}
+
         {currentView === 'admin' && (
           <AdminPage />
         )}
@@ -460,7 +525,7 @@ export default function App() {
       {/* Footer for non-home pages */}
       {currentView !== 'home' && (
         <Footer onNavigateLegal={(page) => {
-          if (['movies', 'tv-shows', 'trending', 'top-rated', 'platform', 'az', 'collections', 'tags', 'random'].includes(page)) {
+          if (['movies', 'tv-shows', 'trending', 'top-rated', 'platform', 'az', 'collections', 'tags', 'random', 'people'].includes(page)) {
             navigateTo(page);
           } else {
             setLegalPage(page as any);

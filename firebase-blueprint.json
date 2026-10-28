@@ -50,6 +50,59 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["userId", "tmdbId", "mediaType", "title", "progressSeconds", "durationSeconds", "percentage", "updatedAt"]
+    },
+    "ReportItem": {
+      "title": "ReportItem",
+      "description": "User reported video or stream problem displayed in the admin panel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "mediaId": { "type": "string" },
+        "mediaType": { "type": "string" },
+        "mediaTitle": { "type": "string" },
+        "posterPath": { "type": "string" },
+        "season": { "type": "number" },
+        "episode": { "type": "number" },
+        "server": { "type": "string" },
+        "reason": { "type": "string" },
+        "reportedAt": { "type": "string" },
+        "status": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "mediaId", "mediaTitle", "server", "reason", "reportedAt", "status"]
+    },
+    "MovieStats": {
+      "title": "MovieStats",
+      "description": "Real view count and user rating stats for movies and shows",
+      "type": "object",
+      "properties": {
+        "mediaId": { "type": "string" },
+        "mediaType": { "type": "string" },
+        "title": { "type": "string" },
+        "views": { "type": "number" },
+        "ratingSum": { "type": "number" },
+        "ratingCount": { "type": "number" },
+        "lastViewedAt": { "type": "string" }
+      },
+      "required": ["mediaId", "views"]
+    },
+    "EmbedServerConfig": {
+      "title": "EmbedServerConfig",
+      "description": "Customizable streaming embed player and server configurations managed by administrator",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "badge": { "type": "string" },
+        "dotColor": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "order": { "type": "number" },
+        "movieUrlTemplate": { "type": "string" },
+        "tvUrlTemplate": { "type": "string" }
+      },
+      "required": ["id", "name", "type", "enabled"]
     }
   },
   "firestore": {
@@ -64,6 +117,18 @@
     "/users/{userId}/continueWatching/{itemId}": {
       "schema": { "$ref": "#/entities/ContinueWatchingItem" },
       "description": "User private continue watching progress records"
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/ReportItem" },
+      "description": "Playback reports and problem tickets visible in the admin panel"
+    },
+    "/movieStats/{mediaKey}": {
+      "schema": { "$ref": "#/entities/MovieStats" },
+      "description": "Global movie and TV show view counts and interactive user ratings"
+    },
+    "/systemSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/EmbedServerConfig" },
+      "description": "Global application and embed player configurations managed by administrator"
     }
   }
 }

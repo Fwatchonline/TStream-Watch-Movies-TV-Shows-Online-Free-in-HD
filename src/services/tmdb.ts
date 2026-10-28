@@ -1087,3 +1087,290 @@ export async function fetchRandomMedia(
   return shuffled.slice(0, count);
 }
 
+// ============================================================================
+// PEOPLE & DIRECTORS API (Actors, Actresses & Renowned Directors)
+// ============================================================================
+export interface PersonDetail {
+  id: number;
+  name: string;
+  biography: string;
+  birthday?: string;
+  deathday?: string;
+  placeOfBirth?: string;
+  profilePath: string | null;
+  knownForDepartment: string;
+  popularity: number;
+  combinedCredits: {
+    cast: MediaItem[];
+    crew: Array<MediaItem & { job: string }>;
+  };
+}
+
+export interface PersonSummary {
+  id: number;
+  name: string;
+  profilePath: string | null;
+  knownForDepartment: string;
+  popularity: number;
+  knownFor: string[];
+}
+
+const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
+  {
+    id: 1136406,
+    name: 'Tom Holland',
+    profilePath: 'https://image.tmdb.org/t/p/w500/bBRqqoK5p3aHqFXn6kLgQ2pBv6V.jpg',
+    knownForDepartment: 'Acting',
+    popularity: 98.4,
+    knownFor: ['Spider-Man: Brand New Day', 'Spider-Man: No Way Home', 'Uncharted']
+  },
+  {
+    id: 505710,
+    name: 'Zendaya',
+    profilePath: 'https://image.tmdb.org/t/p/w500/r2GQgZ4m3U1Q3z5v8Y7X4pZ3Q5a.jpg',
+    knownForDepartment: 'Acting',
+    popularity: 96.2,
+    knownFor: ['Dune: Part Two', 'Euphoria', 'Challengers']
+  },
+  {
+    id: 525,
+    name: 'Christopher Nolan',
+    profilePath: 'https://image.tmdb.org/t/p/w500/xuAIuYSmsUzKlUMBFGVZaWsY3Z5.jpg',
+    knownForDepartment: 'Directing',
+    popularity: 95.8,
+    knownFor: ['Oppenheimer', 'Interstellar', 'Inception', 'The Dark Knight']
+  },
+  {
+    id: 2037,
+    name: 'Cillian Murphy',
+    profilePath: 'https://image.tmdb.org/t/p/w500/llk2SmSp101BtZNV7sq51ZtFfVO.jpg',
+    knownForDepartment: 'Acting',
+    popularity: 94.7,
+    knownFor: ['Oppenheimer', 'Peaky Blinders', 'Inception', '28 Days Later']
+  },
+  {
+    id: 138,
+    name: 'Quentin Tarantino',
+    profilePath: 'https://image.tmdb.org/t/p/w500/9shFNfTls8N1q6eG356K80Wp1f5.jpg',
+    knownForDepartment: 'Directing',
+    popularity: 93.9,
+    knownFor: ['Pulp Fiction', 'Inglourious Basterds', 'Django Unchained', 'Kill Bill']
+  },
+  {
+    id: 137427,
+    name: 'Denis Villeneuve',
+    profilePath: 'https://image.tmdb.org/t/p/w500/zp4u12f1E5G3a2W1Y8X4pZ3Q5a.jpg',
+    knownForDepartment: 'Directing',
+    popularity: 92.5,
+    knownFor: ['Dune: Part Two', 'Blade Runner 2049', 'Arrival', 'Sicario']
+  },
+  {
+    id: 6193,
+    name: 'Leonardo DiCaprio',
+    profilePath: 'https://image.tmdb.org/t/p/w500/wo2hxAz6fGh25P0qBPu8VoOI2te.jpg',
+    knownForDepartment: 'Acting',
+    popularity: 91.8,
+    knownFor: ['Inception', 'Titanic', 'The Wolf of Wall Street', 'The Revenant']
+  },
+  {
+    id: 234352,
+    name: 'Margot Robbie',
+    profilePath: 'https://image.tmdb.org/t/p/w500/euDPyqLnuwaWMHajcU3oZ9uZezR.jpg',
+    knownForDepartment: 'Acting',
+    popularity: 91.1,
+    knownFor: ['Barbie', 'The Wolf of Wall Street', 'Babylon', 'Suicide Squad']
+  },
+  {
+    id: 2710,
+    name: 'James Cameron',
+    profilePath: 'https://image.tmdb.org/t/p/w500/9naovEsGvKn5qvZFFM5L9qZf1Wp.jpg',
+    knownForDepartment: 'Directing',
+    popularity: 90.4,
+    knownFor: ['Avatar: The Way of Water', 'Titanic', 'Terminator 2', 'Aliens']
+  },
+  {
+    id: 1032,
+    name: 'Martin Scorsese',
+    profilePath: 'https://image.tmdb.org/t/p/w500/99hFNfTls8N1q6eG356K80Wp1f5.jpg',
+    knownForDepartment: 'Directing',
+    popularity: 89.6,
+    knownFor: ['Killers of the Flower Moon', 'Goodfellas', 'Taxi Driver', 'The Departed']
+  },
+  {
+    id: 3223,
+    name: 'Robert Downey Jr.',
+    profilePath: 'https://image.tmdb.org/t/p/w500/im9SAqJPZKEbVZGmjXuLI4O7RvM.jpg',
+    knownForDepartment: 'Acting',
+    popularity: 89.2,
+    knownFor: ['Iron Man', 'Avengers: Endgame', 'Oppenheimer', 'Sherlock Holmes']
+  },
+  {
+    id: 30614,
+    name: 'Ryan Gosling',
+    profilePath: 'https://image.tmdb.org/t/p/w500/lyUyVARQKhGxaxy0FbPJCQRpiaW.jpg',
+    knownForDepartment: 'Acting',
+    popularity: 88.5,
+    knownFor: ['Barbie', 'La La Land', 'Drive', 'Blade Runner 2049', 'The Fall Guy']
+  }
+];
+
+/**
+ * Fetch detailed person profile with combined filmography credits
+ */
+export async function fetchPersonDetail(personId: number): Promise<PersonDetail | null> {
+  const apiKey = getTmdbApiKey();
+  try {
+    const res = await fetch(`${TMDB_BASE_URL}/person/${personId}?api_key=${apiKey}&append_to_response=combined_credits`);
+    if (res.ok) {
+      const raw = await res.json();
+      const credits = raw.combined_credits || {};
+
+      const castItems: MediaItem[] = (credits.cast || [])
+        .filter((c: any) => c.poster_path || c.backdrop_path)
+        .map((c: any) => normalizeTMDBItem(c, c.media_type === 'tv' ? 'tv' : 'movies'))
+        .sort((a: any, b: any) => (b.popularity || 0) - (a.popularity || 0));
+
+      const crewItems: Array<MediaItem & { job: string }> = (credits.crew || [])
+        .filter((c: any) => (c.poster_path || c.backdrop_path) && (c.job === 'Director' || c.department === 'Directing' || c.job === 'Writer'))
+        .map((c: any) => ({
+          ...normalizeTMDBItem(c, c.media_type === 'tv' ? 'tv' : 'movies'),
+          job: c.job || 'Director'
+        }))
+        .sort((a: any, b: any) => (b.popularity || 0) - (a.popularity || 0));
+
+      return {
+        id: raw.id,
+        name: raw.name,
+        biography: raw.biography || `${raw.name} is a renowned figure in cinema recognized across global film and television.`,
+        birthday: raw.birthday,
+        deathday: raw.deathday,
+        placeOfBirth: raw.place_of_birth,
+        profilePath: raw.profile_path ? `https://image.tmdb.org/t/p/h632${raw.profile_path}` : null,
+        knownForDepartment: raw.known_for_department || 'Acting',
+        popularity: raw.popularity || 0,
+        combinedCredits: {
+          cast: castItems,
+          crew: crewItems
+        }
+      };
+    }
+  } catch (err) {
+    console.warn('TMDB person detail fetch failed:', err);
+  }
+
+  // Fallback to local
+  const matched = FALLBACK_POPULAR_PEOPLE.find(p => p.id === personId);
+  return {
+    id: personId,
+    name: matched?.name || 'Cinema Artist',
+    biography: `${matched?.name || 'This artist'} has made prominent contributions to award-winning feature films and television series streaming in high definition on T Stream.`,
+    profilePath: matched?.profilePath || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500&auto=format&fit=crop&q=80',
+    knownForDepartment: matched?.knownForDepartment || 'Acting',
+    popularity: matched?.popularity || 80,
+    combinedCredits: {
+      cast: EXPANDED_CATALOG.slice(0, 8),
+      crew: EXPANDED_CATALOG.slice(0, 4).map(item => ({ ...item, job: 'Director' }))
+    }
+  };
+}
+
+/**
+ * Fetch popular people (actors, actresses, and directors)
+ */
+export async function fetchPopularPeople(
+  page = 1,
+  department: 'all' | 'Acting' | 'Directing' = 'all'
+): Promise<PaginatedResponse<PersonSummary>> {
+  const apiKey = getTmdbApiKey();
+  const safePage = Math.max(1, Math.min(page, 50));
+
+  try {
+    const res = await fetch(`${TMDB_BASE_URL}/person/popular?api_key=${apiKey}&page=${safePage}`);
+    if (res.ok) {
+      const data = await res.json();
+      let results: PersonSummary[] = (data.results || []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        profilePath: p.profile_path ? `https://image.tmdb.org/t/p/h632${p.profile_path}` : null,
+        knownForDepartment: p.known_for_department || 'Acting',
+        popularity: p.popularity || 0,
+        knownFor: (p.known_for || []).map((k: any) => k.title || k.name || '')
+      }));
+
+      if (department !== 'all') {
+        results = results.filter(p => p.knownForDepartment.toLowerCase() === department.toLowerCase());
+      }
+
+      return {
+        page: data.page || safePage,
+        totalPages: Math.min(data.total_pages || 1, 50),
+        totalResults: data.total_results || results.length,
+        results
+      };
+    }
+  } catch (err) {
+    console.warn('TMDB popular people fetch failed:', err);
+  }
+
+  let filteredFallback = [...FALLBACK_POPULAR_PEOPLE];
+  if (department !== 'all') {
+    filteredFallback = filteredFallback.filter(p => p.knownForDepartment.toLowerCase() === department.toLowerCase());
+  }
+
+  return {
+    page: 1,
+    totalPages: 1,
+    totalResults: filteredFallback.length,
+    results: filteredFallback
+  };
+}
+
+/**
+ * Search people by name (actors, actresses, directors)
+ */
+export async function searchPeople(
+  queryStr: string,
+  page = 1
+): Promise<PaginatedResponse<PersonSummary>> {
+  const apiKey = getTmdbApiKey();
+  const safePage = Math.max(1, Math.min(page, 20));
+
+  if (!queryStr.trim()) {
+    return fetchPopularPeople(page, 'all');
+  }
+
+  try {
+    const res = await fetch(`${TMDB_BASE_URL}/search/person?api_key=${apiKey}&query=${encodeURIComponent(queryStr)}&page=${safePage}`);
+    if (res.ok) {
+      const data = await res.json();
+      const results: PersonSummary[] = (data.results || []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        profilePath: p.profile_path ? `https://image.tmdb.org/t/p/h632${p.profile_path}` : null,
+        knownForDepartment: p.known_for_department || 'Acting',
+        popularity: p.popularity || 0,
+        knownFor: (p.known_for || []).map((k: any) => k.title || k.name || '')
+      }));
+
+      return {
+        page: data.page || safePage,
+        totalPages: Math.min(data.total_pages || 1, 20),
+        totalResults: data.total_results || results.length,
+        results
+      };
+    }
+  } catch (err) {
+    console.warn('TMDB search people failed:', err);
+  }
+
+  const q = queryStr.toLowerCase();
+  const matched = FALLBACK_POPULAR_PEOPLE.filter(p => p.name.toLowerCase().includes(q));
+  return {
+    page: 1,
+    totalPages: 1,
+    totalResults: matched.length,
+    results: matched
+  };
+}
+
+

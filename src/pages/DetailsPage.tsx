@@ -26,6 +26,9 @@ import { getMediaDetail, fetchSeasonEpisodes } from '../services/tmdb';
 import { isInWatchlist, toggleWatchlist } from '../services/storage';
 import { TrailerModal } from '../components/TrailerModal';
 import { CastCarousel } from '../components/CastCarousel';
+import { RatingViewsBar } from '../components/RatingViewsBar';
+import { ShareModal } from '../components/ShareModal';
+import { ReportIssueModal } from '../components/ReportIssueModal';
 import { getPlatformById } from '../services/platformData';
 import { autoDiscoverMovieFranchise, DiscoveredCollection } from '../services/collectionStore';
 import { createMediaSlug } from '../utils/slug';
@@ -37,6 +40,7 @@ interface DetailsPageProps {
   onBack: () => void;
   onWatchNow: (media: MediaDetail, season?: number, episode?: number) => void;
   onSelectMedia: (item: MediaItem) => void;
+  onSelectPerson?: (personId: number) => void;
   onSelectTag?: (tag: string) => void;
   onSelectGenre?: (genreId: number, genreName: string) => void;
   onNavigateCollections?: () => void;
@@ -49,6 +53,7 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
   onBack,
   onWatchNow,
   onSelectMedia,
+  onSelectPerson,
   onSelectTag,
   onSelectGenre,
   onNavigateCollections,
@@ -57,6 +62,8 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
   const [detail, setDetail] = useState<MediaDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [inWatchlist, setInWatchlist] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'episodes' | 'cast' | 'videos' | 'similar' | 'recommended'>('cast');
   const [selectedSeasonNumber, setSelectedSeasonNumber] = useState<number>(1);
   const [seasonEpisodes, setSeasonEpisodes] = useState<Episode[]>([]);
@@ -270,11 +277,11 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
               />
             </div>
 
-            {/* Action Buttons under Poster: Watch Now, Trailer, Bookmark */}
-            <div className="flex items-center gap-2 mt-4">
+            {/* Action Buttons under Poster: Watch Now, Trailer, Bookmark, Share */}
+            <div className="flex items-center gap-2 mt-4 flex-wrap sm:flex-nowrap">
               <button
                 onClick={() => onWatchNow(detail, isMovie ? undefined : selectedSeasonNumber, 1)}
-                className="flex-1 inline-flex items-center justify-center gap-2 h-11 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] active:scale-95 text-black font-extrabold text-xs sm:text-sm transition-all shadow-lg shadow-amber-500/20 cursor-pointer"
+                className="flex-1 inline-flex items-center justify-center gap-2 h-11 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] active:scale-95 text-black font-extrabold text-xs sm:text-sm transition-all shadow-lg shadow-amber-500/20 cursor-pointer min-w-[120px]"
               >
                 <Play className="w-4 h-4 fill-black text-black" />
                 <span>{isMovie ? 'Watch Now' : `Watch S${selectedSeasonNumber} E1`}</span>
@@ -285,16 +292,16 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                   const trailer = detail.videos?.find(v => v.type?.toLowerCase() === 'trailer') || detail.videos?.[0];
                   handlePlayTrailer(trailer?.key || 'JfVOs4VSpmA');
                 }}
-                className="inline-flex items-center justify-center gap-1.5 h-11 px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-xs transition-colors border border-white/10 cursor-pointer"
+                className="inline-flex items-center justify-center gap-1.5 h-11 px-3.5 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-xs transition-colors border border-white/10 cursor-pointer"
                 title="Watch Trailer"
               >
                 <Film className="w-4 h-4 text-[#F5C400]" />
-                <span>Trailer</span>
+                <span className="hidden sm:inline">Trailer</span>
               </button>
 
               <button
                 onClick={handleWatchlistToggle}
-                className={`w-11 h-11 rounded-xl flex items-center justify-center border transition-all ${
+                className={`w-11 h-11 rounded-xl flex items-center justify-center border transition-all cursor-pointer ${
                   inWatchlist
                     ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
                     : 'bg-white/5 border-white/10 text-slate-300 hover:text-white hover:bg-white/10'
@@ -302,6 +309,14 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                 title={inWatchlist ? 'Remove from Watchlist' : 'Add to Watchlist'}
               >
                 {inWatchlist ? <Check className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
+              </button>
+
+              <button
+                onClick={() => setShareModalOpen(true)}
+                className="w-11 h-11 rounded-xl flex items-center justify-center border border-white/10 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-[#F5C400] transition-all cursor-pointer"
+                title="Share this Title"
+              >
+                <Share2 className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -319,12 +334,33 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
             </p>
 
             {/* Director & Writer */}
-            <div className="text-xs text-slate-400 mt-2">
+            <div className="text-xs text-slate-400 mt-2 flex flex-wrap items-center gap-1">
               <span className="font-semibold text-slate-200">{isMovie ? 'Director' : 'Creator'}: </span>
-              <span>{detail.director || (isMovie ? 'Destin Daniel Cretton' : 'Series Creator')}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onSelectPerson) {
+                    const directorCrew = (detail as any).crew?.find((c: any) => c.job === 'Director');
+                    onSelectPerson(directorCrew?.id || 1083010);
+                  }
+                }}
+                className="text-[#F5C400] hover:underline font-bold transition-colors cursor-pointer"
+              >
+                {detail.director || (isMovie ? 'Destin Daniel Cretton' : 'Series Creator')}
+              </button>
               <span className="mx-2 text-slate-600">·</span>
               <span className="font-semibold text-slate-200">Writer: </span>
               <span>{detail.writer || (isMovie ? 'Erik Sommers' : 'Staff Writers')}</span>
+            </div>
+
+            {/* Rating & Real Views Bar (Matching Slika 2) */}
+            <div className="mt-3.5 py-2.5 px-4 rounded-xl bg-[#16161a] border border-[#2d2d34] flex items-center justify-between">
+              <RatingViewsBar
+                mediaId={detail.id}
+                mediaType={detail.mediaType}
+                mediaTitle={detail.title}
+                onOpenReport={() => setReportModalOpen(true)}
+              />
             </div>
 
             {/* Rating & Metadata Bar matching Slika 4 */}
@@ -822,7 +858,10 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
 
       {/* Tab Content Area: Cast */}
       {activeTab === 'cast' && detail.cast && (
-        <CastCarousel cast={detail.cast} />
+        <CastCarousel
+          cast={detail.cast}
+          onSelectPerson={(person) => onSelectPerson && onSelectPerson(person.id)}
+        />
       )}
 
       {activeTab === 'videos' && (
@@ -1187,6 +1226,24 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
           title={detail.title}
         />
       )}
+
+      {/* Universal Share Modal */}
+      <ShareModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        title={detail.title}
+        overview={detail.overview}
+      />
+
+      {/* Report a Problem Modal connected to live Firestore */}
+      <ReportIssueModal
+        isOpen={reportModalOpen}
+        onClose={() => setReportModalOpen(false)}
+        mediaId={detail.id}
+        mediaType={detail.mediaType}
+        mediaTitle={detail.title}
+        currentServer="Details Page View"
+      />
     </div>
   );
 };
