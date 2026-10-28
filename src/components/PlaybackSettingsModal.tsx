@@ -367,7 +367,10 @@ export const PlaybackSettingsModal: React.FC<PlaybackSettingsModalProps> = ({
             <div className="max-h-[360px] overflow-y-auto space-y-1.5 pr-1">
               {allStreams.map((st, idx) => {
                 const isSelected = idx === selectedStreamIndex;
-                const cleanName = cleanServerDisplay(st.server);
+                let cleanName = cleanServerDisplay(st.server);
+                if (!cleanName.includes('·') && !cleanName.includes('Cluster') && !cleanName.includes('Route') && allStreams.length > 1) {
+                  cleanName = `${cleanName} · Cluster ${idx + 1}`;
+                }
                 return (
                   <button
                     key={idx}

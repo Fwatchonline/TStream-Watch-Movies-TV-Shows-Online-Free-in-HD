@@ -14,6 +14,7 @@ import { searchSubtitles } from '../services/subtitles';
 import { getUserSettings } from '../services/storage';
 import { fetchSeasonEpisodes } from '../services/tmdb';
 import { DirectVideoPlayer } from './DirectVideoPlayer';
+import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
 import { fetchDirectStreams, DirectProviderResult } from '../services/directStreamClient';
 import { useAuth } from '../context/AuthContext';
 
@@ -382,24 +383,11 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
             </div>
           </div>
         ) : loadingDirect ? (
-          /* Connecting direct stream loading spinner */
-          <div className="flex flex-col items-center justify-center p-8 text-center bg-[#0a0a0d] w-full h-full">
-            <div className="relative mb-4">
-              <div className="w-14 h-14 border-3 border-[#3A3A40] border-t-[#F5C400] rounded-full animate-spin" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Radio className="w-5 h-5 text-[#F5C400] animate-pulse" />
-              </div>
-            </div>
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#F5C400] animate-pulse" />
-              <h3 className="text-sm font-black text-white uppercase tracking-wider">
-                Connecting to Direct HLS Stream
-              </h3>
-            </div>
-            <p className="text-xs text-[#A6A6AC] max-w-md">
-              Scanning high-bandwidth HLS master clusters (Apollo, Zeus, Hermes). Decoding 1080p video feed...
-            </p>
-          </div>
+          /* Connecting direct stream rotating circular Tstream.online brand spinner */
+          <PlayerLoadingSpinner
+            title="CONNECTING TO DIRECT HLS STREAM"
+            subtitle="Fast multi-server HLS playback, multilingual subtitles, and zero ads."
+          />
         ) : directResults.length > 0 ? (
           /* Native 100% Direct HTML5 Player */
           <DirectVideoPlayer

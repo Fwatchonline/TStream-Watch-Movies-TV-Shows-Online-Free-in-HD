@@ -353,16 +353,6 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
               <span>{detail.writer || (isMovie ? 'Erik Sommers' : 'Staff Writers')}</span>
             </div>
 
-            {/* Rating & Real Views Bar (Matching Slika 2) */}
-            <div className="mt-3.5 py-2.5 px-4 rounded-xl bg-[#16161a] border border-[#2d2d34] flex items-center justify-between">
-              <RatingViewsBar
-                mediaId={detail.id}
-                mediaType={detail.mediaType}
-                mediaTitle={detail.title}
-                onOpenReport={() => setReportModalOpen(true)}
-              />
-            </div>
-
             {/* Rating & Metadata Bar matching Slika 4 */}
             <div className="flex flex-wrap items-center gap-2.5 mt-3 text-xs text-slate-300 font-medium">
               <div className="flex items-center gap-1 text-amber-400 font-bold tabular-nums">
@@ -551,44 +541,27 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
               </span>
             </div>
 
-            {/* Share & Rate Strip matching Slika 4 */}
+            {/* Share & Real-time Rating/Views Bar */}
             <div className="mt-4 pt-4 border-t border-white/5 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-400">
               <div className="flex items-center gap-2">
-                <span className="text-slate-400">Share:</span>
-                <button onClick={() => alert('Link copied to clipboard!')} className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors">
-                  <Share2 className="w-3 h-3" />
+                <span className="text-slate-400 font-medium">Share:</span>
+                <button
+                  type="button"
+                  onClick={() => setShareModalOpen(true)}
+                  className="w-7 h-7 rounded-full bg-white/10 hover:bg-[#F5C400] hover:text-black flex items-center justify-center text-white transition-all cursor-pointer shadow-xs"
+                  title="Share this title"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
                 </button>
               </div>
 
-              {/* Rate This Movie 5 Stars */}
-              <div className="flex items-center gap-3">
-                <span className="text-slate-400">Rate this movie:</span>
-                <div className="flex items-center gap-1">
-                  {[1, 2, 3, 4, 5].map(star => (
-                    <button
-                      key={star}
-                      onClick={() => setUserRating(star)}
-                      className="hover:scale-110 transition-transform"
-                    >
-                      <Star
-                        className={`w-4 h-4 ${
-                          star <= userRating
-                            ? 'fill-amber-400 text-amber-400'
-                            : 'text-slate-600 hover:text-amber-300'
-                        }`}
-                      />
-                    </button>
-                  ))}
-                </div>
-                <span className="flex items-center gap-1 text-slate-400 ml-2">
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>{detail.viewsCount || 166} views</span>
-                </span>
-                <button onClick={() => alert('Issue reported to system administrators.')} className="flex items-center gap-1 text-slate-500 hover:text-slate-300">
-                  <Flag className="w-3 h-3" />
-                  <span>Report issue</span>
-                </button>
-              </div>
+              {/* Connected to live Firestore views and functioning Report Problem modal */}
+              <RatingViewsBar
+                mediaId={detail.id}
+                mediaType={detail.mediaType}
+                mediaTitle={detail.title}
+                onOpenReport={() => setReportModalOpen(true)}
+              />
             </div>
 
             {/* Keyword / Tags Pills matching Slika 4 */}

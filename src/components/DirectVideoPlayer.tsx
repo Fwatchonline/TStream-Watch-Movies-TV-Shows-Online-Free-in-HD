@@ -28,6 +28,7 @@ import {
   PlaybackSettingsModal,
   SettingsSubView
 } from './PlaybackSettingsModal';
+import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
 
 interface DirectVideoPlayerProps {
   title: string;
@@ -815,19 +816,12 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
       {/* Loading Spinner */}
       {isLoading && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/70 backdrop-blur-xs pointer-events-none">
-          <div className="relative">
-            <RefreshCw className="w-12 h-12 animate-spin" style={{ color: accentColor }} />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Play className="w-4 h-4 text-white fill-white" />
-            </div>
-          </div>
-          <span className="text-xs font-bold text-white tracking-wider uppercase mt-4">
-            Connecting Stream...
-          </span>
-          <span className="text-[11px] mt-1 font-mono" style={{ color: accentColor }}>
-            {cleanServerDisplay(activeStream?.server || 'Zeus Ultra 4K')}
-          </span>
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-xs pointer-events-none">
+          <PlayerLoadingSpinner
+            title="CONNECTING TO STREAM"
+            serverName={cleanServerDisplay(activeStream?.server || 'TStream Master')}
+            subtitle="Fast multi-server HLS playback, multilingual subtitles, and zero ads."
+          />
         </div>
       )}
 

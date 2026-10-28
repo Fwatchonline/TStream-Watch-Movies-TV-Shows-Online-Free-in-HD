@@ -30,8 +30,8 @@ export function cleanServerDisplay(name: string): string {
   let s = name;
   s = s.replace(/api\.fmov\.my/gi, 'Zeus Ultra');
   s = s.replace(/fmov/gi, 'Zeus');
-  s = s.replace(/showbox/gi, 'Zeus 4K');
-  s = s.replace(/febbox/gi, 'Quantum');
+  s = s.replace(/showbox/gi, 'Poseidon 4K');
+  s = s.replace(/febbox/gi, 'Poseidon');
   s = s.replace(/vidapi/gi, 'Apollo');
   s = s.replace(/vaplayer/gi, 'Zeus Core');
   s = s.replace(/vidlink/gi, 'Hermes');
@@ -41,6 +41,34 @@ export function cleanServerDisplay(name: string): string {
   s = s.replace(/netmirror/gi, 'Chronos Mirror');
   s = s.replace(/dahmermovies/gi, 'Ares');
   s = s.replace(/onetouchtv/gi, 'Titan');
+
+  // Strip movie / series titles after separator (e.g. "Poseidon 4K · Magnum P.I. - S1E1...")
+  if (s.includes(' · ')) {
+    const parts = s.split(' · ');
+    const prefix = parts[0].trim();
+    const rest = parts.slice(1).join(' · ').trim();
+
+    if (/^(cluster|route|server|primary|backup|node|source|direct|ultra|quantum|master)\b/i.test(rest)) {
+      s = `${prefix} · ${rest}`;
+    } else {
+      // It's a movie/series title or file string -> strip it!
+      s = prefix;
+    }
+  }
+
+  // Also strip any " - Magnum P.I. - S1E1..." or " - Title"
+  if (s.includes(' - ')) {
+    const parts = s.split(' - ');
+    const prefix = parts[0].trim();
+    const rest = parts.slice(1).join(' - ').trim();
+    if (/s\d+e\d+|season|episode|\d{3,4}p|web|bluray|mkv|mp4/i.test(rest) || rest.length > 10) {
+      s = prefix;
+    }
+  }
+
+  // Strip trailing episode/file release tags
+  s = s.replace(/\s*[-–·]\s*S\d+\s*E\d+.*$/i, '');
+  s = s.replace(/\s*[-–·]\s*Season\s*\d+.*$/i, '');
   s = s.replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
   return s;
 }

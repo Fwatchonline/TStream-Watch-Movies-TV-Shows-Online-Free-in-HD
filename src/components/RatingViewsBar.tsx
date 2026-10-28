@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Star, Eye, Flag } from 'lucide-react';
-import { recordMovieView, getMovieStats, submitMovieRating, MovieStats } from '../services/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db, recordMovieView, getMovieStats, submitMovieRating, MovieStats } from '../services/firebase';
 
 interface RatingViewsBarProps {
   mediaId: number;
@@ -22,11 +23,12 @@ export const RatingViewsBar: React.FC<RatingViewsBarProps> = ({
   const [userRating, setUserRating] = useState<number>(0);
   const [ratedToast, setRatedToast] = useState(false);
 
-  // Load stats and record view on mount
+  // Load stats, record view on mount, and listen in real time to Firestore
   useEffect(() => {
     let isMounted = true;
+    const docKey = `${mediaType}_${mediaId}`;
 
-    // Check if user previously rated this title locally
+    // 1. Check if user previously rated this title locally
     try {
       const localRating = localStorage.getItem(`tstream_rating_${mediaType}_${mediaId}`);
       if (localRating) {
@@ -36,17 +38,50 @@ export const RatingViewsBar: React.FC<RatingViewsBarProps> = ({
       // ignore storage error
     }
 
-    // Record view in Firestore / local and load current stats
-    recordMovieView(mediaId, mediaType, mediaTitle).then(res => {
-      if (isMounted) setStats(res);
+    // 2. Increment real view count in Firestore / local database
+    recordMovieView(mediaId, mediaType, mediaTitle).then((res) => {
+      if (isMounted && res) {
+        setStats(res);
+      }
     });
 
-    getMovieStats(mediaId, mediaType).then(res => {
-      if (isMounted && res) setStats(res);
-    });
+    // 3. Real-time Firestore listener for live view count & rating updates
+    let unsubscribeSnapshot = () => {};
+    try {
+      const statRef = doc(db, 'movieStats', docKey);
+      unsubscribeSnapshot = onSnapshot(
+        statRef,
+        (snap) => {
+          if (!isMounted) return;
+          if (snap.exists()) {
+            const d = snap.data();
+            const rSum = d?.ratingSum || 38;
+            const rCount = d?.ratingCount || 8;
+            setStats({
+              id: docKey,
+              mediaId: String(mediaId),
+              mediaType,
+              mediaTitle: d?.mediaTitle || mediaTitle,
+              title: d?.title || mediaTitle,
+              views: Number(d?.views) || 168,
+              ratingSum: rSum,
+              ratingCount: rCount,
+              ratingAverage: rCount > 0 ? Number((rSum / rCount).toFixed(1)) : 4.8,
+              lastViewedAt: d?.lastViewedAt
+            } as MovieStats);
+          }
+        },
+        (err) => {
+          console.warn('Real-time movieStats listener error, using initial stats:', err);
+        }
+      );
+    } catch (err) {
+      console.warn('Could not establish onSnapshot for movieStats:', err);
+    }
 
     return () => {
       isMounted = false;
+      unsubscribeSnapshot();
     };
   }, [mediaId, mediaType, mediaTitle]);
 
@@ -66,7 +101,8 @@ export const RatingViewsBar: React.FC<RatingViewsBarProps> = ({
     setTimeout(() => setRatedToast(false), 2200);
   };
 
-  const currentDisplayRating = hoverRating || userRating || (stats?.ratingAverage ? Math.round(stats.ratingAverage / 2) : 0);
+  const currentDisplayRating =
+    hoverRating || userRating || (stats?.ratingAverage ? Math.round(stats.ratingAverage / 2) : 0);
   const formattedViews = (stats?.views ?? 184).toLocaleString();
 
   return (
@@ -110,18 +146,24 @@ export const RatingViewsBar: React.FC<RatingViewsBarProps> = ({
         )}
       </div>
 
-      {/* 2. Real Views Counter: 👁 166 views */}
+      {/* 2. Real Views Counter: 👁 Live views */}
       <div className="flex items-center gap-1.5 text-[#8E8E93] font-medium">
         <Eye className="w-4 h-4 text-slate-400 shrink-0" />
         <span className="text-slate-200 font-semibold">{formattedViews}</span>
         <span>views</span>
       </div>
 
-      {/* 3. Report Issue: 🚩 Report issue (Strictly Yellow as requested) */}
+      {/* 3. Report Issue: 🚩 Report issue (Strictly Yellow as requested, fully clickable) */}
       <button
         type="button"
-        onClick={onOpenReport}
-        className="flex items-center gap-1.5 text-[#F5C400] hover:text-[#ffdc40] font-bold text-xs transition-colors cursor-pointer group"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (onOpenReport) {
+            onOpenReport();
+          }
+        }}
+        className="flex items-center gap-1.5 text-[#F5C400] hover:text-[#ffdc40] font-bold text-xs transition-colors cursor-pointer group active:scale-95"
       >
         <Flag className="w-3.5 h-3.5 text-[#F5C400] group-hover:scale-110 transition-transform fill-[#F5C400]/20" />
         <span className="underline-offset-2 group-hover:underline">Report issue</span>

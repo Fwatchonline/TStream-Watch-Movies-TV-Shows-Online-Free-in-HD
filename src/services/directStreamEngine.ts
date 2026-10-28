@@ -329,15 +329,15 @@ export async function resolveShowbox(
     const streams: DirectStream[] = [];
     const subtitles: Array<{ label: string; url: string; language?: string; type?: string }> = [];
 
-    for (const st of rawStreams) {
+    for (let i = 0; i < rawStreams.length; i++) {
+      const st = rawStreams[i];
       if (!st?.url) continue;
       const isHls = (st.url.includes('.m3u8') || (st.quality && st.quality.toLowerCase().includes('hls')) || (st.name && st.name.toLowerCase().includes('hls')));
-      const rawTitle = (st.title || st.name || 'Ultra Stream').replace(/[\r\n]+/g, ' · ').trim();
-      const cleanTitle = sanitizeServerLabel(rawTitle);
+      const rawTitle = (st.title || st.name || '').toLowerCase();
 
       let qualityLabel = '1080p Full HD';
       const rawQ = (st.quality || '').toLowerCase();
-      if (rawQ === 'org' || rawQ.includes('2160') || cleanTitle.includes('2160p') || cleanTitle.includes('4K') || cleanTitle.includes('4k')) {
+      if (rawQ === 'org' || rawQ.includes('2160') || rawTitle.includes('2160p') || rawTitle.includes('4k')) {
         qualityLabel = '2160p 4K HDR';
       } else if (rawQ.includes('1080')) {
         qualityLabel = '1080p Full HD';
@@ -347,12 +347,13 @@ export async function resolveShowbox(
         qualityLabel = 'Adaptive HLS';
       }
 
+      const clusterNum = i + 1;
       streams.push({
         quality: qualityLabel,
         type: isHls ? 'hls' : 'mp4',
         url: st.url,
         originalUrl: st.url,
-        server: `Poseidon 4K · ${cleanTitle}`,
+        server: `Poseidon 4K · Cluster ${clusterNum}`,
         headers: st.headers || { 'User-Agent': USER_AGENT }
       });
     }
@@ -509,12 +510,13 @@ export async function resolveFmovMy(
         displayQuality = 'Auto (HLS)';
       }
 
+      const clusterNum = rawStreams.indexOf(st) + 1;
       streams.push({
         quality: displayQuality,
         type: isHls ? 'hls' : 'mp4',
         url: st.url,
         originalUrl: st.url,
-        server: `Zeus Ultra · ${cleanTitle}`,
+        server: `${providerLabel} · Cluster ${clusterNum}`,
         headers: st.headers || { 'User-Agent': USER_AGENT }
       });
 
