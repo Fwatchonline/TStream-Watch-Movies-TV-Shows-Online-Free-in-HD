@@ -66,6 +66,13 @@ export interface CollectionSummary {
   parts: MediaItem[];
 }
 
+export interface DiscoveredCollection extends CollectionSummary {
+  filmCountBadge: string;
+  autoDiscovered?: boolean;
+  discoveredAt?: string;
+  sourceMovieTitle?: string;
+}
+
 export interface MediaItem {
   id: number;
   tmdbId: number;
@@ -181,6 +188,7 @@ export interface FilterOptions {
   tagId?: number;
   platform?: string;
   letter?: string;
+  country?: string;
   page?: number;
 }
 

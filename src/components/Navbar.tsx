@@ -44,6 +44,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const navLinks = [
     { label: 'Movies', view: 'movies', icon: Film },
     { label: 'TV Shows', view: 'tv-shows', icon: Tv },
+    { label: 'New Episodes', view: 'new-episodes', icon: Sparkles },
     { label: 'Trending', view: 'trending', icon: Flame },
     { label: 'Collections', view: 'collections', icon: Layers },
     { label: 'Tags', view: 'tags', icon: Hash },

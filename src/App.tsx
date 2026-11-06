@@ -9,18 +9,23 @@ import { CatalogPage } from './pages/CatalogPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { AdminPage } from './pages/AdminPage';
 import { CollectionsPage } from './pages/CollectionsPage';
+import { NewEpisodesPage } from './pages/NewEpisodesPage';
 import { TagsPage } from './pages/TagsPage';
 import { RandomPage } from './pages/RandomPage';
 import { PeoplePage } from './pages/PeoplePage';
 import { PersonPage } from './pages/PersonPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { SurpriseModal } from './components/SurpriseModal';
 import { LegalModal } from './components/LegalModal';
 import { AuthModal } from './components/AuthModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { MobileBottomNav } from './components/MobileBottomNav';
 import { AuthProvider } from './context/AuthContext';
 import { MediaItem, MediaDetail } from './types/media';
 import { createMediaSlug, parseMediaSlug } from './utils/slug';
 import { updateSEO } from './utils/seo';
+import { recordSiteVisit } from './services/analytics';
+import { auth } from './services/firebase';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<string>('home');
@@ -34,13 +39,16 @@ export default function App() {
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
   const [selectedLetter, setSelectedLetter] = useState<string>('A');
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
   const [surpriseOpen, setSurpriseOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [legalPage, setLegalPage] = useState<'terms' | 'privacy' | 'dmca' | 'contact' | null>(null);
+  const [navKey, setNavKey] = useState(0);
 
   // Initialize view from URL if provided
   useEffect(() => {
     const handleLocation = () => {
+      setNavKey(k => k + 1);
       const path = window.location.pathname.replace(/^\//, '');
       const params = new URLSearchParams(window.location.search);
 
@@ -59,6 +67,8 @@ export default function App() {
         setCurrentView('trending');
       } else if (path === 'top-rated') {
         setCurrentView('top-rated');
+      } else if (path === 'new-episodes') {
+        setCurrentView('new-episodes');
       } else if (path === 'collections') {
         setCurrentView('collections');
       } else if (path.startsWith('platform/')) {
@@ -100,6 +110,8 @@ export default function App() {
         }
       } else if (path === 'admin') {
         setCurrentView('admin');
+      } else if (path === 'settings' || path === 'player-settings') {
+        setCurrentView('settings');
       } else if (path.startsWith('movie/') || path.startsWith('tv/')) {
         const parts = path.split('/');
         const type = (parts[0] === 'tv' ? 'tv' : 'movie') as 'movie' | 'tv';
@@ -157,6 +169,12 @@ export default function App() {
         title: 'Top Rated Movies & Shows of All Time',
         description: 'Explore the highest critically-acclaimed films and television series on T Stream.',
         url: '/top-rated'
+      });
+    } else if (currentView === 'new-episodes') {
+      updateSEO({
+        title: 'New TV Episodes & Releases Today — Free HD Stream',
+        description: 'Track the latest TV episodes airing today and this week. Follow your favorite TV series to get instant notifications when new episodes air on T Stream.',
+        url: '/new-episodes'
       });
     } else if (currentView === 'collections') {
       updateSEO({
@@ -219,10 +237,22 @@ export default function App() {
         noindex: true,
         url: '/admin'
       });
+    } else if (currentView === 'settings') {
+      updateSEO({
+        title: 'Player & Server Settings — T Stream',
+        description: 'Customize default streaming servers, subtitle languages, playback quality, and player appearance.',
+        noindex: true,
+        url: '/settings'
+      });
     }
+
+    // Automatically record site visits for analytics
+    const currentPath = window.location.pathname || '/';
+    recordSiteVisit(currentPath, auth.currentUser);
   }, [currentView, searchQuery, selectedLetter, selectedPlatform, selectedTag]);
 
   const navigateTo = (view: string, extra?: any) => {
+    setNavKey(k => k + 1);
     setCurrentView(view);
     let newPath = '/';
 
@@ -231,29 +261,45 @@ export default function App() {
       setSelectedMediaId(null);
       setSelectedGenreId(null);
     } else if (view === 'movies') {
+      const qParams = new URLSearchParams();
       if (extra?.genreId != null) {
         setSelectedGenreId(extra.genreId);
-        newPath = `/movies?genreId=${extra.genreId}`;
+        qParams.set('genreId', extra.genreId.toString());
       } else {
         setSelectedGenreId(null);
-        newPath = '/movies';
       }
+      if (extra?.sortBy) qParams.set('sortBy', extra.sortBy);
+      if (extra?.year) qParams.set('year', extra.year.toString());
+      if (extra?.minRating) qParams.set('minRating', extra.minRating.toString());
+      if (extra?.country) qParams.set('country', extra.country);
+      const qs = qParams.toString();
+      newPath = qs ? `/movies?${qs}` : '/movies';
     } else if (view === 'tv-shows') {
+      const qParams = new URLSearchParams();
       if (extra?.genreId != null) {
         setSelectedGenreId(extra.genreId);
-        newPath = `/tv-shows?genreId=${extra.genreId}`;
+        qParams.set('genreId', extra.genreId.toString());
       } else {
         setSelectedGenreId(null);
-        newPath = '/tv-shows';
       }
+      if (extra?.sortBy) qParams.set('sortBy', extra.sortBy);
+      if (extra?.year) qParams.set('year', extra.year.toString());
+      if (extra?.minRating) qParams.set('minRating', extra.minRating.toString());
+      if (extra?.country) qParams.set('country', extra.country);
+      const qs = qParams.toString();
+      newPath = qs ? `/tv-shows?${qs}` : '/tv-shows';
     } else if (view === 'trending') {
       newPath = '/trending';
       setSelectedGenreId(null);
     } else if (view === 'top-rated') {
       newPath = '/top-rated';
       setSelectedGenreId(null);
+    } else if (view === 'new-episodes') {
+      newPath = '/new-episodes';
+      setSelectedGenreId(null);
     } else if (view === 'collections') {
       newPath = '/collections';
+      setSelectedCollectionId(extra?.collectionId || null);
       setSelectedGenreId(null);
     } else if (view === 'platform') {
       const plat = extra?.platform || selectedPlatform || 'netflix';
@@ -284,6 +330,9 @@ export default function App() {
       setSelectedGenreId(null);
     } else if (view === 'admin') {
       newPath = '/admin';
+      setSelectedGenreId(null);
+    } else if (view === 'settings') {
+      newPath = '/settings';
       setSelectedGenreId(null);
     }
 
@@ -344,6 +393,23 @@ export default function App() {
         onSelectGenre={(genreId) => navigateTo('movies', { genreId })}
         onSurpriseMe={() => navigateTo('random')}
         onOpenFilter={() => navigateTo('movies')}
+        onWatchEpisode={(showId, showTitle, season, episode, posterPath) => {
+          const media: MediaItem = {
+            id: showId,
+            tmdbId: showId,
+            title: showTitle,
+            overview: '',
+            posterPath: posterPath || '',
+            backdropPath: posterPath || '',
+            releaseDate: '',
+            voteAverage: 8.0,
+            voteCount: 100,
+            popularity: 50,
+            mediaType: 'tv',
+            genres: []
+          };
+          handleWatchMedia(media, season, episode);
+        }}
         currentView={currentView}
       />
 
@@ -360,7 +426,7 @@ export default function App() {
       />
 
       {/* Main View Router */}
-      <main className="flex-1">
+      <main className="flex-1 pb-16 md:pb-0">
         {currentView === 'home' && (
           <HomePage
             onSelectMedia={handleSelectMedia}
@@ -397,6 +463,14 @@ export default function App() {
           <CollectionsPage
             onSelectMedia={handleSelectMedia}
             onWatchMedia={handleWatchMedia}
+            initialCollectionId={selectedCollectionId}
+          />
+        )}
+
+        {currentView === 'new-episodes' && (
+          <NewEpisodesPage
+            onSelectMedia={handleSelectMedia}
+            onWatchMedia={handleWatchMedia}
           />
         )}
 
@@ -424,6 +498,7 @@ export default function App() {
 
         {currentView === 'movies' && (
           <CatalogPage
+            key={`movies-${navKey}-${selectedGenreId || ''}`}
             category="movies"
             initialGenreId={selectedGenreId || undefined}
             onSelectMedia={handleSelectMedia}
@@ -433,6 +508,7 @@ export default function App() {
 
         {currentView === 'tv-shows' && (
           <CatalogPage
+            key={`tv-shows-${navKey}-${selectedGenreId || ''}`}
             category="tv-shows"
             initialGenreId={selectedGenreId || undefined}
             onSelectMedia={handleSelectMedia}
@@ -442,6 +518,7 @@ export default function App() {
 
         {currentView === 'trending' && (
           <CatalogPage
+            key={`trending-${navKey}`}
             category="trending"
             onSelectMedia={handleSelectMedia}
             onWatchMedia={handleWatchMedia}
@@ -450,6 +527,7 @@ export default function App() {
 
         {currentView === 'top-rated' && (
           <CatalogPage
+            key={`top-rated-${navKey}`}
             category="top-rated"
             onSelectMedia={handleSelectMedia}
             onWatchMedia={handleWatchMedia}
@@ -520,6 +598,10 @@ export default function App() {
         {currentView === 'admin' && (
           <AdminPage />
         )}
+
+        {currentView === 'settings' && (
+          <SettingsPage onNavigate={navigateTo} />
+        )}
       </main>
 
       {/* Footer for non-home pages */}
@@ -552,6 +634,12 @@ export default function App() {
 
       {/* Offline Status Toast */}
       <OfflineIndicator />
+
+      {/* Modern Mobile Bottom Navigation Bar */}
+      <MobileBottomNav
+        currentView={currentView}
+        onNavigate={navigateTo}
+      />
     </div>
   </AuthProvider>
   );

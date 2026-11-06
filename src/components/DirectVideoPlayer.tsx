@@ -20,7 +20,14 @@ import {
   SlidersHorizontal,
   Database,
   Moon,
-  Maximize2
+  Maximize2,
+  FastForward,
+  Rewind,
+  Sparkles,
+  HelpCircle,
+  X,
+  Gauge,
+  Server
 } from 'lucide-react';
 import { ResolvedStream, DirectProviderResult, cleanServerDisplay } from '../services/directStreamClient';
 import { SubtitleTrack, Episode } from '../types/media';
@@ -29,6 +36,7 @@ import {
   SettingsSubView
 } from './PlaybackSettingsModal';
 import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
+import { getUserPlayerSettings, UserPlayerSettings } from '../services/playerSettings';
 
 interface DirectVideoPlayerProps {
   title: string;
@@ -53,6 +61,14 @@ interface DirectVideoPlayerProps {
   onToggleTheater?: () => void;
   isLightsDimmed?: boolean;
   onToggleLights?: () => void;
+  backdropPath?: string;
+}
+
+interface HudFeedback {
+  id: number;
+  type: 'play' | 'pause' | 'volume' | 'mute' | 'speed' | 'seek-forward' | 'seek-backward' | 'subtitle';
+  text: string;
+  icon?: any;
 }
 
 export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
@@ -77,14 +93,17 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   isTheaterMode,
   onToggleTheater,
   isLightsDimmed,
-  onToggleLights
+  onToggleLights,
+  backdropPath
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const scrubberRef = useRef<HTMLDivElement>(null);
+  const isDraggingScrubberRef = useRef<boolean>(false);
 
-  // Flatten all direct streams with sanitized server info (excluding castle completely)
+  // Flatten all direct streams with sanitized server info
   const allStreams: Array<ResolvedStream & { providerName: string; providerKey: string }> = [];
   for (const pr of providerResults) {
     if (pr.provider?.toLowerCase().includes('castle') || pr.providerName?.toLowerCase().includes('castle')) {
@@ -118,21 +137,53 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const [bufferedTime, setBufferedTime] = useState<number>(0);
   const [volume, setVolume] = useState<number>(1);
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+  const [showRemainingTime, setShowRemainingTime] = useState<boolean>(false);
+
+  // Player Settings & Preferences
+  const [playerSettings, setPlayerSettings] = useState<UserPlayerSettings>(() => getUserPlayerSettings());
+
+  useEffect(() => {
+    const handleSettingsChanged = () => {
+      const updated = getUserPlayerSettings();
+      setPlayerSettings(updated);
+      if (updated.playerAccentColor) {
+        setAccentColor(updated.playerAccentColor);
+      }
+    };
+    window.addEventListener('tstream_player_settings_changed', handleSettingsChanged);
+    return () => window.removeEventListener('tstream_player_settings_changed', handleSettingsChanged);
+  }, []);
+
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(() => {
+    try {
+      const s = getUserPlayerSettings();
+      return s.defaultSpeed || 1;
+    } catch {
+      return 1;
+    }
+  });
+
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [showControls, setShowControls] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Playback Settings Modal state (matching image_bb8944d1.png)
+  // On-screen HUD Feedback (Visual toast in center/top)
+  const [hudFeedback, setHudFeedback] = useState<HudFeedback | null>(null);
+  const [rippleEffect, setRippleEffect] = useState<{ id: number; type: 'play' | 'pause' | 'left' | 'right' } | null>(null);
+
+  // Help shortcut modal
+  const [showShortcutHelp, setShowShortcutHelp] = useState<boolean>(false);
+
+  // Playback Settings Modal state
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [settingsSubView, setSettingsSubView] = useState<SettingsSubView>('main');
 
   // Player Accent Color (Defaults to #F5C400 yellow matching the site brand)
   const [accentColor, setAccentColor] = useState<string>(() => {
     try {
-      const saved = localStorage.getItem('vyla_player_accent');
-      if (saved && saved !== '#3B82F6') return saved;
+      const s = getUserPlayerSettings();
+      if (s.playerAccentColor) return s.playerAccentColor;
       return '#F5C400';
     } catch {
       return '#F5C400';
@@ -141,9 +192,6 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
   const handleSetAccentColor = (color: string) => {
     setAccentColor(color);
-    try {
-      localStorage.setItem('vyla_player_accent', color);
-    } catch {}
   };
 
   // Quality state
@@ -159,7 +207,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
   // Subtitles
   const [activeSubTrackUrl, setActiveSubTrackUrl] = useState<string | null>(null);
-  const [subDelay, setSubDelay] = useState<number>(0); // in seconds
+  const [subDelay, setSubDelay] = useState<number>(0);
   const [customSubtitleText, setCustomSubtitleText] = useState<string>('');
 
   // Scrubber Hover
@@ -168,6 +216,15 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
   // Saved resume time
   const resumeKey = storageKey ? `stream_progress_${storageKey}` : null;
+
+  // Trigger HUD Notification
+  const triggerHud = useCallback((type: HudFeedback['type'], text: string) => {
+    const id = Date.now();
+    setHudFeedback({ id, type, text });
+    setTimeout(() => {
+      setHudFeedback(curr => (curr?.id === id ? null : curr));
+    }, 900);
+  }, []);
 
   // Format seconds to HH:MM:SS or MM:SS
   const formatTime = (secs: number) => {
@@ -180,6 +237,28 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     }
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
+
+  // Failover seamless resume reference
+  const failoverSeekRef = useRef<number>(0);
+
+  // Automatic Failover Handler
+  const triggerFailover = useCallback(() => {
+    const v = videoRef.current;
+    if (v && v.currentTime > 2) {
+      failoverSeekRef.current = v.currentTime;
+    }
+    if (allStreams.length > 1) {
+      setSelectedStreamIndex(prev => {
+        const nextIdx = (prev + 1) % allStreams.length;
+        const nextServer = allStreams[nextIdx];
+        triggerHud('speed', `Auto-failover: ${nextServer.providerName || nextServer.server}`);
+        return nextIdx;
+      });
+    } else {
+      setLoadError(`Direct stream interrupted on ${cleanServerDisplay(activeStream?.server)}. Please select another source.`);
+      setIsLoading(false);
+    }
+  }, [allStreams, activeStream, triggerHud]);
 
   // 1. Initialize or switch stream
   useEffect(() => {
@@ -198,19 +277,64 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     const streamUrl = activeStream.playUrl || activeStream.url;
     const isHls = activeStream.type === 'hls' || streamUrl.includes('.m3u8');
 
-    // Preserve current seek position across server switch or registered user continue watching
     let initialSeek = video.currentTime > 0 ? video.currentTime : 0;
-    if (initialSeek === 0 && initialResumeSeek && initialResumeSeek > 10) {
-      initialSeek = initialResumeSeek;
-    } else if (initialSeek === 0 && resumeKey) {
-      try {
-        const saved = localStorage.getItem(resumeKey);
-        if (saved) {
-          const parsed = parseFloat(saved);
-          if (parsed > 10) initialSeek = parsed;
-        }
-      } catch {}
+    if (failoverSeekRef.current > 0) {
+      initialSeek = failoverSeekRef.current;
+      failoverSeekRef.current = 0;
+    } else if (playerSettings.autoResumePlayback) {
+      if (initialSeek === 0 && initialResumeSeek && initialResumeSeek > 10) {
+        initialSeek = initialResumeSeek;
+      } else if (initialSeek === 0 && resumeKey) {
+        try {
+          const saved = localStorage.getItem(resumeKey);
+          if (saved) {
+            const parsed = parseFloat(saved);
+            if (parsed > 10) initialSeek = parsed;
+          }
+        } catch {}
+      }
     }
+
+    const triggerAutoPlay = () => {
+      const v = videoRef.current;
+      if (!v) return;
+
+      if (playbackSpeed !== 1) {
+        try {
+          v.playbackRate = playbackSpeed;
+        } catch {}
+      }
+
+      if (initialSeek > 0 && Math.abs(v.currentTime - initialSeek) > 2) {
+        try {
+          v.currentTime = initialSeek;
+        } catch {}
+      }
+
+      const playPromise = v.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setIsPlaying(true);
+            setIsLoading(false);
+          })
+          .catch(err => {
+            console.warn('Autoplay with audio blocked by browser policy, attempting muted autoplay:', err);
+            v.muted = true;
+            setIsMuted(true);
+            v.play()
+              .then(() => {
+                setIsPlaying(true);
+                setIsLoading(false);
+              })
+              .catch(e => {
+                console.warn('Playback waiting for user gesture:', e);
+                setIsPlaying(false);
+                setIsLoading(false);
+              });
+          });
+      }
+    };
 
     if (isHls && Hls.isSupported()) {
       const hls = new Hls({
@@ -226,8 +350,6 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        setIsLoading(false);
-        // Detect audio tracks
         if (hls.audioTracks && hls.audioTracks.length > 0) {
           const detected = hls.audioTracks.map((t, idx) => ({
             id: idx,
@@ -235,11 +357,13 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           }));
           setAvailableAudioTracks(detected);
         }
+        triggerAutoPlay();
+      });
 
-        if (initialSeek > 0) {
-          video.currentTime = initialSeek;
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        if (video.paused && isLoading) {
+          triggerAutoPlay();
         }
-        video.play().catch(() => setIsPlaying(false));
       });
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -254,14 +378,9 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               hls.recoverMediaError();
               break;
             default:
-              console.error('Fatal HLS error:', data);
+              console.warn(`Fatal HLS stream error on ${activeStream?.server || 'current'}, initiating auto-failover...`);
               hls.destroy();
-              if (selectedStreamIndex < allStreams.length - 1) {
-                setSelectedStreamIndex(prev => prev + 1);
-              } else {
-                setLoadError(`Direct stream interrupted on ${cleanServerDisplay(activeStream?.server)}. Please select another source.`);
-                setIsLoading(false);
-              }
+              triggerFailover();
               break;
           }
         }
@@ -269,16 +388,12 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     } else if (video.canPlayType('application/vnd.apple.mpegurl') && isHls) {
       video.src = streamUrl;
       video.addEventListener('loadedmetadata', () => {
-        setIsLoading(false);
-        if (initialSeek > 0) video.currentTime = initialSeek;
-        video.play().catch(() => setIsPlaying(false));
+        triggerAutoPlay();
       }, { once: true });
     } else {
       video.src = streamUrl;
       video.addEventListener('loadedmetadata', () => {
-        setIsLoading(false);
-        if (initialSeek > 0) video.currentTime = initialSeek;
-        video.play().catch(() => setIsPlaying(false));
+        triggerAutoPlay();
       }, { once: true });
     }
 
@@ -321,13 +436,15 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     };
     const onWaiting = () => setIsLoading(true);
     const onPlaying = () => setIsLoading(false);
-    const onError = () => {
-      if (selectedStreamIndex < allStreams.length - 1) {
-        setSelectedStreamIndex(prev => prev + 1);
-      } else {
-        setIsLoading(false);
-        setLoadError(`Stream feed error. Select another source from playback settings.`);
+    const onEnded = () => {
+      setIsPlaying(false);
+      if (playerSettings.autoplayNextEpisode && hasNextEpisode && onNextEpisode) {
+        onNextEpisode();
       }
+    };
+    const onError = () => {
+      console.warn(`Native video error on ${activeStream?.server || 'current'}, initiating auto-failover...`);
+      triggerFailover();
     };
 
     video.addEventListener('timeupdate', onTimeUpdate);
@@ -336,6 +453,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     video.addEventListener('pause', onPause);
     video.addEventListener('waiting', onWaiting);
     video.addEventListener('playing', onPlaying);
+    video.addEventListener('ended', onEnded);
     video.addEventListener('error', onError);
 
     return () => {
@@ -345,94 +463,35 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       video.removeEventListener('pause', onPause);
       video.removeEventListener('waiting', onWaiting);
       video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('ended', onEnded);
       video.removeEventListener('error', onError);
     };
-  }, [activeStream, resumeKey, selectedStreamIndex, allStreams.length]);
+  }, [activeStream, resumeKey, selectedStreamIndex, allStreams.length, playerSettings.autoplayNextEpisode, hasNextEpisode, onNextEpisode]);
 
   // 3. User interaction & auto-hide controls
   const handleMouseMove = useCallback(() => {
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     controlsTimeoutRef.current = setTimeout(() => {
-      if (isPlaying && !showSettingsModal) {
+      if (isPlaying && !showSettingsModal && !showShortcutHelp) {
         setShowControls(false);
       }
     }, 3200);
-  }, [isPlaying, showSettingsModal]);
-
-  // 4. Keyboard Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
-      const video = videoRef.current;
-      if (!video) return;
-
-      switch (e.key.toLowerCase()) {
-        case ' ':
-        case 'k':
-          e.preventDefault();
-          if (video.paused) video.play();
-          else video.pause();
-          break;
-        case 'arrowright':
-        case 'l':
-          e.preventDefault();
-          video.currentTime = Math.min(video.duration, video.currentTime + 10);
-          break;
-        case 'arrowleft':
-        case 'j':
-          e.preventDefault();
-          video.currentTime = Math.max(0, video.currentTime - 10);
-          break;
-        case 'arrowup':
-          e.preventDefault();
-          setVolume(v => {
-            const next = Math.min(1, v + 0.1);
-            video.volume = next;
-            return next;
-          });
-          setIsMuted(false);
-          video.muted = false;
-          break;
-        case 'arrowdown':
-          e.preventDefault();
-          setVolume(v => {
-            const next = Math.max(0, v - 0.1);
-            video.volume = next;
-            return next;
-          });
-          break;
-        case 'm':
-          e.preventDefault();
-          toggleMute();
-          break;
-        case 'f':
-          e.preventDefault();
-          toggleFullscreen();
-          break;
-        case 's':
-          e.preventDefault();
-          setSettingsSubView('main');
-          setShowSettingsModal(prev => !prev);
-          break;
-        case 'escape':
-          if (showSettingsModal) {
-            setShowSettingsModal(false);
-          }
-          break;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showSettingsModal]);
+  }, [isPlaying, showSettingsModal, showShortcutHelp]);
 
   // Control handlers
   const togglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) video.play();
-    else video.pause();
+    if (video.paused) {
+      video.play();
+      triggerHud('play', 'Playing');
+      setRippleEffect({ id: Date.now(), type: 'play' });
+    } else {
+      video.pause();
+      triggerHud('pause', 'Paused');
+      setRippleEffect({ id: Date.now(), type: 'pause' });
+    }
   };
 
   const toggleMute = () => {
@@ -445,6 +504,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       setVolume(0.5);
       video.volume = 0.5;
     }
+    triggerHud(nextMuted ? 'mute' : 'volume', nextMuted ? 'Muted' : `Volume ${Math.round((nextMuted ? 0 : volume) * 100)}%`);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -458,38 +518,30 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     setIsMuted(val === 0);
   };
 
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const video = videoRef.current;
-    if (!video || !duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pos = (e.clientX - rect.left) / rect.width;
-    const target = Math.max(0, Math.min(duration, pos * duration));
-    video.currentTime = target;
-    setCurrentTime(target);
-  };
-
-  const handleScrubberMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    setHoverPosition(pos);
-    setHoverTime(pos * duration);
-  };
-
-  const handleScrubberMouseLeave = () => {
-    setHoverPosition(null);
-  };
-
   const handleSkip = (seconds: number) => {
     const video = videoRef.current;
     if (!video) return;
-    video.currentTime = Math.max(0, Math.min(duration, video.currentTime + seconds));
+    const next = Math.max(0, Math.min(duration, video.currentTime + seconds));
+    video.currentTime = next;
+    triggerHud(seconds > 0 ? 'seek-forward' : 'seek-backward', `${seconds > 0 ? '+' : ''}${seconds}s`);
+    setRippleEffect({ id: Date.now(), type: seconds > 0 ? 'right' : 'left' });
+  };
+
+  const cycleSpeed = () => {
+    const video = videoRef.current;
+    const speeds = [1, 1.25, 1.5, 2, 0.75];
+    const currentIdx = speeds.indexOf(playbackSpeed);
+    const nextSpeed = speeds[(currentIdx + 1) % speeds.length];
+    setPlaybackSpeed(nextSpeed);
+    if (video) video.playbackRate = nextSpeed;
+    triggerHud('speed', `${nextSpeed}x Speed`);
   };
 
   const handleSpeedChange = (speed: number) => {
     const video = videoRef.current;
     setPlaybackSpeed(speed);
     if (video) video.playbackRate = speed;
+    triggerHud('speed', `${speed}x Speed`);
   };
 
   const toggleFullscreen = () => {
@@ -502,6 +554,14 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
     }
   };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
 
   const togglePiP = async () => {
     const video = videoRef.current;
@@ -519,8 +579,161 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
   const handleNextStream = () => {
     if (allStreams.length <= 1) return;
-    setSelectedStreamIndex((selectedStreamIndex + 1) % allStreams.length);
+    const nextIdx = (selectedStreamIndex + 1) % allStreams.length;
+    setSelectedStreamIndex(nextIdx);
+    triggerHud('speed', `Switched: ${allStreams[nextIdx].server}`);
   };
+
+  // Scrubber Seeking & Dragging
+  const handleSeekFromEvent = (clientX: number) => {
+    const video = videoRef.current;
+    const scrubber = scrubberRef.current;
+    if (!video || !duration || !scrubber) return;
+    const rect = scrubber.getBoundingClientRect();
+    const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const target = pos * duration;
+    video.currentTime = target;
+    setCurrentTime(target);
+  };
+
+  const handleScrubberMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    isDraggingScrubberRef.current = true;
+    handleSeekFromEvent(e.clientX);
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (isDraggingScrubberRef.current) {
+        handleSeekFromEvent(moveEvent.clientX);
+      }
+    };
+
+    const onMouseUp = () => {
+      isDraggingScrubberRef.current = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleScrubberMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    setHoverPosition(pos);
+    setHoverTime(pos * duration);
+  };
+
+  const handleScrubberMouseLeave = () => {
+    setHoverPosition(null);
+  };
+
+  // Double-Click / Double-Tap detection on player surface
+  const lastClickRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
+  const handleSurfaceClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const now = Date.now();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relativeX = (e.clientX - rect.left) / rect.width;
+    const timeDiff = now - lastClickRef.current.time;
+
+    if (timeDiff < 280) {
+      // Double tap registered!
+      if (relativeX < 0.35) {
+        handleSkip(-10);
+      } else if (relativeX > 0.65) {
+        handleSkip(10);
+      } else {
+        toggleFullscreen();
+      }
+      lastClickRef.current = { time: 0, x: 0 };
+    } else {
+      // Single tap -> toggle play after slight delay or immediately
+      lastClickRef.current = { time: now, x: e.clientX };
+      togglePlay();
+    }
+  };
+
+  // 4. Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+      const video = videoRef.current;
+      if (!video) return;
+
+      switch (e.key.toLowerCase()) {
+        case ' ':
+        case 'k':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'arrowright':
+        case 'l':
+          e.preventDefault();
+          handleSkip(10);
+          break;
+        case 'arrowleft':
+        case 'j':
+          e.preventDefault();
+          handleSkip(-10);
+          break;
+        case 'arrowup':
+          e.preventDefault();
+          setVolume(v => {
+            const next = Math.min(1, Math.round((v + 0.1) * 10) / 10);
+            video.volume = next;
+            triggerHud('volume', `Volume ${Math.round(next * 100)}%`);
+            return next;
+          });
+          setIsMuted(false);
+          video.muted = false;
+          break;
+        case 'arrowdown':
+          e.preventDefault();
+          setVolume(v => {
+            const next = Math.max(0, Math.round((v - 0.1) * 10) / 10);
+            video.volume = next;
+            triggerHud('volume', `Volume ${Math.round(next * 100)}%`);
+            return next;
+          });
+          break;
+        case 'm':
+          e.preventDefault();
+          toggleMute();
+          break;
+        case 'f':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case 'c':
+          e.preventDefault();
+          // Toggle subtitles
+          if (activeSubTrackUrl) {
+            setActiveSubTrackUrl(null);
+            triggerHud('subtitle', 'Subtitles Off');
+          } else if (combinedSubtitles.length > 0) {
+            setActiveSubTrackUrl(combinedSubtitles[0].url);
+            triggerHud('subtitle', `Subtitles: ${combinedSubtitles[0].label || 'On'}`);
+          }
+          break;
+        case 's':
+          e.preventDefault();
+          setSettingsSubView('main');
+          setShowSettingsModal(prev => !prev);
+          break;
+        case '?':
+          e.preventDefault();
+          setShowShortcutHelp(prev => !prev);
+          break;
+        case 'escape':
+          if (showSettingsModal) setShowSettingsModal(false);
+          if (showShortcutHelp) setShowShortcutHelp(false);
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showSettingsModal, showShortcutHelp, activeSubTrackUrl, isMuted, volume, duration]);
 
   // Combine subtitles from API + stream metadata
   const combinedSubtitles: SubtitleTrack[] = [];
@@ -551,7 +764,51 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     }
   }
 
+  // Auto-select subtitle according to user player settings
+  useEffect(() => {
+    if (!playerSettings.autoLoadSubtitles || playerSettings.defaultSubtitleLang === 'off') {
+      return;
+    }
+    if (activeSubTrackUrl) return;
+    if (combinedSubtitles.length === 0) return;
+
+    const targetLang = (playerSettings.defaultSubtitleLang || 'exyu').toLowerCase();
+
+    const matchedTrack = combinedSubtitles.find(sub => {
+      const code = (sub.languageCode || sub.language || '').toLowerCase();
+      const label = (sub.label || '').toLowerCase();
+
+      if (targetLang === 'exyu') {
+        return (
+          code.startsWith('bs') ||
+          code.startsWith('hr') ||
+          code.startsWith('sr') ||
+          code === 'bhs' ||
+          label.includes('bosan') ||
+          label.includes('hrvat') ||
+          label.includes('srps') ||
+          label.includes('serb') ||
+          label.includes('croat') ||
+          label.includes('exyu')
+        );
+      }
+
+      return code === targetLang || code.startsWith(targetLang) || label.includes(targetLang);
+    });
+
+    if (matchedTrack?.url) {
+      setActiveSubTrackUrl(matchedTrack.url);
+    }
+  }, [combinedSubtitles.length, playerSettings.autoLoadSubtitles, playerSettings.defaultSubtitleLang, activeSubTrackUrl]);
+
   // Parse custom VTT or SRT subtitle tracks
+  interface ParsedCue {
+    start: number;
+    end: number;
+    text: string;
+  }
+  const [cues, setCues] = useState<ParsedCue[]>([]);
+
   useEffect(() => {
     if (!activeSubTrackUrl) {
       setCustomSubtitleText('');
@@ -579,18 +836,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     };
   }, [activeSubTrackUrl]);
 
-  interface ParsedCue {
-    start: number;
-    end: number;
-    text: string;
-  }
-  const [cues, setCues] = useState<ParsedCue[]>([]);
-
   const parseSubtitles = (raw: string) => {
     const list: ParsedCue[] = [];
     const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     let i = 0;
-
     const timeRegex = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})/;
 
     while (i < lines.length) {
@@ -626,7 +875,6 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     setCues(list);
   };
 
-  // Sync subtitle cues with video playback time
   useEffect(() => {
     if (!cues.length || !activeSubTrackUrl) {
       setCustomSubtitleText('');
@@ -654,34 +902,113 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       }
     }
 
-    // Also match any direct stream with that quality
     const streamMatch = allStreams.findIndex(s => s.quality.toLowerCase().includes(q.toLowerCase()));
     if (streamMatch !== -1 && streamMatch !== selectedStreamIndex) {
       setSelectedStreamIndex(streamMatch);
     }
+    triggerHud('speed', `Quality: ${q}`);
   };
 
   const progressPercent = duration ? (currentTime / duration) * 100 : 0;
+  const activeSub = combinedSubtitles.find(s => s.url === activeSubTrackUrl);
 
   return (
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      className="relative w-full aspect-video bg-black select-none overflow-hidden group/player"
+      className="relative w-full aspect-video bg-black select-none overflow-hidden group/player rounded-2xl"
       style={{ '--player-accent': accentColor } as React.CSSProperties}
     >
       {/* Native HTML5 <video> */}
       <video
         ref={videoRef}
-        onClick={togglePlay}
         playsInline
+        autoPlay
+        preload="auto"
         className="w-full h-full object-contain cursor-pointer"
       />
 
+      {/* Surface Click Overlay for Double-Tap gestures & Play/Pause */}
+      <div
+        onClick={handleSurfaceClick}
+        className="absolute inset-0 z-10 cursor-pointer"
+        aria-label="Video Playback Surface"
+      />
+
+      {/* Ripple Animation Indicator when clicking surface */}
+      {rippleEffect && (
+        <div
+          key={rippleEffect.id}
+          className={`absolute z-20 pointer-events-none ${
+            rippleEffect.type === 'left'
+              ? 'left-1/4 top-1/2'
+              : rippleEffect.type === 'right'
+              ? 'right-1/4 top-1/2'
+              : 'left-1/2 top-1/2'
+          }`}
+        >
+          <div className="w-20 h-20 rounded-full bg-black/60 border border-white/20 backdrop-blur-md flex items-center justify-center text-white shadow-2xl animate-ripple-pulse">
+            {rippleEffect.type === 'play' && <Play className="w-8 h-8 fill-white ml-1 text-white" />}
+            {rippleEffect.type === 'pause' && <Pause className="w-8 h-8 fill-white text-white" />}
+            {rippleEffect.type === 'left' && (
+              <div className="flex flex-col items-center">
+                <Rewind className="w-6 h-6 fill-white" />
+                <span className="text-[10px] font-bold mt-0.5">-10s</span>
+              </div>
+            )}
+            {rippleEffect.type === 'right' && (
+              <div className="flex flex-col items-center">
+                <FastForward className="w-6 h-6 fill-white" />
+                <span className="text-[10px] font-bold mt-0.5">+10s</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Dynamic HUD Feedback Badge (e.g. Volume 80%, Seeking, Speed) */}
+      {hudFeedback && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none animate-hud-feedback">
+          <div className="px-4 py-2 rounded-2xl bg-black/85 backdrop-blur-xl border border-white/15 text-white font-extrabold text-xs sm:text-sm flex items-center gap-2.5 shadow-2xl">
+            {hudFeedback.type === 'volume' && <Volume2 className="w-4 h-4 text-[#F5C400]" />}
+            {hudFeedback.type === 'mute' && <VolumeX className="w-4 h-4 text-red-400" />}
+            {hudFeedback.type === 'speed' && <Gauge className="w-4 h-4 text-[#F5C400]" />}
+            {hudFeedback.type === 'subtitle' && <Subtitles className="w-4 h-4 text-[#F5C400]" />}
+            {hudFeedback.type === 'seek-forward' && <RotateCw className="w-4 h-4 text-[#F5C400]" />}
+            {hudFeedback.type === 'seek-backward' && <RotateCcw className="w-4 h-4 text-[#F5C400]" />}
+            <span>{hudFeedback.text}</span>
+          </div>
+        </div>
+      )}
+
       {/* Synchronized Subtitle Overlay */}
       {customSubtitleText && (
-        <div className="absolute bottom-16 sm:bottom-20 inset-x-0 z-20 flex justify-center px-4 pointer-events-none">
-          <div className="px-4 py-1.5 rounded-lg bg-black/85 text-white font-medium text-sm sm:text-base md:text-lg tracking-wide text-center max-w-[85%] leading-relaxed shadow-lg border border-white/10 backdrop-blur-xs">
+        <div className="absolute bottom-16 sm:bottom-22 inset-x-0 z-20 flex justify-center px-4 pointer-events-none">
+          <div
+            className={`text-center max-w-[85%] leading-relaxed font-semibold transition-all ${
+              playerSettings.subtitleSize === 'small'
+                ? 'text-xs sm:text-sm'
+                : playerSettings.subtitleSize === 'large'
+                ? 'text-base sm:text-xl md:text-2xl'
+                : playerSettings.subtitleSize === 'xlarge'
+                ? 'text-lg sm:text-2xl md:text-3xl'
+                : 'text-sm sm:text-base md:text-lg'
+            } ${
+              playerSettings.subtitleColor === 'yellow'
+                ? 'text-[#FFD000]'
+                : playerSettings.subtitleColor === 'cyan'
+                ? 'text-[#00E5FF]'
+                : playerSettings.subtitleColor === 'green'
+                ? 'text-[#00FF88]'
+                : 'text-white'
+            } ${
+              playerSettings.subtitleBackground === 'shadow'
+                ? 'bg-black/35 backdrop-blur-[1px] px-3 py-1 rounded drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]'
+                : playerSettings.subtitleBackground === 'outline'
+                ? 'bg-transparent px-2 py-0.5 [text-shadow:_0_0_4px_#000,_0_0_6px_#000,_0_0_8px_#000]'
+                : 'bg-black/85 border border-white/10 backdrop-blur-xs shadow-lg px-4 py-1.5 rounded-lg'
+            }`}
+          >
             {customSubtitleText}
           </div>
         </div>
@@ -689,30 +1016,30 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
       {/* Top Header Bar ON THE PLAYER */}
       <div
-        className={`absolute top-0 inset-x-0 z-30 p-3 sm:p-4 bg-gradient-to-b from-black/90 via-black/60 to-transparent transition-opacity duration-300 flex items-center justify-between gap-3 ${
+        className={`absolute top-0 inset-x-0 z-30 p-3 sm:p-4 bg-gradient-to-b from-black/90 via-black/50 to-transparent transition-opacity duration-300 flex items-center justify-between gap-3 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
         {/* Left: Title & Season/Episode */}
         <div className="flex items-center gap-2.5 min-w-0">
           <span
-            className="w-2.5 h-2.5 rounded-full shrink-0 animate-pulse"
+            className="w-2.5 h-2.5 rounded-full shrink-0 shadow-[0_0_8px_var(--player-accent)]"
             style={{ backgroundColor: accentColor }}
           />
-          <h2 className="text-xs sm:text-sm font-bold text-white truncate max-w-[200px] sm:max-w-md drop-shadow">
+          <h2 className="text-xs sm:text-sm font-bold text-white truncate max-w-[180px] sm:max-w-md drop-shadow">
             {title}
           </h2>
           {!isMovie && (
             <span
-              className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full text-white shrink-0"
-              style={{ backgroundColor: `${accentColor}33`, borderColor: accentColor }}
+              className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-md text-white shrink-0 border"
+              style={{ backgroundColor: `${accentColor}25`, borderColor: `${accentColor}60` }}
             >
               S{currentSeason} · E{currentEpisode}
             </span>
           )}
         </div>
 
-        {/* Right: Quick Action Buttons */}
+        {/* Right: Cinema & Control Buttons */}
         <div className="flex items-center gap-1.5 sm:gap-2">
           {/* Quick TV Episode Stepper */}
           {!isMovie && (
@@ -720,7 +1047,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               {hasPrevEpisode && (
                 <button
                   onClick={onPrevEpisode}
-                  className="p-1.5 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-slate-300 hover:text-white border border-[#3A3A40] transition-colors cursor-pointer"
+                  className="p-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-slate-300 hover:text-white border border-white/15 transition-colors cursor-pointer"
                   title="Previous Episode"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
@@ -729,7 +1056,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               {hasNextEpisode && (
                 <button
                   onClick={onNextEpisode}
-                  className="px-2 py-1 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-white text-[11px] font-bold border border-[#3A3A40] transition-colors flex items-center gap-1 cursor-pointer"
+                  className="px-2 py-1 rounded-lg bg-black/60 hover:bg-black/80 text-white text-[11px] font-bold border border-white/15 transition-colors flex items-center gap-1 cursor-pointer"
                   title="Next Episode"
                 >
                   <span>Next Ep</span>
@@ -739,46 +1066,56 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
             </div>
           )}
 
-          {/* Primary Playback Settings Toggle (Matches User Screenshot) */}
+          {/* Quick Server Selector Dropdown */}
+          {allStreams.length > 0 && (
+            <div className="flex items-center bg-black/70 hover:bg-black/85 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/15 text-xs transition-colors shadow-sm">
+              <Server className="w-3.5 h-3.5 mr-1.5 shrink-0" style={{ color: accentColor }} />
+              <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider mr-1.5 hidden md:inline">Server:</span>
+              <select
+                value={selectedStreamIndex}
+                onChange={(e) => {
+                  const idx = parseInt(e.target.value, 10);
+                  if (!isNaN(idx) && allStreams[idx]) {
+                    const v = videoRef.current;
+                    if (v && v.currentTime > 2) {
+                      failoverSeekRef.current = v.currentTime;
+                    }
+                    setSelectedStreamIndex(idx);
+                    triggerHud('speed', `Server: ${allStreams[idx].providerName || allStreams[idx].server}`);
+                  }
+                }}
+                className="bg-transparent font-extrabold text-[11px] outline-none cursor-pointer pr-1"
+                style={{ color: accentColor }}
+              >
+                {allStreams.map((st, idx) => (
+                  <option key={`${st.server}-${idx}`} value={idx} className="bg-[#18181c] text-white py-1">
+                    {st.providerName || st.server} ({st.type.toUpperCase()})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Primary Playback Settings Toggle */}
           <button
             onClick={() => {
               setSettingsSubView('main');
               setShowSettingsModal(true);
             }}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-white text-[11px] font-bold backdrop-blur-md border border-[#3A3A40] hover:border-white/30 transition-all cursor-pointer shadow-sm"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/60 hover:bg-black/85 text-white text-[11px] font-bold backdrop-blur-md border border-white/15 hover:border-white/30 transition-all cursor-pointer shadow-sm"
           >
             <SlidersHorizontal className="w-3.5 h-3.5" style={{ color: accentColor }} />
-            <span>Playback Settings</span>
+            <span className="hidden xs:inline">Settings</span>
           </button>
 
-          {/* Video Sources Shortcut */}
+          {/* Keyboard Shortcuts Help Button */}
           <button
-            onClick={() => {
-              setSettingsSubView('sources');
-              setShowSettingsModal(true);
-            }}
-            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-white text-[11px] font-bold backdrop-blur-md border border-[#3A3A40] hover:border-white/30 transition-all cursor-pointer shadow-sm"
+            onClick={() => setShowShortcutHelp(true)}
+            className="p-1.5 rounded-lg bg-black/60 hover:bg-black/85 text-[#A6A6AC] hover:text-white border border-white/15 transition-colors cursor-pointer backdrop-blur-md hidden sm:flex"
+            title="Keyboard Shortcuts (?)"
           >
-            <Database className="w-3.5 h-3.5" style={{ color: accentColor }} />
-            <span>Video Sources</span>
-            <span
-              className="w-4 h-4 rounded-full text-black text-[9px] font-black flex items-center justify-center"
-              style={{ backgroundColor: accentColor }}
-            >
-              {allStreams.length}
-            </span>
+            <HelpCircle className="w-3.5 h-3.5" />
           </button>
-
-          {/* Rescan / Reload Streams */}
-          {onRefreshStreams && (
-            <button
-              onClick={onRefreshStreams}
-              title="Rescan Streams"
-              className="p-1.5 rounded-lg bg-[#232326]/90 hover:bg-[#303035] text-[#A6A6AC] hover:text-white border border-[#3A3A40] transition-colors cursor-pointer backdrop-blur-md"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-          )}
 
           {/* Cinema Lights Toggle */}
           {onToggleLights && (
@@ -787,8 +1124,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               title={isLightsDimmed ? 'Turn on lights' : 'Cinema lights off'}
               className={`p-1.5 rounded-lg border transition-colors cursor-pointer backdrop-blur-md ${
                 isLightsDimmed
-                  ? 'text-black border-transparent'
-                  : 'bg-[#232326]/90 text-[#A6A6AC] hover:text-white border-[#3A3A40]'
+                  ? 'text-black border-transparent shadow-[0_0_8px_var(--player-accent)]'
+                  : 'bg-black/60 text-[#A6A6AC] hover:text-white border-white/15'
               }`}
               style={isLightsDimmed ? { backgroundColor: accentColor } : {}}
             >
@@ -803,8 +1140,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               title={isTheaterMode ? 'Standard view' : 'Theater mode'}
               className={`hidden md:flex p-1.5 rounded-lg border transition-colors cursor-pointer backdrop-blur-md ${
                 isTheaterMode
-                  ? 'text-black border-transparent'
-                  : 'bg-[#232326]/90 text-[#A6A6AC] hover:text-white border-[#3A3A40]'
+                  ? 'text-black border-transparent shadow-[0_0_8px_var(--player-accent)]'
+                  : 'bg-black/60 text-[#A6A6AC] hover:text-white border-white/15'
               }`}
               style={isTheaterMode ? { backgroundColor: accentColor } : {}}
             >
@@ -816,10 +1153,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
       {/* Loading Spinner */}
       {isLoading && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-xs pointer-events-none">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/85 backdrop-blur-xs pointer-events-none">
           <PlayerLoadingSpinner
-            title="CONNECTING TO STREAM"
-            serverName={cleanServerDisplay(activeStream?.server || 'TStream Master')}
             subtitle="Fast multi-server HLS playback, multilingual subtitles, and zero ads."
           />
         </div>
@@ -857,33 +1192,35 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       {!isPlaying && !isLoading && !loadError && (
         <button
           onClick={togglePlay}
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-16 h-16 sm:w-20 sm:h-20 rounded-full text-black flex items-center justify-center shadow-2xl transition-transform hover:scale-110 active:scale-95 cursor-pointer"
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-16 h-16 sm:w-20 sm:h-20 rounded-full text-black flex items-center justify-center shadow-[0_0_30px_rgba(245,196,0,0.5)] transition-transform hover:scale-110 active:scale-95 cursor-pointer ring-4 ring-black/30"
           style={{ backgroundColor: accentColor }}
+          aria-label="Play Video"
         >
-          <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-black ml-1" />
+          <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-black ml-1 text-black" />
         </button>
       )}
 
       {/* Bottom Controls Bar ON THE PLAYER */}
       <div
-        className={`absolute bottom-0 inset-x-0 z-30 p-3 sm:p-4 bg-gradient-to-t from-black/95 via-black/75 to-transparent transition-opacity duration-300 flex flex-col gap-2 ${
+        className={`absolute bottom-0 inset-x-0 z-30 p-2.5 sm:p-4 bg-gradient-to-t from-black/95 via-black/75 to-transparent transition-opacity duration-300 flex flex-col gap-1.5 sm:gap-2.5 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
-        {/* Progress Scrubber Bar */}
+        {/* Modern Interactive Progress Scrubber Bar */}
         <div
-          onClick={handleSeek}
+          ref={scrubberRef}
+          onMouseDown={handleScrubberMouseDown}
           onMouseMove={handleScrubberMouseMove}
           onMouseLeave={handleScrubberMouseLeave}
-          className="relative w-full h-2.5 bg-white/20 hover:h-3.5 rounded-full cursor-pointer transition-all flex items-center group/bar"
+          className="relative w-full h-2 hover:h-3.5 rounded-full cursor-pointer transition-all flex items-center group/bar bg-white/20"
         >
           {/* Buffered Bar */}
           <div
-            className="absolute left-0 top-0 bottom-0 bg-white/30 rounded-full transition-all"
+            className="absolute left-0 top-0 bottom-0 bg-white/35 rounded-full transition-all"
             style={{ width: `${duration ? (bufferedTime / duration) * 100 : 0}%` }}
           />
 
-          {/* Current Progress Bar */}
+          {/* Current Progress Bar with Accent Glow */}
           <div
             className="absolute left-0 top-0 bottom-0 rounded-full flex items-center justify-end"
             style={{
@@ -891,16 +1228,17 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               backgroundColor: accentColor
             }}
           >
+            {/* Glowing Scrubber Head Thumb */}
             <div
-              className="w-3.5 h-3.5 bg-white rounded-full shadow-lg scale-0 group-hover/bar:scale-100 transition-transform -mr-1.5"
-              style={{ boxShadow: `0 0 10px ${accentColor}` }}
+              className="w-3.5 h-3.5 bg-white rounded-full shadow-lg scale-0 group-hover/bar:scale-100 transition-transform -mr-1.5 border border-black/20"
+              style={{ boxShadow: `0 0 12px ${accentColor}` }}
             />
           </div>
 
           {/* Hover Time Tooltip */}
           {hoverPosition !== null && (
             <div
-              className="absolute -top-8 -translate-x-1/2 px-2 py-1 bg-black/90 text-white text-[10px] font-mono font-bold rounded shadow-md pointer-events-none border border-white/10"
+              className="absolute -top-8 -translate-x-1/2 px-2.5 py-1 bg-black/95 text-white text-[11px] font-mono font-bold rounded-lg shadow-xl pointer-events-none border border-white/15"
               style={{ left: `${hoverPosition * 100}%` }}
             >
               {formatTime(hoverTime)}
@@ -909,46 +1247,58 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
 
         {/* Action Controls Row */}
-        <div className="flex items-center justify-between gap-3 text-white">
+        <div className="flex items-center justify-between gap-2 sm:gap-3 text-white">
           {/* Left: Play/Pause, Rewind, Forward, Volume, Time */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1 sm:gap-2">
             <button
               onClick={togglePlay}
-              className="p-1.5 rounded-lg hover:bg-white/15 text-white transition-colors cursor-pointer"
+              className="p-1.5 sm:p-2 rounded-xl hover:bg-white/15 text-white transition-all cursor-pointer active:scale-95"
               title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
             >
-              {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
+              {isPlaying ? (
+                <Pause className="w-5 h-5 fill-white text-white" />
+              ) : (
+                <Play className="w-5 h-5 fill-white text-white ml-0.5" />
+              )}
             </button>
 
+            {/* Skip Backward 10s */}
             <button
               onClick={() => handleSkip(-10)}
-              className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
-              title="Rewind 10s (J / Left Arrow)"
+              className="p-1.5 sm:p-2 rounded-xl hover:bg-white/15 text-slate-300 hover:text-white transition-all cursor-pointer active:scale-95 relative"
+              title="Rewind 10s (Left Arrow / J)"
             >
-              <RotateCcw className="w-4 h-4" />
+              <RotateCcw className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+              <span className="text-[7px] font-extrabold absolute inset-0 flex items-center justify-center pt-0.5">
+                10
+              </span>
             </button>
 
+            {/* Skip Forward 10s */}
             <button
               onClick={() => handleSkip(10)}
-              className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
-              title="Forward 10s (L / Right Arrow)"
+              className="p-1.5 sm:p-2 rounded-xl hover:bg-white/15 text-slate-300 hover:text-white transition-all cursor-pointer active:scale-95 relative"
+              title="Forward 10s (Right Arrow / L)"
             >
-              <RotateCw className="w-4 h-4" />
+              <RotateCw className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+              <span className="text-[7px] font-extrabold absolute inset-0 flex items-center justify-center pt-0.5">
+                10
+              </span>
             </button>
 
-            {/* Volume Control */}
-            <div className="flex items-center gap-1.5 group/vol">
+            {/* Volume Control with hover-slider */}
+            <div className="flex items-center gap-1 group/vol">
               <button
                 onClick={toggleMute}
-                className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                className="p-1.5 sm:p-2 rounded-xl hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
                 title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
               >
                 {isMuted || volume === 0 ? (
-                  <VolumeX className="w-4 h-4 text-red-400" />
+                  <VolumeX className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-red-400" />
                 ) : volume < 0.5 ? (
-                  <Volume1 className="w-4 h-4" />
+                  <Volume1 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                 ) : (
-                  <Volume2 className="w-4 h-4" />
+                  <Volume2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                 )}
               </button>
               <input
@@ -958,42 +1308,98 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                 step="0.05"
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
-                className="w-16 sm:w-20 h-1.5 bg-white/30 rounded-lg appearance-none cursor-pointer"
+                className="w-14 sm:w-20 h-1.5 bg-white/30 rounded-lg appearance-none cursor-pointer hidden xs:inline-block"
                 style={{ accentColor: accentColor }}
               />
             </div>
 
-            {/* Time Display */}
-            <div className="text-[11px] sm:text-xs font-mono font-medium text-slate-300 ml-1">
-              <span>{formatTime(currentTime)}</span>
-              <span className="text-slate-500 mx-1">/</span>
-              <span>{formatTime(duration)}</span>
-            </div>
+            {/* Time Display with Elapsed / Remaining toggle */}
+            <button
+              type="button"
+              onClick={() => setShowRemainingTime(prev => !prev)}
+              className="text-[11px] sm:text-xs font-mono font-medium text-slate-300 hover:text-white transition-colors px-1 py-0.5 rounded cursor-pointer"
+              title="Click to toggle Elapsed / Remaining time"
+            >
+              {showRemainingTime ? (
+                <span>-{formatTime(Math.max(0, duration - currentTime))}</span>
+              ) : (
+                <>
+                  <span>{formatTime(currentTime)}</span>
+                  <span className="text-slate-500 mx-1">/</span>
+                  <span>{formatTime(duration)}</span>
+                </>
+              )}
+            </button>
           </div>
 
-          {/* Right: Subtitles, Settings, PiP, Fullscreen */}
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            {/* Subtitles Button -> Opens Settings Modal on Subtitles Tab */}
+          {/* Right: Server Badge, Quality, CC, Speed, PiP, Fullscreen */}
+          <div className="flex items-center gap-1 sm:gap-2">
+            {/* Quick Source Pill */}
+            {activeStream && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingsSubView('sources');
+                  setShowSettingsModal(true);
+                }}
+                className="hidden lg:inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-bold text-slate-200 transition-colors cursor-pointer"
+                title="Switch Video Source"
+              >
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: accentColor }} />
+                <span className="truncate max-w-[90px]">{cleanServerDisplay(activeStream.server)}</span>
+              </button>
+            )}
+
+            {/* Quality Badge */}
+            <button
+              type="button"
+              onClick={() => {
+                setSettingsSubView('quality');
+                setShowSettingsModal(true);
+              }}
+              className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/10 hover:bg-white/20 text-[10px] font-mono font-bold text-slate-200 transition-colors cursor-pointer border border-white/10"
+              title="Video Resolution & Quality"
+            >
+              <span>{selectedQuality === 'Auto' ? 'HD' : selectedQuality}</span>
+            </button>
+
+            {/* Subtitles CC Button */}
             <button
               onClick={() => {
                 setSettingsSubView('subtitles');
                 setShowSettingsModal(true);
               }}
-              className="p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/15"
-              style={activeSubTrackUrl ? { color: accentColor } : { color: '#CBD5E1' }}
-              title="Subtitles (CC)"
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/15 flex items-center gap-1 ${
+                activeSubTrackUrl ? 'border border-white/20' : ''
+              }`}
+              style={activeSubTrackUrl ? { color: accentColor, backgroundColor: `${accentColor}18` } : { color: '#CBD5E1' }}
+              title="Subtitles (C)"
             >
               <Subtitles className="w-4 h-4" />
+              {activeSub && (
+                <span className="text-[9px] font-mono font-extrabold uppercase hidden md:inline">
+                  {activeSub.languageCode || 'CC'}
+                </span>
+              )}
             </button>
 
-            {/* Playback Settings Button -> Opens Settings Modal on Main View */}
+            {/* Quick Speed Button (Cycle on click) */}
+            <button
+              onClick={cycleSpeed}
+              className="px-2 py-1 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer text-[10px] font-mono font-bold hidden sm:inline-block"
+              title="Cycle Playback Speed"
+            >
+              {playbackSpeed}x
+            </button>
+
+            {/* Playback Settings Modal Button */}
             <button
               onClick={() => {
                 setSettingsSubView('main');
                 setShowSettingsModal(true);
               }}
               className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
-              title="Playback Settings"
+              title="Playback Settings (S)"
             >
               <Settings className="w-4 h-4" />
             </button>
@@ -1001,25 +1407,94 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
             {/* Picture in Picture */}
             <button
               onClick={togglePiP}
-              className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors hidden sm:inline-block cursor-pointer"
+              className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors hidden md:inline-block cursor-pointer"
               title="Picture in Picture"
             >
               <PictureInPicture2 className="w-4 h-4" />
             </button>
 
-            {/* Fullscreen */}
+            {/* Fullscreen Button */}
             <button
               onClick={toggleFullscreen}
-              className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg hover:bg-white/15 text-slate-300 hover:text-white transition-colors cursor-pointer active:scale-95"
               title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
             >
-              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+              {isFullscreen ? <Minimize className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <Maximize className="w-4 h-4 sm:w-4.5 sm:h-4.5" />}
             </button>
           </div>
         </div>
       </div>
 
-      {/* The Unified Playback Settings Modal (Pictured in screenshot image_bb8944d1.png) */}
+      {/* Keyboard Shortcuts Help Modal */}
+      {showShortcutHelp && (
+        <div
+          onClick={() => setShowShortcutHelp(false)}
+          className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-150"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl bg-[#121217] border border-white/15 p-5 shadow-2xl text-white relative"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+              <div className="flex items-center gap-2">
+                <HelpCircle className="w-4 h-4" style={{ color: accentColor }} />
+                <h3 className="text-sm font-bold text-white">Keyboard Shortcuts</h3>
+              </div>
+              <button
+                onClick={() => setShowShortcutHelp(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 text-xs text-slate-300">
+              <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                <span>Play / Pause</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-black/60 border border-white/15 font-mono text-[10px] text-white">Space / K</kbd>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                <span>Seek ±10s</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-black/60 border border-white/15 font-mono text-[10px] text-white">← / →</kbd>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                <span>Volume ±10%</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-black/60 border border-white/15 font-mono text-[10px] text-white">↑ / ↓</kbd>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                <span>Mute / Unmute</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-black/60 border border-white/15 font-mono text-[10px] text-white">M</kbd>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                <span>Toggle Subtitles</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-black/60 border border-white/15 font-mono text-[10px] text-white">C</kbd>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                <span>Fullscreen</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-black/60 border border-white/15 font-mono text-[10px] text-white">F</kbd>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                <span>Playback Settings</span>
+                <kbd className="px-1.5 py-0.5 rounded bg-black/60 border border-white/15 font-mono text-[10px] text-white">S</kbd>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                <span>Double-tap surface</span>
+                <span className="text-[10px] text-slate-400">±10s Seek</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowShortcutHelp(false)}
+              className="w-full mt-4 py-2 rounded-xl text-black font-extrabold text-xs transition-colors cursor-pointer"
+              style={{ backgroundColor: accentColor }}
+            >
+              Got It
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* The Unified Playback Settings Modal */}
       <PlaybackSettingsModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}

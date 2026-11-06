@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   auth,
   googleProvider,
@@ -17,12 +17,26 @@ import {
   removeUserContinueWatching,
   getUserContinueWatchingItem,
   subscribeToUserContinueWatching,
+  followShow,
+  unfollowShow,
+  subscribeToFollowedShows,
+  saveEpisodeNotification,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  subscribeToEpisodeNotifications,
   UserProfile,
   WatchlistItem,
   ContinueWatchingRecord,
+  FollowedShowItem,
+  EpisodeNotification,
   User
 } from '../services/firebase';
 import { MediaItem } from '../types/media';
+import { fetchTvLastEpisode } from '../services/newEpisodes';
+import {
+  loadUserPlayerSettingsFromFirestore,
+  clearSessionPlayerSettings
+} from '../services/playerSettings';
 
 type AuthModalMode = 'login' | 'register' | 'profile' | 'watchlist';
 
@@ -31,6 +45,9 @@ interface AuthContextType {
   profile: UserProfile | null;
   watchlist: WatchlistItem[];
   continueWatching: ContinueWatchingRecord[];
+  followedShows: FollowedShowItem[];
+  notifications: EpisodeNotification[];
+  unreadNotificationsCount: number;
   loading: boolean;
   isAuthModalOpen: boolean;
   authModalMode: AuthModalMode;
@@ -56,6 +73,11 @@ interface AuthContextType {
   }) => Promise<void>;
   removeContinueWatching: (mediaType: 'movie' | 'tv', tmdbId: string | number) => Promise<void>;
   getContinueWatchingItem: (mediaType: 'movie' | 'tv', tmdbId: string | number) => Promise<ContinueWatchingRecord | null>;
+  toggleFollowShow: (show: Partial<MediaItem> & { id: number; title?: string }) => Promise<boolean>;
+  isFollowingShow: (showId: number | string) => boolean;
+  markNotificationRead: (notifId: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
+  checkFollowedShowsForNewEpisodes: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -65,11 +87,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [continueWatching, setContinueWatching] = useState<ContinueWatchingRecord[]>([]);
+  const [followedShows, setFollowedShows] = useState<FollowedShowItem[]>([]);
+  const [notifications, setNotifications] = useState<EpisodeNotification[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Modal State
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
+  const checkingShowsRef = useRef(false);
 
   const openAuthModal = (mode: AuthModalMode = 'login') => {
     setAuthModalMode(mode);
@@ -88,13 +113,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           const prof = await syncUserProfile(currentUser);
           setProfile(prof);
+          // Load registered user player and server settings directly from Firestore database
+          await loadUserPlayerSettingsFromFirestore(currentUser.uid);
         } catch (err) {
-          console.warn('Failed to sync profile:', err);
+          console.warn('Failed to sync profile or player settings:', err);
         }
       } else {
         setProfile(null);
         setWatchlist([]);
         setContinueWatching([]);
+        setFollowedShows([]);
+        setNotifications([]);
+        clearSessionPlayerSettings();
       }
       setLoading(false);
     });
@@ -130,50 +160,191 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribeContinue();
   }, [user]);
 
-  // Actions
-  const signInWithGoogle = async () => {
-    const result = await signInWithPopup(auth, googleProvider);
-    if (result.user) {
-      const p = await syncUserProfile(result.user);
-      setProfile(p);
-      closeAuthModal();
+  // Followed Shows Realtime Listener
+  useEffect(() => {
+    if (!user) {
+      setFollowedShows([]);
+      return;
     }
-  };
 
-  const signInWithEmail = async (email: string, pass: string) => {
-    const result = await signInWithEmailAndPassword(auth, email.trim(), pass);
-    if (result.user) {
-      const p = await syncUserProfile(result.user);
-      setProfile(p);
-      closeAuthModal();
+    const unsubscribeFollowed = subscribeToFollowedShows(user.uid, (items) => {
+      setFollowedShows(items);
+    });
+
+    return () => unsubscribeFollowed();
+  }, [user]);
+
+  // Episode Notifications Realtime Listener
+  useEffect(() => {
+    if (!user) {
+      setNotifications([]);
+      return;
     }
-  };
 
-  const registerWithEmail = async (email: string, pass: string, displayName: string) => {
-    const result = await createUserWithEmailAndPassword(auth, email.trim(), pass);
-    if (result.user) {
-      if (displayName.trim()) {
-        await updateProfile(result.user, { displayName: displayName.trim() });
+    const unsubscribeNotifs = subscribeToEpisodeNotifications(user.uid, (items) => {
+      setNotifications(items);
+    });
+
+    return () => unsubscribeNotifs();
+  }, [user]);
+
+  // Automatic Checker: Scans followed shows for new episodes when shows load
+  useEffect(() => {
+    if (!user || followedShows.length === 0) return;
+
+    // Run debounced check
+    const timer = setTimeout(() => {
+      checkFollowedShowsForNewEpisodes();
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, [user?.uid, followedShows.length]);
+
+  /**
+   * Scans followed TV series against TMDB to detect if a new episode aired
+   * and creates an interactive alert notification if not yet registered.
+   */
+  const checkFollowedShowsForNewEpisodes = async () => {
+    if (!user || checkingShowsRef.current || followedShows.length === 0) return;
+    checkingShowsRef.current = true;
+
+    try {
+      for (const show of followedShows) {
+        const tvId = parseInt(show.showId, 10);
+        if (isNaN(tvId)) continue;
+
+        const info = await fetchTvLastEpisode(tvId);
+        if (!info || !info.lastEpisode) continue;
+
+        const ep = info.lastEpisode;
+        const notifId = `notif_${tvId}_s${ep.seasonNumber}_e${ep.episodeNumber}`;
+
+        // Check if notification already exists
+        const alreadyExists = notifications.some(n => n.id === notifId);
+        if (!alreadyExists) {
+          const newNotif: EpisodeNotification = {
+            id: notifId,
+            userId: user.uid,
+            showId: String(tvId),
+            showTitle: info.showTitle || show.title,
+            posterPath: info.showPoster || show.posterPath,
+            seasonNumber: ep.seasonNumber,
+            episodeNumber: ep.episodeNumber,
+            episodeName: ep.name || `Episode ${ep.episodeNumber}`,
+            airDate: ep.airDate || new Date().toISOString().slice(0, 10),
+            read: false,
+            createdAt: new Date().toISOString()
+          };
+
+          await saveEpisodeNotification(newNotif);
+        }
       }
-      const p = await syncUserProfile(result.user, displayName.trim());
-      setProfile(p);
-      closeAuthModal();
+    } catch (err) {
+      console.warn('Failed checking followed shows for new episodes:', err);
+    } finally {
+      checkingShowsRef.current = false;
     }
   };
 
-  const logout = async () => {
-    await signOut(auth);
-    setProfile(null);
-    setWatchlist([]);
-    setContinueWatching([]);
-    closeAuthModal();
+  // Follow / Unfollow TV Series
+  const isFollowingShow = (showId: number | string): boolean => {
+    const idStr = String(showId);
+    return followedShows.some(s => String(s.showId) === idStr);
   };
 
+  const toggleFollowShow = async (show: Partial<MediaItem> & { id: number; title?: string }): Promise<boolean> => {
+    if (!user) {
+      openAuthModal('login');
+      return false;
+    }
+
+    const showIdStr = String(show.id);
+    const following = isFollowingShow(showIdStr);
+
+    if (following) {
+      await unfollowShow(user.uid, showIdStr);
+      return false;
+    } else {
+      await followShow({
+        userId: user.uid,
+        showId: showIdStr,
+        title: show.title || 'Untitled Series',
+        posterPath: show.posterPath || undefined,
+        backdropPath: show.backdropPath || undefined,
+        voteAverage: show.voteAverage || 0
+      });
+
+      // Immediately check this show for its latest episode to welcome the user
+      setTimeout(async () => {
+        try {
+          const info = await fetchTvLastEpisode(show.id);
+          if (info && info.lastEpisode) {
+            const ep = info.lastEpisode;
+            const notifId = `notif_${show.id}_s${ep.seasonNumber}_e${ep.episodeNumber}`;
+            await saveEpisodeNotification({
+              id: notifId,
+              userId: user.uid,
+              showId: showIdStr,
+              showTitle: info.showTitle || show.title || 'TV Series',
+              posterPath: info.showPoster || show.posterPath,
+              seasonNumber: ep.seasonNumber,
+              episodeNumber: ep.episodeNumber,
+              episodeName: ep.name,
+              airDate: ep.airDate,
+              read: false,
+              createdAt: new Date().toISOString()
+            });
+          }
+        } catch {}
+      }, 500);
+
+      return true;
+    }
+  };
+
+  const markNotificationRead = async (notifId: string): Promise<void> => {
+    if (!user) return;
+    await markNotificationAsRead(user.uid, notifId);
+  };
+
+  const markAllNotificationsRead = async (): Promise<void> => {
+    if (!user) return;
+    await markAllNotificationsAsRead(user.uid);
+  };
+
+  // Watchlist Actions
   const isInWatchlist = (tmdbId: number | string): boolean => {
     const idStr = String(tmdbId);
     return watchlist.some((item) => item.tmdbId === idStr);
   };
 
+  const toggleWatchlist = async (item: Partial<MediaItem> & { id: number; title?: string }): Promise<boolean> => {
+    if (!user) {
+      openAuthModal('login');
+      return false;
+    }
+
+    const idStr = String(item.id);
+    const exists = isInWatchlist(idStr);
+
+    if (exists) {
+      await removeFromWatchlist(user.uid, idStr);
+      return false;
+    } else {
+      await addToWatchlist({
+        userId: user.uid,
+        tmdbId: idStr,
+        mediaType: item.mediaType === 'tv' ? 'tv' : 'movie',
+        title: item.title || 'Untitled',
+        posterPath: item.posterPath || undefined,
+        voteAverage: item.voteAverage || 0,
+        releaseDate: item.releaseDate || ''
+      });
+      return true;
+    }
+  };
+
+  // Continue Watching Actions
   const saveContinueWatching = async (item: {
     tmdbId: string | number;
     mediaType: 'movie' | 'tv';
@@ -186,7 +357,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     episodeNumber?: number;
     episodeName?: string;
   }): Promise<void> => {
-    // Continue watching is strictly for registered users
     if (!user) return;
 
     const payload: any = {
@@ -230,31 +400,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return getUserContinueWatchingItem(user.uid, mediaType, tmdbId);
   };
 
-  const toggleWatchlist = async (item: Partial<MediaItem> & { id: number; title?: string }): Promise<boolean> => {
-    if (!user) {
-      openAuthModal('login');
-      return false;
-    }
-
-    const idStr = String(item.id);
-    const exists = isInWatchlist(idStr);
-
-    if (exists) {
-      await removeFromWatchlist(user.uid, idStr);
-      return false;
-    } else {
-      await addToWatchlist({
-        userId: user.uid,
-        tmdbId: idStr,
-        mediaType: item.mediaType === 'tv' ? 'tv' : 'movie',
-        title: item.title || 'Untitled',
-        posterPath: item.posterPath || undefined,
-        voteAverage: item.voteAverage || 0,
-        releaseDate: item.releaseDate || ''
-      });
-      return true;
+  // Auth Operations
+  const signInWithGoogle = async () => {
+    const result = await signInWithPopup(auth, googleProvider);
+    if (result.user) {
+      const p = await syncUserProfile(result.user);
+      setProfile(p);
+      closeAuthModal();
     }
   };
+
+  const signInWithEmail = async (email: string, pass: string) => {
+    const result = await signInWithEmailAndPassword(auth, email.trim(), pass);
+    if (result.user) {
+      const p = await syncUserProfile(result.user);
+      setProfile(p);
+      closeAuthModal();
+    }
+  };
+
+  const registerWithEmail = async (email: string, pass: string, displayName: string) => {
+    const result = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+    if (result.user) {
+      if (displayName.trim()) {
+        await updateProfile(result.user, { displayName: displayName.trim() });
+      }
+      const p = await syncUserProfile(result.user, displayName.trim());
+      setProfile(p);
+      closeAuthModal();
+    }
+  };
+
+  const logout = async () => {
+    await signOut(auth);
+    setProfile(null);
+    setWatchlist([]);
+    setContinueWatching([]);
+    setFollowedShows([]);
+    setNotifications([]);
+    closeAuthModal();
+  };
+
+  const unreadNotificationsCount = notifications.filter(n => !n.read).length;
 
   return (
     <AuthContext.Provider
@@ -262,6 +449,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         profile,
         watchlist,
+        continueWatching,
+        followedShows,
+        notifications,
+        unreadNotificationsCount,
         loading,
         isAuthModalOpen,
         authModalMode,
@@ -273,10 +464,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         toggleWatchlist,
         isInWatchlist,
-        continueWatching,
         saveContinueWatching,
         removeContinueWatching,
-        getContinueWatchingItem
+        getContinueWatchingItem,
+        toggleFollowShow,
+        isFollowingShow,
+        markNotificationRead,
+        markAllNotificationsRead,
+        checkFollowedShowsForNewEpisodes
       }}
     >
       {children}

@@ -798,6 +798,218 @@ export async function getAllMovieStats(): Promise<MovieStats[]> {
   }
 }
 
+// Followed Shows & Episode Notifications Models for TV Tracking
+export interface FollowedShowItem {
+  userId: string;
+  showId: string;
+  title: string;
+  posterPath?: string;
+  backdropPath?: string;
+  voteAverage?: number;
+  lastAiredSeason?: number;
+  lastAiredEpisode?: number;
+  followedAt: string;
+}
+
+export interface EpisodeNotification {
+  id: string;
+  userId: string;
+  showId: string;
+  showTitle: string;
+  posterPath?: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  episodeName: string;
+  airDate: string;
+  read: boolean;
+  createdAt: string;
+}
+
+/**
+ * Follow a TV series for new episode alerts
+ */
+export async function followShow(item: Omit<FollowedShowItem, 'followedAt'>): Promise<void> {
+  const path = `users/${item.userId}/followedShows/${item.showId}`;
+  const now = new Date().toISOString();
+  const fullItem: FollowedShowItem = {
+    ...cleanFirestoreObject(item) as any,
+    followedAt: now
+  };
+
+  // Local sync
+  try {
+    const raw = localStorage.getItem(`tstream_followed_${item.userId}`);
+    const list: FollowedShowItem[] = raw ? JSON.parse(raw) : [];
+    if (!list.some(s => String(s.showId) === String(item.showId))) {
+      list.unshift(fullItem);
+      localStorage.setItem(`tstream_followed_${item.userId}`, JSON.stringify(list));
+    }
+  } catch {}
+
+  try {
+    const ref = doc(db, 'users', item.userId, 'followedShows', String(item.showId));
+    await setDoc(ref, fullItem);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+/**
+ * Unfollow a TV series
+ */
+export async function unfollowShow(userId: string, showId: string | number): Promise<void> {
+  const path = `users/${userId}/followedShows/${showId}`;
+
+  // Local sync
+  try {
+    const raw = localStorage.getItem(`tstream_followed_${userId}`);
+    if (raw) {
+      const list: FollowedShowItem[] = JSON.parse(raw);
+      const filtered = list.filter(s => String(s.showId) !== String(showId));
+      localStorage.setItem(`tstream_followed_${userId}`, JSON.stringify(filtered));
+    }
+  } catch {}
+
+  try {
+    const ref = doc(db, 'users', userId, 'followedShows', String(showId));
+    await deleteDoc(ref);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+/**
+ * Subscribe to realtime followed shows
+ */
+export function subscribeToFollowedShows(
+  userId: string,
+  onUpdate: (items: FollowedShowItem[]) => void
+): Unsubscribe {
+  // Emit local immediately if available
+  try {
+    const raw = localStorage.getItem(`tstream_followed_${userId}`);
+    if (raw) onUpdate(JSON.parse(raw));
+  } catch {}
+
+  const colRef = collection(db, 'users', userId, 'followedShows');
+  return onSnapshot(
+    colRef,
+    (snapshot) => {
+      const items: FollowedShowItem[] = [];
+      snapshot.forEach((d) => items.push(d.data() as FollowedShowItem));
+      items.sort((a, b) => new Date(b.followedAt).getTime() - new Date(a.followedAt).getTime());
+      try {
+        localStorage.setItem(`tstream_followed_${userId}`, JSON.stringify(items));
+      } catch {}
+      onUpdate(items);
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.GET, `users/${userId}/followedShows`);
+    }
+  );
+}
+
+/**
+ * Add or update an episode notification
+ */
+export async function saveEpisodeNotification(notif: EpisodeNotification): Promise<void> {
+  const path = `users/${notif.userId}/notifications/${notif.id}`;
+  const payload = cleanFirestoreObject(notif);
+
+  // Local sync
+  try {
+    const raw = localStorage.getItem(`tstream_notifs_${notif.userId}`);
+    const list: EpisodeNotification[] = raw ? JSON.parse(raw) : [];
+    if (!list.some(n => n.id === notif.id)) {
+      list.unshift(notif);
+      localStorage.setItem(`tstream_notifs_${notif.userId}`, JSON.stringify(list));
+    }
+  } catch {}
+
+  try {
+    const ref = doc(db, 'users', notif.userId, 'notifications', notif.id);
+    await setDoc(ref, payload, { merge: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+/**
+ * Mark notification as read
+ */
+export async function markNotificationAsRead(userId: string, notifId: string): Promise<void> {
+  const path = `users/${userId}/notifications/${notifId}`;
+
+  try {
+    const raw = localStorage.getItem(`tstream_notifs_${userId}`);
+    if (raw) {
+      const list: EpisodeNotification[] = JSON.parse(raw);
+      const updated = list.map(n => n.id === notifId ? { ...n, read: true } : n);
+      localStorage.setItem(`tstream_notifs_${userId}`, JSON.stringify(updated));
+    }
+  } catch {}
+
+  try {
+    const ref = doc(db, 'users', userId, 'notifications', notifId);
+    await updateDoc(ref, { read: true });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+/**
+ * Mark all notifications as read
+ */
+export async function markAllNotificationsAsRead(userId: string): Promise<void> {
+  try {
+    const raw = localStorage.getItem(`tstream_notifs_${userId}`);
+    if (raw) {
+      const list: EpisodeNotification[] = JSON.parse(raw);
+      const updated = list.map(n => ({ ...n, read: true }));
+      localStorage.setItem(`tstream_notifs_${userId}`, JSON.stringify(updated));
+    }
+  } catch {}
+
+  try {
+    const colRef = collection(db, 'users', userId, 'notifications');
+    const snap = await getDocs(colRef);
+    const promises = snap.docs.map(d => updateDoc(d.ref, { read: true }));
+    await Promise.all(promises);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `users/${userId}/notifications`);
+  }
+}
+
+/**
+ * Subscribe to realtime notifications for logged in user
+ */
+export function subscribeToEpisodeNotifications(
+  userId: string,
+  onUpdate: (items: EpisodeNotification[]) => void
+): Unsubscribe {
+  try {
+    const raw = localStorage.getItem(`tstream_notifs_${userId}`);
+    if (raw) onUpdate(JSON.parse(raw));
+  } catch {}
+
+  const colRef = collection(db, 'users', userId, 'notifications');
+  return onSnapshot(
+    colRef,
+    (snapshot) => {
+      const items: EpisodeNotification[] = [];
+      snapshot.forEach((d) => items.push(d.data() as EpisodeNotification));
+      items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      try {
+        localStorage.setItem(`tstream_notifs_${userId}`, JSON.stringify(items));
+      } catch {}
+      onUpdate(items);
+    },
+    (err) => {
+      handleFirestoreError(err, OperationType.GET, `users/${userId}/notifications`);
+    }
+  );
+}
+
 export {
   signInWithPopup,
   signInWithEmailAndPassword,

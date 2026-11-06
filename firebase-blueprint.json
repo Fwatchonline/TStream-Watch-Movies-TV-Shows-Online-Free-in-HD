@@ -10,7 +10,11 @@
         "displayName": { "type": "string" },
         "photoURL": { "type": "string" },
         "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" }
+        "updatedAt": { "type": "string" },
+        "playerSettings": {
+          "type": "object",
+          "description": "User custom streaming server, subtitle preferences, and player settings"
+        }
       },
       "required": ["userId", "email"]
     },
@@ -103,6 +107,85 @@
         "tvUrlTemplate": { "type": "string" }
       },
       "required": ["id", "name", "type", "enabled"]
+    },
+    "FollowedShow": {
+      "title": "FollowedShow",
+      "description": "TV series followed by a registered user to receive new episode notifications",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "showId": { "type": "string" },
+        "title": { "type": "string" },
+        "posterPath": { "type": "string" },
+        "backdropPath": { "type": "string" },
+        "voteAverage": { "type": "number" },
+        "lastAiredSeason": { "type": "number" },
+        "lastAiredEpisode": { "type": "number" },
+        "followedAt": { "type": "string" }
+      },
+      "required": ["userId", "showId", "title", "followedAt"]
+    },
+    "EpisodeNotification": {
+      "title": "EpisodeNotification",
+      "description": "Notification alert sent to a user when a followed TV series releases a new episode",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "showId": { "type": "string" },
+        "showTitle": { "type": "string" },
+        "posterPath": { "type": "string" },
+        "seasonNumber": { "type": "number" },
+        "episodeNumber": { "type": "number" },
+        "episodeName": { "type": "string" },
+        "airDate": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "showId", "showTitle", "seasonNumber", "episodeNumber", "read", "createdAt"]
+    },
+    "SiteVisit": {
+      "title": "SiteVisit",
+      "description": "Individual visitor page view log for real-time site analytics",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "path": { "type": "string" },
+        "referrer": { "type": "string" },
+        "device": { "type": "string" },
+        "browser": { "type": "string" },
+        "os": { "type": "string" },
+        "isRegistered": { "type": "boolean" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "path", "timestamp", "device", "browser"]
+    },
+    "DailyAnalytics": {
+      "title": "DailyAnalytics",
+      "description": "Daily aggregated website traffic statistics",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "pageViews": { "type": "number" },
+        "uniqueVisits": { "type": "number" },
+        "registeredVisits": { "type": "number" },
+        "guestVisits": { "type": "number" }
+      },
+      "required": ["date", "pageViews"]
+    },
+    "AnalyticsSummary": {
+      "title": "AnalyticsSummary",
+      "description": "Overall lifetime website metrics and registered users counter",
+      "type": "object",
+      "properties": {
+        "totalVisits": { "type": "number" },
+        "totalPageViews": { "type": "number" },
+        "registeredUsersCount": { "type": "number" },
+        "lastUpdated": { "type": "string" }
+      },
+      "required": ["totalVisits"]
     }
   },
   "firestore": {
@@ -118,6 +201,14 @@
       "schema": { "$ref": "#/entities/ContinueWatchingItem" },
       "description": "User private continue watching progress records"
     },
+    "/users/{userId}/followedShows/{showId}": {
+      "schema": { "$ref": "#/entities/FollowedShow" },
+      "description": "TV series followed by the registered user for episode tracking"
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/EpisodeNotification" },
+      "description": "New episode notification records delivered to the user"
+    },
     "/reports/{reportId}": {
       "schema": { "$ref": "#/entities/ReportItem" },
       "description": "Playback reports and problem tickets visible in the admin panel"
@@ -129,6 +220,18 @@
     "/systemSettings/{settingId}": {
       "schema": { "$ref": "#/entities/EmbedServerConfig" },
       "description": "Global application and embed player configurations managed by administrator"
+    },
+    "/analytics_visits/{visitId}": {
+      "schema": { "$ref": "#/entities/SiteVisit" },
+      "description": "Real-time individual site visit logs for administrator analytics"
+    },
+    "/analytics_daily/{dateId}": {
+      "schema": { "$ref": "#/entities/DailyAnalytics" },
+      "description": "Daily aggregated site visit statistics"
+    },
+    "/analytics_summary/{summaryId}": {
+      "schema": { "$ref": "#/entities/AnalyticsSummary" },
+      "description": "High-level analytics overview and aggregate counters"
     }
   }
 }

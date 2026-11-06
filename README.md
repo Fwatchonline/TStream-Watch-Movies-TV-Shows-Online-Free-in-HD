@@ -1,187 +1,323 @@
-# TStream — Movies & TV Shows [LIVE DEMO ](https://tstream.online)
+# TStream — Watch Movies & TV Shows Online in HD & 4K
 
-A modern, dark-themed movie and television discovery interface built with **React, TypeScript, and Vite**. TStream brings together a browsable media catalogue, title details, season and episode navigation, streaming-provider integration, subtitles, and a personal viewing library.
+[![Live Demo](https://img.shields.io/badge/LIVE_DEMO-tstream.online-F5C400?style=for-the-badge&logo=google-chrome&logoColor=black)](https://tstream.online)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-6-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vite.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind-4.0-38B2AC?style=flat-square&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
+[![Google Analytics](https://img.shields.io/badge/Google_Analytics-GA4_G--ZD66WMB19X-E37400?style=flat-square&logo=google-analytics&logoColor=white)](https://analytics.google.com/)
 
-> **Project status:** Community/developer project. Metadata, playback sources, and subtitle availability depend on external services and may change without notice.
+A modern, high-performance, dark-themed streaming web application for discovering and watching thousands of movies and TV series in **4K UHD and 1080p Full HD**. Features fast multi-server HLS playback, multilingual subtitles (Serbian, Croatian, Bosnian, English, and more), customizable embed providers via an Admin Console, zero advertisements, and complete Google Search Engine Optimization (SEO).
 
-## Features
+👉 **Live Production URL:** [https://tstream.online](https://tstream.online)
 
-- **Discover and browse** movies and TV shows, including trending titles, top-rated titles, collections, tags, platform categories, and alphabetical browsing.
-- **Search and filter** the catalogue by title and supported catalogue filters.
-- **Detailed title pages** with artwork, descriptions, ratings, cast information, trailers where available, related titles, and franchise/collection information.
-- **Movie and TV playback pages** with season and episode selection for television series.
-- **Streaming integrations** that resolve supported providers and handle HLS playlists and other supported stream formats through the project's stream API middleware.
-- **Subtitle lookup** through configured subtitle sources, with language-code normalization for languages including Serbian, Croatian, Bosnian, and English.
-- **Personal library** with a watchlist, continue-watching entries, viewing history, and user preferences stored in the browser.
-- **Collections and discovery tools** to explore related titles and franchises.
-- **Responsive, dark-themed interface** built for desktop and smaller screens.
-- **Utility pages** for legal/contact information and an operations/diagnostics interface.
+---
 
-Some external services and diagnostic indicators may be unavailable or demonstrative in the current implementation. Do not assume that every provider, subtitle source, or displayed service status is live or guaranteed to work.
+## 📑 Sadržaj / Table of Contents
+1. [Glavne Karakteristike / Features](#glavne-karakteristike--features)
+2. [Instalacija na VPS (Ubuntu / Debian Linux)](#1-instalacija-na-vps-server-ubuntu--debian)
+3. [Ažuriranje na VPS Serveru (Update Guide)](#2-ažuriranje-koda-na-vps-serveru-update-guide)
+4. [Instalacija i Ažuriranje na Vercel-u](#3-instalacija-i-update-na-vercel)
+5. [Docker & Ostali Serveri (Netlify, Cloudflare)](#4-docker--ostale-platforme)
+6. [Google Analitika & Google Search Console SEO](#5-google-analitika--google-search-console-seo)
+7. [Admin Panel & Upravljanje Plejerima](#6-admin-panel--upravljanje-serverima)
 
-## Technology stack
+---
 
-- [React 19](https://react.dev/)
-- [TypeScript](https://www.typescriptlang.org/)
-- [Vite](https://vite.dev/)
-- [Tailwind CSS 4](https://tailwindcss.com/)
-- [Lucide React](https://lucide.dev/)
-- [hls.js](https://github.com/video-dev/hls.js)
-- TMDB for movie and television metadata and artwork
-- External streaming and subtitle services configured in the source code
+## Glavne Karakteristike / Features
 
-## Requirements
+- 🎬 **Katalog Filmova i Serija**: Hiljade naslova, trending filmovi, najbolje ocenjeni, franšize, kolekcije, A-Z pretraga i platforme (Netflix, HBO, Disney+, Prime, Apple TV).
+- ⚡ **Multi-Server HLS Plejer**: Izbor između direktnog HLS video plejera i podesivih Embed servera (HD, Ultra, Backup).
+- 💬 **Višejezični Titlovi**: Automatska sinhronizacija i pretraga titlova (srpski, hrvatski, bosanski, engleski...).
+- 📊 **Google Analitika (GA4)**: Unapred konfigurisana Google Analytics integracija (`G-ZD66WMB19X`) sa real-time praćenjem svakog klika i rute u SPA okruženju.
+- 🔍 **SEO & XML Mape Sajta**: Automatizovani sitemap generator (`/sitemap.xml`, `/sitemap-movies.xml`, `/sitemap-tv.xml`), kanonski linkovi i Schema.org JSON-LD structured data.
+- 🛡️ **Zaštićeni Admin Panel**: Dostupan isključivo administratoru (`miroslav87@gmail.com`) za dodavanje novih video servera i rešavanje korisničkih prijava.
 
-- Node.js **22 or newer** recommended
-- npm
-- Git
-- A TMDB API key for your own API configuration
-- Any optional third-party API credentials required by the integrations you choose to enable
+---
 
-## Getting started
+## 1. Instalacija na VPS Server (Ubuntu / Debian)
 
-### 1. Clone the repository
+Ovo uputstvo opisuje kompletnu instalaciju na čistom **Ubuntu 22.04 / 24.04 LTS** ili **Debian 12** VPS serveru koristeći **Node.js 22**, **Nginx** i besplatan **Let's Encrypt SSL sertifikat**.
 
+### Korak 1: Priprema VPS servera i instalacija Node.js 22
+Prijavite se na vaš VPS putem SSH-a:
 ```bash
-git clone https://github.com/Fwatchonline/TStream-Watch-Movies-TV-Shows-Online-Free-in-HD.git
-cd TStream-Watch-Movies-TV-Shows-Online-Free-in-HD
+ssh root@tvoja_vps_ip_adresa
 ```
 
-### 2. Install dependencies
+Ažurirajte pakete i instalirajte neophodne alate:
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y curl git nginx build-essential
+```
 
+Instalirajte **Node.js 22 LTS**:
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+sudo npm install -g pm2
+node -v   # Treba da ispise v22.x.x
+npm -v
+```
+
+---
+
+### Korak 2: Kloniranje repozitorijuma
+Klonirajte projekat u preporučeni direktorijum `/var/www/tstream`:
+```bash
+sudo mkdir -p /var/www/tstream
+sudo chown -R $USER:$USER /var/www/tstream
+cd /var/www/tstream
+
+git clone https://github.com/Fwatchonline/TStream-Watch-Movies-TV-Shows-Online-Free-in-HD.git .
+```
+
+---
+
+### Korak 3: Instalacija paketa i kreiranje konfiguracije
+Instalirajte sve zavisnosti:
 ```bash
 npm install
 ```
 
-### 3. Configure environment variables
-
-Create a local environment file from the example:
-
+Kreirajte `.env` datoteku:
 ```bash
-cp .env.example .env
+nano .env
 ```
-
-Edit `.env` and set values relevant to your deployment. For example:
-
+Upišite sledeće promenljive (prilagodite ukoliko imate sopstveni TMDB ključ):
 ```dotenv
-# Optional: Google Gemini integration, if enabled
-GEMINI_API_KEY=your_gemini_api_key
-
-# The URL where the application is running
-APP_URL=http://localhost:3000
-
-# Optional: your own TMDB API key
-VITE_TMDB_API_KEY=your_tmdb_api_key
+VITE_TMDB_API_KEY=844dba0bfd8f3a4f3799f6130ef9e335
+APP_URL=https://tstream.online
+PORT=3000
 ```
+*(Sačuvajte pritiskom na `Ctrl + O`, `Enter`, pa izađite sa `Ctrl + X`)*.
 
-The repository's `.env.example` documents `GEMINI_API_KEY` and `APP_URL`. `VITE_TMDB_API_KEY` is read by the TMDB service when configured; the current source also contains a fallback API key. Before publishing or operating your own deployment, review the TMDB key handling and replace/remove any embedded fallback as appropriate.
+---
 
-**Security note:** Variables prefixed with `VITE_` are exposed to browser-side code in the built application. Never put private server credentials in a `VITE_` variable. For production, consider accessing TMDB through a server-side endpoint if you need to keep credentials off the client.
-
-### 4. Start the development server
-
+### Korak 4: Build aplikacije (Kompajliranje i generisanje Sitemapa)
+Pokrenite automatizovani build:
 ```bash
-npm run dev
+npm run build
+```
+Ova komanda automatski:
+1. Pokreće `scripts/generate-sitemaps.cjs` i pravi sveže XML mape sajta u `/dist` i `/public`.
+2. Kompajlira TypeScript i Tailwind CSS u brze produkcijske fajlove u folderu `/dist`.
+
+---
+
+### Korak 5: Pokretanje servisa u pozadini preko PM2
+Pokrenite aplikaciju kao trajni sistemski proces:
+```bash
+pm2 start npm --name "tstream" -- run preview -- --port 3000 --host 0.0.0.0
+pm2 save
+pm2 startup
+```
+*(Kopirajte i pokrenite komandu koju vam PM2 izbaci da bi se aplikacija automatski dizala nakon restarta VPS-a).*
+
+---
+
+### Korak 6: Konfiguracija Nginx Web Servera
+Kreirajte Nginx konfiguracioni fajl za vaš domen:
+```bash
+sudo nano /etc/nginx/sites-available/tstream.online
+```
+Zalepite sledeću proverenu konfiguraciju (koja uključuje SPA fallback i zaštitu od 502 Bad Gateway grešaka):
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name tstream.online www.tstream.online;
+
+    root /var/www/tstream/dist;
+    index index.html;
+
+    # Buffer & Timeout podesavanja za stabilan striming
+    client_max_body_size 50M;
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 120s;
+    proxy_read_timeout 120s;
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+
+    # Gzip kompresija
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json image/svg+xml;
+
+    # Kesiranje statickih fajlova
+    location ~* \.(?:ico|css|js|gif|jpe?g|png|svg|woff2?|webp|mp4|webm|m3u8|ts)$ {
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
+        try_files $uri =404;
+    }
+
+    # XML Sitemaps & robots.txt
+    location ~* \.(?:xml|txt)$ {
+        expires 1d;
+        add_header Cache-Control "public, no-transform";
+        try_files $uri =404;
+    }
+
+    # Proxy ka Node.js servisu za stream API rute
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # SPA routing fallback: /watch/movie/..., /movies itd. uvek serviraju index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    error_page 404 /index.html;
+}
 ```
 
-The configured Vite development server listens on port **3000** and binds to `0.0.0.0`. Open:
+Aktivirajte sajt i testirajte Nginx:
+```bash
+sudo ln -sf /etc/nginx/sites-available/tstream.online /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
 
+---
+
+### Korak 7: Instalacija besplatnog SSL Sertifikata (HTTPS)
+Instalirajte Certbot i povucite automatski SSL sertifikat za vaš domen:
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d tstream.online -d www.tstream.online
+```
+Pratite uputstva na ekranu (unesite vaš email i izaberite opciju 2 za automatski HTTPS redirect).
+
+Čestitamo! Vaš sajt je sada aktivan na **`https://tstream.online`**! 🎉
+
+---
+
+## 2. Ažuriranje Koda na VPS Serveru (Update Guide)
+
+Kada na GitHub izbacite nove izmene ili ažurirate kôd, ažuriranje na vašem VPS-u možete uraditi na dva načina:
+
+### Opcija A: Automatsko ažuriranje jednom komandom (Preporučeno)
+U repozitorijumu se nalazi skripta `update-vps.sh`. Dovoljno je ući u folder i pokrenuti:
+```bash
+cd /var/www/tstream
+chmod +x scripts/update-vps.sh
+./scripts/update-vps.sh
+```
+
+### Opcija B: Ručno ažuriranje korak po korak
+Ako želite da ručno ispratite svaki korak:
+```bash
+# 1. Ulazak u folder projekta
+cd /var/www/tstream
+
+# 2. Preuzimanje najnovijeg koda sa GitHub-a
+git pull origin main
+
+# 3. Instalacija eventualno novih npm paketa
+npm install
+
+# 4. Ponovni build i regeneracija sitemap-a
+npm run build
+
+# 5. Restartovanje PM2 procesa bez prekida u radu (Zero-downtime)
+pm2 reload tstream
+
+# 6. Osvežavanje Nginx-a
+sudo systemctl reload nginx
+```
+
+---
+
+## 3. Instalacija i Update na Vercel
+
+Ako želite da hostujete frontend na **Vercel** platformi sa globalnim CDN-om:
+
+### Korak 1: Povezivanje na Vercel
+1. Otvorite [Vercel Dashboard](https://vercel.com/) i kliknite na **Add New Project**.
+2. Povežite vaš GitHub repozitorijum `TStream-Watch-Movies-TV-Shows-Online-Free-in-HD`.
+3. Vercel će automatski prepoznati **Vite** radni okvir.
+4. Podešavanja projekta:
+   - **Framework Preset**: `Vite`
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+5. U sekciji **Environment Variables** dodajte:
+   - `VITE_TMDB_API_KEY`: `844dba0bfd8f3a4f3799f6130ef9e335`
+   - `APP_URL`: `https://tstream.online` (ili vaš Vercel domen)
+6. Kliknite **Deploy**.
+
+Repozitorijum već sadrži `vercel.json` datoteku koja automatski konfiguriše SPA rewrites (tako da sve rute poput `/watch/movie/:slug` i `/tv-shows` rade bez 404 grešaka).
+
+### Ažuriranje na Vercel-u (Automatski CD/CI)
+Svaki put kada uradite `git push` na granu `main`, Vercel automatski pokreće build, generiše nove sitemape i plasira osveženu verziju sajta u roku od 60 sekundi.
+
+---
+
+## 4. Docker & Ostale Platforme
+
+### Pokretanje preko Docker-a
+Kreirajte kontejner lokalno ili na serveru:
+```bash
+# Izgradnja slike
+docker build -t tstream:latest .
+
+# Pokretanje kontejnera na portu 3000
+docker run -d -p 3000:3000 --name tstream-app tstream:latest
+```
+
+### Netlify
+Za Netlify, `dist` folder sadrži sve potrebne datoteke. U folderu `public/` kreirajte datoteku `_redirects` sa sadržajem:
 ```text
-http://localhost:3000
+/*    /index.html   200
 ```
 
-### 5. Build and preview
+---
 
-Create a production frontend build:
+## 5. Google Analitika & Google Search Console SEO
 
-```bash
-npm run build
-```
+### Google Analitika (GA4)
+U aplikaciju je integrisan zvanični Google tag:
+- **Measurement ID**: **`G-ZD66WMB19X`**
+- Tag je ugrađen u `<head>` sekciju `index.html`.
+- Zahvaljujući rešenju u `src/utils/seo.ts`, Google Analitika beleži preglede stranica u realnom vremenu pri svakoj navigaciji u okviru Single Page Aplikacije (`page_view` događaji).
 
-Preview the build locally:
+### XML Sitemaps za Google Search Console
+Aplikacija automatski generiše validne mape sajta usklađene sa Google standardima:
+- **`https://tstream.online/sitemap.xml`** (Glavni Sitemap Indeks)
+- **`https://tstream.online/sitemap-main.xml`** (Sve stranice, kategorije, OTT platforme i A-Z)
+- **`https://tstream.online/sitemap-movies.xml`** (Svi popularni filmovi sa direktnim watch linkovima)
+- **`https://tstream.online/sitemap-tv.xml`** (Sve TV serije)
 
-```bash
-npm run preview
-```
+U **Google Search Console** idite na sekciju **Sitemaps**, unesite `sitemap.xml` i kliknite **Submit**.
 
-Vite writes the compiled frontend to `dist/`.
+---
 
-## Available scripts
+## 6. Admin Panel & Upravljanje Serverima
 
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Start the Vite development server on port 3000. |
-| `npm run build` | Build the frontend for production. |
-| `npm run preview` | Preview the production build using Vite. |
-| `npm run lint` | Run the TypeScript compiler check (`tsc --noEmit`). |
-| `npm test` | Run the pagination and subtitle-normalization tests. |
-| `npm run clean` | Remove the generated `dist` directory and `server.js` if present. |
+TStream poseduje integrisan administrativni panel za upravljanje video plejerima i praćenje korisničkih prijava.
 
-Run the checks before submitting changes:
+- **Pristup**: `/admin` (ili preko dugmeta u meniju).
+- **Zaštita pristupa**: Pristup je dozvoljen **isključivo** administratoru sa e-mail adresom **`miroslav87@gmail.com`**. Svi ostali korisnici dobijaju bezbednosni ekran sa obaveštenjem o restrikciji.
+- **Opcije u Admin Panelu**:
+  1. **Playback Reports**: Prikaz korisničkih prijava za probleme sa zvukom, seckanjem, crnim ekranom ili netačnom epizodom, uz mogućnost označavanja statusa (*Open*, *Investigating*, *Resolved*).
+  2. **Embed Players & Servers**: Dodavanje novih embed plejera, uključivanje/isključivanje postojećih servera (Server 1 Direct HLS, Server 2 HD, Server 3 Backup, Server 4 Ultra), promena redosleda i podešavanje URL šablona sa `{id}`, `{season}` i `{episode}` varijablama.
+  3. **Real Views Counter**: Pregled baze stvarnih pregleda i korisničkih ocena sačuvanih u Firestore bazi.
+  4. **Diagnostics**: Provera statusa eksternih CDN čvorova i TMDB API konekcije.
 
-```bash
-npm run lint
-npm test
-npm run build
-```
+---
 
-## Main application routes
+## 📜 Licenca i Pravno Obaveštenje (DMCA)
 
-The app reads the current browser path and supports routes including:
+TStream koristi TMDB API za metapodatke, postere i opise filmova, ali nije podržan niti sertifikovan od strane TMDB-a. Striming provajderi i izvori titlova su eksterni servisi trećih strana. Korisnici i administratori su dužni da poštuju autorska prava i zakonske propise u svojoj jurisdikciji.
 
-| Route | Purpose |
-| --- | --- |
-| `/` | Home and discovery page |
-| `/movies` | Movie catalogue |
-| `/tv-shows` | TV-show catalogue |
-| `/trending` | Trending titles |
-| `/top-rated` | Top-rated titles |
-| `/collections` | Movie and franchise collections |
-| `/search?q=...` | Search results |
-| `/tags` | Browse tags |
-| `/platform/:platform` | Browse by platform/category |
-| `/az/:letter` | Alphabetical browsing |
-| `/movie/:id` | Movie details |
-| `/tv/:id` | TV-show details |
-| `/watch/movie/:id` | Movie playback page |
-| `/watch/tv/:id/:season/:episode` | TV episode playback page |
-| `/library` | Watchlist, continue watching, history, and settings |
-| `/admin` | Operations/diagnostics interface |
-
-When deploying behind Nginx, Apache, or another web server, configure single-page application history fallback so valid application routes serve `index.html` rather than returning a server-side 404.
-
-## Streaming API and production deployment
-
-The project defines two streaming endpoints in `vite.config.ts`:
-
-- `GET /api/stream-resolve` — resolves stream information for a TMDB ID, with optional season, episode, and provider parameters.
-- `GET /api/stream-proxy` — proxies supported stream requests and rewrites HLS playlists so referenced resources can be requested through the proxy.
-
-**Important:** These endpoints are registered through Vite's development and preview middleware. A static deployment of the generated `dist/` folder does **not** run this middleware and therefore does not provide the streaming API by itself. For production, deploy a server/runtime that implements and mounts equivalent endpoints, or build a separate backend and point the frontend to it.
-
-The proxy fetches external URLs, so it must be secured before public production use. Add strict destination/hostname allowlists, block private and link-local IP ranges, validate redirects, set timeouts and response-size limits, and apply rate limiting. Do not expose an unrestricted URL-fetching proxy to the public internet.
-
-## Data and storage
-
-- Movie/TV metadata and images are obtained from TMDB and/or the project's local fallback catalogue.
-- Watchlist, continue-watching information, history, and settings are stored in the user's browser. They are not automatically synchronized between browsers or devices unless a synchronization backend is added.
-- Stream and subtitle availability is controlled by independent third-party services and can vary by title, region, device, or time.
-
-## Contributing
-
-Contributions and bug reports are welcome. Before opening a pull request:
-
-1. Keep changes focused and describe the user-visible impact.
-2. Run `npm run lint`, `npm test`, and `npm run build`.
-3. Do not commit `.env` files, API credentials, session tokens, or other secrets.
-4. Document any new environment variables and third-party integrations.
-
-## Attribution and legal notice
-
-TStream uses TMDB metadata and artwork. This product uses the TMDB API but is **not endorsed or certified by TMDB**. See [TMDB](https://www.themoviedb.org/) for its terms and attribution requirements.
-
-Streaming and subtitle integrations may rely on third-party services. TStream does not control their uptime, content, advertising, access restrictions, or licensing status. Deployers are responsible for complying with applicable laws, service terms, copyright rules, and any required permissions in their jurisdiction. Only access or distribute media when you have the necessary rights.
-
-## License
-
-No `LICENSE` file was identified in the repository when this README was prepared. Unless the project owner adds a license, reuse and redistribution are not automatically granted. Add a license file to state the terms under which others may use the project.
+© 2026 [TStream.online](https://tstream.online). Sva prava zadržana.

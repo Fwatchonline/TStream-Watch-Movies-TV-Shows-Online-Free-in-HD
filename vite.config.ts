@@ -3,7 +3,10 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
-import { resolveAllDirectStreams } from './src/services/directStreamEngine';
+import { resolveAllDirectStreams } from './src/services/directStreamEngine.ts';
+import { seoHtmlPlugin } from './scripts/seoHtmlPlugin.ts';
+import { getRequestListener } from '@hono/node-server';
+import serverApp from './src/server/app.ts';
 
 function rewriteM3u8(manifest: string, baseUrl: string, ref?: string, orig?: string): string {
   const base = new URL(baseUrl);
@@ -33,8 +36,15 @@ function rewriteM3u8(manifest: string, baseUrl: string, ref?: string, orig?: str
 }
 
 function streamApiPlugin(): Plugin {
+  const honoListener = getRequestListener(serverApp.fetch);
+
   const handleRequest = async (req: any, res: any, next: any) => {
     const url = req.url || '';
+
+    // Route new Hono streaming proxy and orchestrator
+    if (url.startsWith('/api/proxy') || url.startsWith('/api/stream/')) {
+      return honoListener(req, res);
+    }
 
     // Handle CORS preflight
     if (req.method === 'OPTIONS' && (url.startsWith('/api/stream-resolve') || url.startsWith('/api/stream-proxy'))) {
@@ -188,6 +198,7 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       streamApiPlugin(),
+      seoHtmlPlugin(),
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: [
@@ -230,6 +241,7 @@ export default defineConfig(() => {
           ]
         },
         workbox: {
+          maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           runtimeCaching: [
             {
@@ -284,7 +296,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(process.cwd()),
       },
     },
     server: {

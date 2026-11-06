@@ -476,9 +476,10 @@ export async function fetchCatalog(
       : (sortBy === 'vote_average.desc' ? '&vote_count.gte=80' : '');
     const yearQueryMovie = extraFilters.year ? `&primary_release_year=${extraFilters.year}` : '';
     const yearQueryTv = extraFilters.year ? `&first_air_date_year=${extraFilters.year}` : '';
+    const countryQuery = extraFilters.country ? `&with_origin_country=${extraFilters.country}` : '';
 
     if (targetType === 'movie') {
-      const movUrl = `${TMDB_BASE_URL}/discover/movie?api_key=${apiKey}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryMovie}`;
+      const movUrl = `${TMDB_BASE_URL}/discover/movie?api_key=${apiKey}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryMovie}${countryQuery}`;
       const res = await fetch(movUrl);
       if (res.ok) {
         const data = await res.json();
@@ -493,7 +494,7 @@ export async function fetchCatalog(
         };
       }
     } else if (targetType === 'tv') {
-      const tvUrl = `${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryTv}`;
+      const tvUrl = `${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryTv}${countryQuery}`;
       const res = await fetch(tvUrl);
       if (res.ok) {
         const data = await res.json();
@@ -509,8 +510,8 @@ export async function fetchCatalog(
       }
     } else {
       // 'all' Content: Fetch discover movie & discover tv in parallel
-      const movUrl = `${TMDB_BASE_URL}/discover/movie?api_key=${apiKey}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryMovie}`;
-      const tvUrl = `${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryTv}`;
+      const movUrl = `${TMDB_BASE_URL}/discover/movie?api_key=${apiKey}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryMovie}${countryQuery}`;
+      const tvUrl = `${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryTv}${countryQuery}`;
 
       const [movRes, tvRes] = await Promise.all([
         fetch(movUrl).catch(() => null),

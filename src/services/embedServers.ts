@@ -17,9 +17,9 @@ export interface EmbedServerConfig {
 export const DEFAULT_SERVERS: EmbedServerConfig[] = [
   {
     id: 'server_1_direct',
-    name: 'TStream Server (Direktan Stream)',
+    name: 'TStream Multi-Server (Vector, Valence, Eclipse, BoxMovie, Apex)',
     type: 'direct',
-    badge: 'Auto',
+    badge: 'Fastest',
     dotColor: '#34D399', // emerald
     enabled: true,
     order: 1,

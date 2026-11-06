@@ -24,6 +24,7 @@ import {
 interface CollectionsPageProps {
   onSelectMedia: (item: MediaItem) => void;
   onWatchMedia: (item: MediaItem) => void;
+  initialCollectionId?: number | null;
 }
 
 const CollectionCoverImage: React.FC<{
@@ -78,14 +79,22 @@ const CollectionCoverImage: React.FC<{
 
 export const CollectionsPage: React.FC<CollectionsPageProps> = ({
   onSelectMedia,
-  onWatchMedia
+  onWatchMedia,
+  initialCollectionId
 }) => {
   const [collections, setCollections] = useState<DiscoveredCollection[]>([]);
   const [selectedCollection, setSelectedCollection] = useState<CollectionSummary | null>(null);
   const [loadingCol, setLoadingCol] = useState(false);
   const [filterQuery, setFilterQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'auto' | 'popular'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'action' | 'fantasy' | 'crime' | 'family' | 'horror'>('all');
+  const [sortBy, setSortBy] = useState<'curated' | 'films' | 'title'>('curated');
   const [isSearchingOnline, setIsSearchingOnline] = useState(false);
+
+  const ACTION_COLLECTION_IDS = [10, 2344, 726871, 8650, 87096, 328, 8945, 531241, 86311, 448150, 645, 748, 284433, 131292, 131296, 528, 173710, 264, 391860, 558216, 573436, 14890];
+  const FANTASY_COLLECTION_IDS = [119, 1241, 295, 84, 131635, 33514, 121938, 495527, 2980];
+  const CRIME_COLLECTION_IDS = [404609, 263, 87359, 9485, 230, 31562, 1575, 1570, 304, 553717, 86119];
+  const FAMILY_COLLECTION_IDS = [2150, 10194, 8354, 86066, 77816, 87118, 14740, 89137, 720879];
+  const HORROR_COLLECTION_IDS = [656, 2602, 228446, 521226, 8091, 399];
 
   const loadCollections = () => {
     const list = getDiscoveredCollections();
@@ -120,6 +129,15 @@ export const CollectionsPage: React.FC<CollectionsPageProps> = ({
       setLoadingCol(false);
     }
   };
+
+  useEffect(() => {
+    if (initialCollectionId && collections.length > 0) {
+      const found = collections.find(c => c.id === initialCollectionId);
+      if (found) {
+        handleOpenCollection(found);
+      }
+    }
+  }, [initialCollectionId, collections]);
 
   // Allow user to search TMDB for new movie franchises on-the-fly
   const handleFranchiseSearch = async (e: React.FormEvent) => {
@@ -169,17 +187,26 @@ export const CollectionsPage: React.FC<CollectionsPageProps> = ({
     }
   };
 
-  const filteredCollections = collections.filter(col => {
+  let filteredCollections = collections.filter(col => {
     const matchesSearch =
       col.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
       (col.overview && col.overview.toLowerCase().includes(filterQuery.toLowerCase()));
 
     if (!matchesSearch) return false;
 
-    if (activeTab === 'auto') return col.autoDiscovered;
-    if (activeTab === 'popular') return !col.autoDiscovered || col.parts.length >= 4;
+    if (activeTab === 'action') return ACTION_COLLECTION_IDS.includes(col.id);
+    if (activeTab === 'fantasy') return FANTASY_COLLECTION_IDS.includes(col.id);
+    if (activeTab === 'crime') return CRIME_COLLECTION_IDS.includes(col.id);
+    if (activeTab === 'family') return FAMILY_COLLECTION_IDS.includes(col.id);
+    if (activeTab === 'horror') return HORROR_COLLECTION_IDS.includes(col.id);
     return true;
   });
+
+  if (sortBy === 'title') {
+    filteredCollections = [...filteredCollections].sort((a, b) => a.name.localeCompare(b.name));
+  } else if (sortBy === 'films') {
+    filteredCollections = [...filteredCollections].sort((a, b) => (b.parts?.length || 0) - (a.parts?.length || 0));
+  }
 
   return (
     <div className="max-w-[1520px] mx-auto px-3 sm:px-5 lg:px-6 py-6 pb-20">
@@ -237,39 +264,84 @@ export const CollectionsPage: React.FC<CollectionsPageProps> = ({
           </button>
         </form>
 
-        {/* Category Tabs */}
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setActiveTab('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'all'
-                ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
-                : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
-            }`}
-          >
-            All ({collections.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('auto')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-              activeTab === 'auto'
-                ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
-                : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
-            }`}
-          >
-            <Sparkles className="w-3 h-3" />
-            <span>Auto-Created</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('popular')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'popular'
-                ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
-                : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
-            }`}
-          >
-            Major Franchises
-          </button>
+        {/* Category Tabs & Sort */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              onClick={() => setActiveTab('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'all'
+                  ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
+                  : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
+              }`}
+            >
+              All ({collections.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('action')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'action'
+                  ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
+                  : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
+              }`}
+            >
+              Action &amp; Sci-Fi
+            </button>
+            <button
+              onClick={() => setActiveTab('fantasy')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'fantasy'
+                  ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
+                  : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
+              }`}
+            >
+              Adventure &amp; Fantasy
+            </button>
+            <button
+              onClick={() => setActiveTab('crime')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'crime'
+                  ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
+                  : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
+              }`}
+            >
+              Crime &amp; Thriller
+            </button>
+            <button
+              onClick={() => setActiveTab('family')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'family'
+                  ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
+                  : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
+              }`}
+            >
+              Animation &amp; Family
+            </button>
+            <button
+              onClick={() => setActiveTab('horror')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'horror'
+                  ? 'bg-[#F5C400] text-black shadow-sm font-extrabold'
+                  : 'bg-[#232326] text-[#A6A6AC] hover:text-white border border-[#3A3A40]'
+              }`}
+            >
+              Horror &amp; Mystery
+            </button>
+          </div>
+
+          {/* Sort Selector */}
+          <div className="flex items-center gap-1.5 sm:pl-2 sm:border-l border-[#3A3A40]">
+            <span className="text-[10px] uppercase font-bold text-[#A6A6AC]">Sort:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="bg-[#232326] text-xs font-bold text-white border border-[#3A3A40] rounded-lg px-2 py-1 focus:outline-none focus:border-[#F5C400] cursor-pointer"
+            >
+              <option value="curated">Featured</option>
+              <option value="films">Most Films</option>
+              <option value="title">A-Z</option>
+            </select>
+          </div>
         </div>
       </div>
 

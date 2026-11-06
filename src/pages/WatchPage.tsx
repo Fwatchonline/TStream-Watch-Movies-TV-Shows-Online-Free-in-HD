@@ -14,16 +14,20 @@ import {
   Sparkles,
   Maximize2,
   Moon,
-  Volume2
+  Volume2,
+  BellRing
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import { MediaDetail, MediaItem, TVDetail, Episode } from '../types/media';
 import { getMediaDetail, fetchSeasonEpisodes } from '../services/tmdb';
 import { isInWatchlist, toggleWatchlist } from '../services/storage';
 import { StreamingPlayer, PlayerMode, WebServer } from '../components/StreamingPlayer';
 import { RatingViewsBar } from '../components/RatingViewsBar';
+import { PlayerLoadingSpinner } from '../components/PlayerLoadingSpinner';
 import { ShareModal } from '../components/ShareModal';
 import { ReportIssueModal } from '../components/ReportIssueModal';
 import { EmbedServerConfig, subscribeToEmbedServers, resolveEmbedUrl, DEFAULT_SERVERS } from '../services/embedServers';
+import { getUserPlayerSettings } from '../services/playerSettings';
 import { createMediaSlug } from '../utils/slug';
 import { updateMediaSEO } from '../utils/seo';
 
@@ -44,20 +48,26 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   onBackToDetails,
   onSelectMedia
 }) => {
+  const { user, toggleFollowShow, isFollowingShow } = useAuth();
   const [detail, setDetail] = useState<MediaDetail | null>(null);
   const [currentSeason, setCurrentSeason] = useState(season);
   const [currentEpisode, setCurrentEpisode] = useState(episode);
   const [loading, setLoading] = useState(true);
 
-  // Player & Server states
-  const [playerMode, setPlayerMode] = useState<PlayerMode>('direct');
-  const [activeWebServer, setActiveWebServer] = useState<WebServer>('fmov');
+  // Player & Server states from user settings
+  const userSettings = getUserPlayerSettings();
+  const [playerMode, setPlayerMode] = useState<PlayerMode>(() => {
+    return userSettings.defaultServerId === 'server_1_direct' ? 'direct' : 'web';
+  });
+  const [activeWebServer, setActiveWebServer] = useState<WebServer>(() => {
+    return (userSettings.defaultServerId as WebServer) || 'fmov';
+  });
   const [servers, setServers] = useState<EmbedServerConfig[]>(DEFAULT_SERVERS);
-  const [selectedServerId, setSelectedServerId] = useState<string>('server_1_direct');
+  const [selectedServerId, setSelectedServerId] = useState<string>(userSettings.defaultServerId || 'server_1_direct');
   const [customEmbedUrl, setCustomEmbedUrl] = useState<string | undefined>(undefined);
 
   // Cinema UI Controls
-  const [isTheaterMode, setIsTheaterMode] = useState(false);
+  const [isTheaterMode, setIsTheaterMode] = useState(userSettings.defaultTheaterMode || false);
   const [isLightsDimmed, setIsLightsDimmed] = useState(false);
   const [inWatchlist, setInWatchlist] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -105,6 +115,24 @@ export const WatchPage: React.FC<WatchPageProps> = ({
             const expectedUrl = `/watch/tv/${slug}/${season}/${episode}`;
             if (!window.location.pathname.includes(slug)) {
               window.history.replaceState({}, '', expectedUrl);
+            }
+          }
+
+          // Check if default server is an embed server
+          if (userSettings.defaultServerId && userSettings.defaultServerId !== 'server_1_direct') {
+            const srv = DEFAULT_SERVERS.find(s => s.id === userSettings.defaultServerId);
+            if (srv && srv.type === 'embed') {
+              const template = data.mediaType === 'movie' ? srv.movieUrlTemplate : srv.tvUrlTemplate;
+              const url = template
+                ? resolveEmbedUrl(template, {
+                    id: data.id,
+                    season: currentSeason,
+                    episode: currentEpisode
+                  })
+                : '';
+              setCustomEmbedUrl(url || undefined);
+              setPlayerMode('web');
+              setActiveWebServer(srv.id as WebServer);
             }
           }
         }
@@ -182,6 +210,21 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     setShareModalOpen(true);
   };
 
+  const handleFollowToggle = async () => {
+    if (!detail) return;
+    const nowFollowing = await toggleFollowShow({
+      id: detail.id,
+      mediaType: 'tv',
+      title: detail.title,
+      posterPath: detail.posterPath,
+      backdropPath: detail.backdropPath,
+      voteAverage: detail.voteAverage
+    });
+    showToast(nowFollowing ? 'Following series for new episode alerts' : 'Unfollowed series');
+  };
+
+  const isFollowing = detail ? isFollowingShow(detail.id) : false;
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
@@ -211,14 +254,11 @@ export const WatchPage: React.FC<WatchPageProps> = ({
 
   if (loading || !detail) {
     return (
-      <div className="min-h-[75vh] flex flex-col items-center justify-center p-8 text-center bg-[#121215]">
-        <div className="w-12 h-12 border-3 border-[#3A3A40] border-t-[#F5C400] rounded-full animate-spin mb-4" />
-        <h2 className="text-base font-extrabold text-white tracking-wide uppercase">
-          Initializing Cinema Room
-        </h2>
-        <p className="text-xs text-[#A6A6AC] mt-1">
-          Loading high definition streams &amp; audio channels...
-        </p>
+      <div className="min-h-[75vh] flex items-center justify-center bg-[#121215]">
+        <PlayerLoadingSpinner
+          title="Initializing Cinema Stream"
+          subtitle="Loading high definition streams, audio tracks, and multilingual subtitles..."
+        />
       </div>
     );
   }
@@ -508,6 +548,23 @@ export const WatchPage: React.FC<WatchPageProps> = ({
                 <Share2 className="w-4 h-4 text-slate-300" />
                 <span>Share</span>
               </button>
+
+              {/* Follow Series Toggle for TV Shows */}
+              {!isMovie && (
+                <button
+                  type="button"
+                  onClick={handleFollowToggle}
+                  className={`h-10 px-5 rounded-full border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-sm ${
+                    isFollowing
+                      ? 'bg-amber-500/20 border-amber-500/60 text-amber-400 hover:bg-amber-500/30'
+                      : 'border-[#3A3A40] bg-[#1e1e24] hover:bg-[#282830] text-slate-300 hover:text-white hover:border-[#F5C400]/60'
+                  }`}
+                  title={isFollowing ? 'Following series (click to unfollow)' : 'Follow series for new episode alerts'}
+                >
+                  <BellRing className={`w-4 h-4 ${isFollowing ? 'text-amber-400 fill-amber-400/20' : 'text-slate-400'}`} />
+                  <span>{isFollowing ? 'Following Series' : 'Follow Series'}</span>
+                </button>
+              )}
             </div>
           </div>
 

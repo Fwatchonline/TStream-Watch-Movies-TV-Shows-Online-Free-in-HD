@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { EXPANDED_CATALOG } from '../services/catalogData';
 import { MediaItem } from '../types/media';
+import { NotificationBell } from './NotificationBell';
 
 interface TopBarProps {
   onSearch: (query: string) => void;
@@ -144,13 +145,10 @@ export const TopBar: React.FC<TopBarProps> = ({
       {/* Right Action Icons & Sign In */}
       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
         {/* Notification Bell */}
-        <button
-          onClick={() => alert('No new notifications')}
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
-          title="Notifications"
-        >
-          <Bell className="w-4 h-4" />
-        </button>
+        <NotificationBell
+          variant="topbar"
+          onNavigateNewEpisodes={() => onNavigate('new-episodes')}
+        />
 
         {/* Shuffle / Randomizer */}
         <button

@@ -19,14 +19,17 @@ import {
   Sparkles,
   X,
   Users,
-  Flame
+  Flame,
+  BellRing
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import { MediaDetail, MediaItem, VideoItem, TVDetail, Episode } from '../types/media';
 import { getMediaDetail, fetchSeasonEpisodes } from '../services/tmdb';
 import { isInWatchlist, toggleWatchlist } from '../services/storage';
 import { TrailerModal } from '../components/TrailerModal';
 import { CastCarousel } from '../components/CastCarousel';
 import { RatingViewsBar } from '../components/RatingViewsBar';
+import { PageLoadingIndicator } from '../components/PageLoadingIndicator';
 import { ShareModal } from '../components/ShareModal';
 import { ReportIssueModal } from '../components/ReportIssueModal';
 import { getPlatformById } from '../services/platformData';
@@ -59,6 +62,7 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
   onNavigateCollections,
   onSelectPlatform
 }) => {
+  const { user, toggleFollowShow, isFollowingShow } = useAuth();
   const [detail, setDetail] = useState<MediaDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [inWatchlist, setInWatchlist] = useState(false);
@@ -167,9 +171,8 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
 
   if (loading || !detail) {
     return (
-      <div className="min-h-[70vh] flex flex-col items-center justify-center p-8 text-center">
-        <div className="w-10 h-10 border-4 border-[#F5C400] border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="text-sm text-[#A6A6AC]">Loading title details from TMDB...</p>
+      <div className="min-h-[70vh] flex items-center justify-center">
+        <PageLoadingIndicator label="Loading title details..." />
       </div>
     );
   }
@@ -222,6 +225,20 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
     setSelectedTrailerKey(key);
     setTrailerOpen(true);
   };
+
+  const handleFollowToggle = async () => {
+    if (!detail) return;
+    await toggleFollowShow({
+      id: detail.id,
+      mediaType: 'tv',
+      title: detail.title,
+      posterPath: detail.posterPath,
+      backdropPath: detail.backdropPath,
+      voteAverage: detail.voteAverage
+    });
+  };
+
+  const isFollowing = detail ? isFollowingShow(detail.id) : false;
 
   const toggleFaq = (idx: number) => {
     setFaqOpen(prev => ({ ...prev, [idx]: !prev[idx] }));
@@ -319,6 +336,23 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                 <Share2 className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Follow Series Toggle Button for TV Shows */}
+            {!isMovie && (
+              <button
+                type="button"
+                onClick={handleFollowToggle}
+                className={`w-full mt-3 h-10 rounded-xl flex items-center justify-center gap-2 border font-bold text-xs transition-all cursor-pointer ${
+                  isFollowing
+                    ? 'bg-amber-500/20 border-amber-500/60 text-amber-400 hover:bg-amber-500/30 shadow-sm'
+                    : 'bg-white/5 border-white/10 text-slate-300 hover:text-white hover:bg-white/10'
+                }`}
+                title={isFollowing ? 'Following series (click to unfollow)' : 'Follow series to get notified when new episodes air'}
+              >
+                <BellRing className={`w-4 h-4 ${isFollowing ? 'text-amber-400 fill-amber-400/20' : 'text-slate-400'}`} />
+                <span>{isFollowing ? 'Following Series (Episode Alerts On)' : 'Follow Series (Get Episode Alerts)'}</span>
+              </button>
+            )}
           </div>
 
           {/* Right Column: Title, Metadata, Overview, Details Table matching Slika 4 */}

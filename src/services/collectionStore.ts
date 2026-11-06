@@ -6,6 +6,10 @@ import {
   AVENGERS_COLLECTION,
   PIRATES_COLLECTION
 } from './catalogData';
+import {
+  EXPANDED_CURATED_COLLECTIONS,
+  EXTRA_VERIFIED_IMAGES
+} from './curatedCollections';
 
 export interface DiscoveredCollection extends CollectionSummary {
   filmCountBadge: string;
@@ -220,7 +224,8 @@ export const VERIFIED_COLLECTION_IMAGES: Record<number, { backdrop: string; post
   86311: {
     backdrop: 'https://image.tmdb.org/t/p/original/2UNUv4NJdC36E5myDHACBJ99EwL.jpg',
     poster: 'https://image.tmdb.org/t/p/w500/yFSIUVTCvgYrpalUktulvk3Gi5Y.jpg'
-  }
+  },
+  ...EXTRA_VERIFIED_IMAGES
 };
 
 export const PIRATES_FULL_COLLECTION: DiscoveredCollection = {
@@ -255,7 +260,8 @@ export const INITIAL_CURATED_COLLECTIONS: DiscoveredCollection[] = [
     posterPath: VERIFIED_COLLECTION_IMAGES[86311].poster,
     filmCountBadge: '6 FILMS',
     autoDiscovered: true
-  }
+  },
+  ...EXPANDED_CURATED_COLLECTIONS
 ];
 
 export function sanitizeCollectionImages(col: DiscoveredCollection): DiscoveredCollection {

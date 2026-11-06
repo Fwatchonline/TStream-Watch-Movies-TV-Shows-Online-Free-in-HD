@@ -9,26 +9,41 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email.lower() == 'snapmire@gmail.com' ||
+        request.auth.token.email.lower() == 'miroslav87@gmail.com'
+      );
+    }
+
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128;
     }
 
-    // User private data (Profile, Watchlist, Continue Watching)
+    // User private data (Profile, Watchlist, Continue Watching, Player Settings)
     match /users/{userId} {
-      allow get: if isOwner(userId);
-      allow list: if false;
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
       allow create: if isOwner(userId)
                     && isValidId(userId)
                     && request.resource.data.userId == request.auth.uid;
       allow update: if isOwner(userId)
                     && request.resource.data.userId == request.auth.uid;
-      allow delete: if isOwner(userId);
+      allow delete: if isOwner(userId) || isAdmin();
 
       match /watchlist/{itemId} {
         allow read, write: if isOwner(userId);
       }
 
       match /continueWatching/{itemId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /followedShows/{showId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /notifications/{notificationId} {
         allow read, write: if isOwner(userId);
       }
     }
@@ -48,6 +63,22 @@ service cloud.firestore {
 
     // Global System Settings & Custom Embed Servers
     match /systemSettings/{settingId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Site Analytics, Visits & Metrics
+    match /analytics_visits/{visitId} {
+      allow create: if true;
+      allow read, delete: if isAdmin();
+    }
+
+    match /analytics_daily/{dateId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /analytics_summary/{summaryId} {
       allow read: if true;
       allow write: if true;
     }

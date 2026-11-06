@@ -5,6 +5,12 @@
  *   2. /public/sitemap-main.xml (Main pages, genres, platforms, tags, people)
  *   3. /public/sitemap-movies.xml (All blockbuster & popular movies)
  *   4. /public/sitemap-tv.xml (All popular TV series)
+ *
+ * Supports:
+ * - SITEMAP_TMDB_PAGES env variable for dynamic TMDB catalog expansion
+ * - Safe concurrency limits (batch size of 5)
+ * - Safe dry-run via --dry-run or DRY_RUN=true
+ * - Automatic fallback if offline
  */
 
 const fs = require('fs');
@@ -12,6 +18,9 @@ const path = require('path');
 
 const DOMAIN = 'https://tstream.online';
 const TODAY = new Date().toISOString().split('T')[0];
+const TMDB_API_KEY = process.env.VITE_TMDB_API_KEY || '844dba0bfd8f3a4f3799f6130ef9e335';
+const SITEMAP_TMDB_PAGES = process.env.SITEMAP_TMDB_PAGES ? parseInt(process.env.SITEMAP_TMDB_PAGES, 10) : 0;
+const isDryRun = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
 
 function slugifyTitle(title) {
   if (!title) return 'stream';
@@ -79,7 +88,7 @@ while ((match = itemRegex.exec(catalogContent)) !== null) {
   }
 }
 
-// Default popular titles if needed
+// Curated popular titles with verified TMDB IDs
 const DEFAULT_MOVIES = [
   { id: 969681, title: 'Spider-Man: Brand New Day' },
   { id: 533535, title: 'Deadpool & Wolverine' },
@@ -89,7 +98,7 @@ const DEFAULT_MOVIES = [
   { id: 155, title: 'The Dark Knight' },
   { id: 872585, title: 'Oppenheimer' },
   { id: 76600, title: 'Avatar: The Way of Water' },
-  { id: 933260, title: 'Gladiator II' },
+  { id: 558449, title: 'Gladiator II' }, // Verified TMDB ID: 558449
   { id: 573435, title: 'Bad Boys: Ride or Die' },
   { id: 519182, title: 'Despicable Me 4' },
   { id: 653346, title: 'Kingdom of the Planet of the Apes' },
@@ -136,8 +145,77 @@ DEFAULT_TV.forEach(t => {
   }
 });
 
-// Write Sitemap Index: /public/sitemap.xml
-const sitemapIndexXml = `<?xml version="1.0" encoding="UTF-8"?>
+/**
+ * Fetches popular and top rated titles from TMDB if SITEMAP_TMDB_PAGES is set
+ */
+async function fetchTmdbCatalog(maxPages) {
+  if (maxPages <= 0 || !globalThis.fetch) return;
+
+  const endpoints = [
+    { type: 'movie', path: 'movie/popular' },
+    { type: 'movie', path: 'movie/top_rated' },
+    { type: 'tv', path: 'tv/popular' },
+    { type: 'tv', path: 'tv/top_rated' }
+  ];
+
+  console.log(`Fetching up to ${maxPages} pages from TMDB endpoints for sitemap expansion...`);
+
+  for (const ep of endpoints) {
+    const pagesToFetch = Math.min(maxPages, 25);
+    const BATCH_SIZE = 5;
+
+    for (let i = 1; i <= pagesToFetch; i += BATCH_SIZE) {
+      const batch = [];
+      for (let p = i; p < i + BATCH_SIZE && p <= pagesToFetch; p++) {
+        batch.push(
+          (async pageNum => {
+            try {
+              const url = `https://api.themoviedb.org/3/${ep.path}?api_key=${TMDB_API_KEY}&page=${pageNum}`;
+              const res = await fetch(url);
+              if (!res.ok) return [];
+              const data = await res.json();
+              return (data.results || []).map(r => ({
+                id: r.id,
+                title: r.title || r.name,
+                type: ep.type
+              }));
+            } catch {
+              return [];
+            }
+          })(p)
+        );
+      }
+
+      const results = await Promise.all(batch);
+      for (const items of results) {
+        for (const item of items) {
+          if (!item.id || !item.title) continue;
+          if (item.type === 'movie') {
+            if (!moviesList.some(m => m.id === item.id)) {
+              moviesList.push({ id: item.id, title: item.title });
+            }
+          } else {
+            if (!tvList.some(t => t.id === item.id)) {
+              tvList.push({ id: item.id, title: item.title });
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+async function generate() {
+  if (SITEMAP_TMDB_PAGES > 0) {
+    try {
+      await fetchTmdbCatalog(SITEMAP_TMDB_PAGES);
+    } catch (e) {
+      console.warn('TMDB catalog expansion failed, using local catalog data:', e.message);
+    }
+  }
+
+  // Write Sitemap Index: /public/sitemap.xml
+  const sitemapIndexXml = `<?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <sitemap>
     <loc>${DOMAIN}/sitemap-main.xml</loc>
@@ -154,82 +232,100 @@ const sitemapIndexXml = `<?xml version="1.0" encoding="UTF-8"?>
 </sitemapindex>
 `;
 
-// Write /public/sitemap-main.xml
-let mainXml = `<?xml version="1.0" encoding="UTF-8"?>
+  // Write /public/sitemap-main.xml
+  let mainXml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 `;
 
-MAIN_PAGES.forEach(page => {
-  mainXml += `  <url>
+  MAIN_PAGES.forEach(page => {
+    mainXml += `  <url>
     <loc>${DOMAIN}${page.url}</loc>
     <lastmod>${TODAY}</lastmod>
     <changefreq>${page.changefreq}</changefreq>
     <priority>${page.priority}</priority>
   </url>\n`;
-});
+  });
 
-PLATFORMS.forEach(plat => {
-  mainXml += `  <url>
+  PLATFORMS.forEach(plat => {
+    mainXml += `  <url>
     <loc>${DOMAIN}/platform/${plat}</loc>
     <lastmod>${TODAY}</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>\n`;
-});
+  });
 
-ALPHABET.forEach(letter => {
-  mainXml += `  <url>
+  ALPHABET.forEach(letter => {
+    mainXml += `  <url>
     <loc>${DOMAIN}/az/${letter}</loc>
     <lastmod>${TODAY}</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>\n`;
-});
+  });
 
-mainXml += `</urlset>\n`;
+  mainXml += `</urlset>\n`;
 
-// Write /public/sitemap-movies.xml
-let moviesXml = `<?xml version="1.0" encoding="UTF-8"?>
+  // Write /public/sitemap-movies.xml
+  let moviesXml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 `;
 
-moviesList.forEach(m => {
-  const slug = createMediaSlug(m.title, m.id);
-  moviesXml += `  <url>
+  moviesList.forEach(m => {
+    const slug = createMediaSlug(m.title, m.id);
+    moviesXml += `  <url>
     <loc>${DOMAIN}/watch/movie/${slug}</loc>
     <lastmod>${TODAY}</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>\n`;
-});
+  });
 
-moviesXml += `</urlset>\n`;
+  moviesXml += `</urlset>\n`;
 
-// Write /public/sitemap-tv.xml
-let tvXml = `<?xml version="1.0" encoding="UTF-8"?>
+  // Write /public/sitemap-tv.xml
+  let tvXml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 `;
 
-tvList.forEach(t => {
-  const slug = createMediaSlug(t.title, t.id);
-  tvXml += `  <url>
+  tvList.forEach(t => {
+    const slug = createMediaSlug(t.title, t.id);
+    tvXml += `  <url>
     <loc>${DOMAIN}/watch/tv/${slug}</loc>
     <lastmod>${TODAY}</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>\n`;
+  });
+
+  tvXml += `</urlset>\n`;
+
+  const totalMain = MAIN_PAGES.length + PLATFORMS.length + ALPHABET.length;
+
+  if (isDryRun) {
+    console.log(`[DRY RUN] Generated Google XML Sitemaps:`);
+    console.log(`[DRY RUN] - sitemap.xml (Index)`);
+    console.log(`[DRY RUN] - sitemap-main.xml (${totalMain} URLs)`);
+    console.log(`[DRY RUN] - sitemap-movies.xml (${moviesList.length} movies)`);
+    console.log(`[DRY RUN] - sitemap-tv.xml (${tvList.length} TV shows)`);
+    console.log(`[DRY RUN] Dry run complete - no files written to disk.`);
+    return;
+  }
+
+  const publicDir = path.join(__dirname, '../public');
+  fs.writeFileSync(path.join(publicDir, 'sitemap.xml'), sitemapIndexXml, 'utf8');
+  fs.writeFileSync(path.join(publicDir, 'sitemap-main.xml'), mainXml, 'utf8');
+  fs.writeFileSync(path.join(publicDir, 'sitemap-movies.xml'), moviesXml, 'utf8');
+  fs.writeFileSync(path.join(publicDir, 'sitemap-tv.xml'), tvXml, 'utf8');
+
+  console.log(`Generated Google XML Sitemaps:`);
+  console.log(`- sitemap.xml (Index)`);
+  console.log(`- sitemap-main.xml (${totalMain} URLs)`);
+  console.log(`- sitemap-movies.xml (${moviesList.length} movies)`);
+  console.log(`- sitemap-tv.xml (${tvList.length} TV shows)`);
+}
+
+generate().catch(err => {
+  console.error('Sitemap generator error:', err);
+  process.exit(1);
 });
-
-tvXml += `</urlset>\n`;
-
-const publicDir = path.join(__dirname, '../public');
-fs.writeFileSync(path.join(publicDir, 'sitemap.xml'), sitemapIndexXml, 'utf8');
-fs.writeFileSync(path.join(publicDir, 'sitemap-main.xml'), mainXml, 'utf8');
-fs.writeFileSync(path.join(publicDir, 'sitemap-movies.xml'), moviesXml, 'utf8');
-fs.writeFileSync(path.join(publicDir, 'sitemap-tv.xml'), tvXml, 'utf8');
-
-console.log(`Generated Google XML Sitemaps:`);
-console.log(`- sitemap.xml (Index)`);
-console.log(`- sitemap-main.xml (${MAIN_PAGES.length + PLATFORMS.length + ALPHABET.length} URLs)`);
-console.log(`- sitemap-movies.xml (${moviesList.length} movies)`);
-console.log(`- sitemap-tv.xml (${tvList.length} TV shows)`);

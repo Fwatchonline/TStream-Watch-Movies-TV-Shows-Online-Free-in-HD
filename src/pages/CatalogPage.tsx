@@ -42,6 +42,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     const parsedQuery = params.get('q') || initialQuery || '';
     const parsedPlatform = params.get('platform') || initialPlatform || (category === 'platform' ? 'netflix' : undefined);
     const parsedLetter = params.get('letter') || initialLetter || (category === 'az' ? 'A' : undefined);
+    const parsedCountry = params.get('country') || undefined;
 
     let mediaType: MediaType | 'all' = 'all';
     if (params.get('mediaType')) {
@@ -61,6 +62,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
       query: parsedQuery,
       platform: parsedPlatform,
       letter: parsedLetter,
+      country: parsedCountry,
       mediaType
     };
   };
@@ -103,6 +105,9 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     }
     if (newFilters.letter && newFilters.letter !== 'All') {
       params.set('letter', newFilters.letter);
+    }
+    if (newFilters.country) {
+      params.set('country', newFilters.country);
     }
 
     const queryStr = params.toString();
