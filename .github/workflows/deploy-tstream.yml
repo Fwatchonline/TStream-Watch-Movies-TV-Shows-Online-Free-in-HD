@@ -23,21 +23,23 @@ jobs:
       - name: Configure SSH
         shell: bash
         env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
           set -euo pipefail
 
-          test -n "$VPS_SSH_KEY"
+          test -n "$VPS_SSH_KEY_B64"
           test -n "$VPS_HOST"
           test -n "$VPS_PORT"
 
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
 
-          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s' "$VPS_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
+
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" > /dev/null
 
           if [[ "$VPS_PORT" == "22" ]]; then
             KNOWN_HOST="$VPS_HOST"
@@ -50,7 +52,6 @@ jobs:
             > "$HOME/.ssh/known_hosts"
 
           chmod 600 "$HOME/.ssh/known_hosts"
-
           ssh-keygen -F "$KNOWN_HOST" -f "$HOME/.ssh/known_hosts"
 
       - name: Deploy latest main
