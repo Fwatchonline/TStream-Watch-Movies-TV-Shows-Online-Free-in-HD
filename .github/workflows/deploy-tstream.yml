@@ -24,21 +24,34 @@ jobs:
         shell: bash
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
           set -euo pipefail
 
           test -n "$VPS_SSH_KEY"
-          test -n "$VPS_KNOWN_HOSTS"
+          test -n "$VPS_HOST"
+          test -n "$VPS_PORT"
 
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
 
           printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-
           chmod 600 "$HOME/.ssh/id_ed25519"
+
+          if [[ "$VPS_PORT" == "22" ]]; then
+            KNOWN_HOST="$VPS_HOST"
+          else
+            KNOWN_HOST="[$VPS_HOST]:$VPS_PORT"
+          fi
+
+          printf '%s %s\n' "$KNOWN_HOST" \
+            'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPnHaOxj0O4nk4a7572Ng/mhXpM/D8wcD09msz/hAdEI root@vultr' \
+            > "$HOME/.ssh/known_hosts"
+
           chmod 600 "$HOME/.ssh/known_hosts"
+
+          ssh-keygen -F "$KNOWN_HOST" -f "$HOME/.ssh/known_hosts"
 
       - name: Deploy latest main
         shell: bash
@@ -48,10 +61,6 @@ jobs:
           VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
           set -euo pipefail
-
-          test -n "$VPS_HOST"
-          test -n "$VPS_USER"
-          test -n "$VPS_PORT"
 
           ssh -T \
             -i "$HOME/.ssh/id_ed25519" \
