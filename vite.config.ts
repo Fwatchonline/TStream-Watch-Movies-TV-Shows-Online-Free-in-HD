@@ -7,6 +7,12 @@ import { resolveAllDirectStreams } from './src/services/directStreamEngine.ts';
 import { seoHtmlPlugin } from './scripts/seoHtmlPlugin.ts';
 import { getRequestListener } from '@hono/node-server';
 import serverApp from './src/server/app.ts';
+import {
+  safeFetchStream,
+  ProxySecurityError
+} from './src/server/utils/safeProxyFetch.ts';
+import { pipeline } from 'node:stream/promises';
+
 
 function rewriteM3u8(manifest: string, baseUrl: string, ref?: string, orig?: string): string {
   const base = new URL(baseUrl);
@@ -101,82 +107,233 @@ function streamApiPlugin(): Plugin {
       return;
     }
 
-    // 2. /api/stream-proxy
+
+    // 2. /api/stream-proxy — SSRF protected legacy Fmov proxy
     if (url.startsWith('/api/stream-proxy')) {
+      const cors = () => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges');
+      };
+
+      cors();
+
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.statusCode = 405;
+        res.end('Method not allowed');
+        return;
+      }
+
+      let controller: AbortController | undefined;
+
       try {
         const parsed = new URL(url, 'http://localhost:3000');
         const targetUrl = parsed.searchParams.get('url');
+
         if (!targetUrl) {
           res.statusCode = 400;
           res.end('Missing url parameter');
           return;
         }
 
-        const ref = parsed.searchParams.get('ref') || '';
-        const orig = parsed.searchParams.get('orig') || '';
+        const safeHeaderUrl = (raw: string | null, originOnly = false) => {
+          if (!raw || raw.length > 2048) return '';
+
+          try {
+            const value = new URL(raw);
+
+            if (
+              !['http:', 'https:'].includes(value.protocol) ||
+              value.username ||
+              value.password
+            ) return '';
+
+            return originOnly ? value.origin : value.href;
+          } catch {
+            return '';
+          }
+        };
+
+        const ref = safeHeaderUrl(parsed.searchParams.get('ref'));
+        const orig = safeHeaderUrl(parsed.searchParams.get('orig'), true);
 
         const upstreamHeaders: Record<string, string> = {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-          'Accept': '*/*'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36',
+          'Accept': '*/*',
+          'Accept-Encoding': 'identity'
         };
+
         if (ref) upstreamHeaders['Referer'] = ref;
         if (orig) upstreamHeaders['Origin'] = orig;
-        if (req.headers['range']) {
-          upstreamHeaders['Range'] = req.headers['range'];
+
+        const range = req.headers['range'];
+
+        if (
+          typeof range === 'string' &&
+          /^bytes=(?:\d+-\d*|-\d+)(?:,(?:\d+-\d*|-\d+))*$/.test(range)
+        ) {
+          upstreamHeaders['Range'] = range;
         }
 
-        const upstream = await fetch(targetUrl, { headers: upstreamHeaders });
-        const ct = (upstream.headers.get('content-type') || '').toLowerCase();
-        const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || targetUrl.includes('.m3u8');
+        controller = new AbortController();
 
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Headers', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+        req.once('aborted', () => controller?.abort());
 
-        if (isM3u8) {
-          const text = await upstream.text();
-          const effectiveBaseUrl = upstream.url || targetUrl;
-          const rewritten = rewriteM3u8(text, effectiveBaseUrl, ref, orig);
-          res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-          res.statusCode = upstream.status;
-          res.end(rewritten);
-          return;
+        res.once('close', () => {
+          if (!res.writableEnded) controller?.abort();
+        });
+
+        const method: 'GET' | 'HEAD' =
+          req.method === 'HEAD' ? 'HEAD' : 'GET';
+
+        const result = await safeFetchStream(
+          targetUrl,
+          upstreamHeaders,
+          controller.signal,
+          method
+        );
+
+        const upstream = result.response;
+        const status = upstream.statusCode || 502;
+        const contentType =
+          String(upstream.headers['content-type'] || '').toLowerCase();
+
+        res.statusCode = status;
+
+        if (status === 206) {
+          const value = upstream.headers['content-range'];
+          if (value) res.setHeader('Content-Range', value);
         }
 
-        res.statusCode = upstream.status;
-        const passHeaders = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control'];
-        for (const h of passHeaders) {
-          const val = upstream.headers.get(h);
-          if (val) res.setHeader(h, val);
-        }
+        const acceptRanges = upstream.headers['accept-ranges'];
+        if (acceptRanges) res.setHeader('Accept-Ranges', acceptRanges);
 
-        if (targetUrl.includes('.ts') || targetUrl.includes('/convert/')) {
-          res.setHeader('Content-Type', 'video/mp2t');
-        } else if (targetUrl.includes('.mp4')) {
-          res.setHeader('Content-Type', 'video/mp4');
-        }
+        if (method === 'HEAD') {
+          for (const h of ['content-type', 'content-length']) {
+            const value = upstream.headers[h];
+            if (value) res.setHeader(h, value);
+          }
 
-        if (!upstream.body) {
+          upstream.destroy();
           res.end();
           return;
         }
 
-        const reader = upstream.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
+        // Pass upstream error responses without following unsafe redirects.
+        if (status < 200 || status >= 300) {
+          for (const h of ['content-type', 'content-length', 'cache-control']) {
+            const value = upstream.headers[h];
+            if (value) res.setHeader(h, value);
+          }
+
+          await pipeline(upstream, res);
+          return;
         }
-        res.end();
+
+        const isM3u8 =
+          result.finalUrl.toLowerCase().includes('.m3u8') ||
+          contentType.includes('mpegurl') ||
+          contentType.includes('x-mpegurl');
+
+        if (isM3u8) {
+          const chunks: Buffer[] = [];
+          let total = 0;
+          const MAX_MANIFEST_SIZE = 5 * 1024 * 1024;
+
+          for await (const chunk of upstream) {
+            const buffer = Buffer.isBuffer(chunk)
+              ? chunk
+              : Buffer.from(chunk);
+
+            total += buffer.length;
+
+            if (total > MAX_MANIFEST_SIZE) {
+              upstream.destroy();
+              throw new Error('HLS manifest exceeds maximum size');
+            }
+
+            chunks.push(buffer);
+          }
+
+          const text = Buffer.concat(chunks).toString('utf8');
+
+          if (text.includes('#EXTM3U')) {
+            const rewritten = rewriteM3u8(
+              text,
+              result.finalUrl,
+              ref,
+              orig
+            );
+
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.end(rewritten);
+            return;
+          }
+
+          res.setHeader('Content-Type', 'video/mp2t');
+          res.end(text);
+          return;
+        }
+
+        const passHeaders = [
+          'content-type',
+          'content-length',
+          'content-range',
+          'accept-ranges',
+          'cache-control'
+        ];
+
+        for (const h of passHeaders) {
+          const value = upstream.headers[h];
+          if (value) res.setHeader(h, value);
+        }
+
+        if (
+          /\.ts(?:$|[?#])/i.test(result.finalUrl) ||
+          result.finalUrl.includes('/convert/')
+        ) {
+          res.setHeader('Content-Type', 'video/mp2t');
+        } else if (/\.mp4(?:$|[?#])/i.test(result.finalUrl)) {
+          res.setHeader('Content-Type', 'video/mp4');
+        }
+
+        await pipeline(upstream, res);
+
       } catch (err: any) {
-        if (!res.headersSent) {
-          res.statusCode = 404;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: 'Stream temporarily unavailable or offline', message: err.message }));
+        if (res.headersSent) {
+          res.destroy(err);
+          return;
         }
+
+        if (err instanceof ProxySecurityError) {
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            error: 'Upstream destination blocked by security policy'
+          }));
+          return;
+        }
+
+        console.error('[TStream legacy proxy]', err.message);
+
+        res.statusCode = 502;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          error: 'Stream temporarily unavailable or offline'
+        }));
       }
+
       return;
     }
+
 
     next();
   };
@@ -298,6 +455,9 @@ export default defineConfig(() => {
       alias: {
         '@': path.resolve(process.cwd()),
       },
+    },
+    preview: {
+      allowedHosts: ['tstream.online', 'www.tstream.online'],
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
