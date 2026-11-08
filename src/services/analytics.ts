@@ -99,6 +99,7 @@ function getDeviceInfo(): { device: 'Desktop' | 'Mobile' | 'Tablet'; browser: st
   return { device, browser, os };
 }
 
+let isQuotaExceeded = false;
 let lastLoggedPath = '';
 let lastLoggedTime = 0;
 
@@ -109,11 +110,11 @@ export async function recordSiteVisit(
   path: string,
   user?: { uid: string; email?: string | null } | null
 ): Promise<void> {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || isQuotaExceeded) return;
 
   const now = Date.now();
-  // Prevent duplicate logs for the same route within 4 seconds
-  if (path === lastLoggedPath && now - lastLoggedTime < 4000) {
+  // Prevent duplicate logs for the same route within 10 seconds
+  if (path === lastLoggedPath && now - lastLoggedTime < 10000) {
     return;
   }
   lastLoggedPath = path;
@@ -175,6 +176,12 @@ export async function recordSiteVisit(
       { merge: true }
     );
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      isQuotaExceeded = true;
+      console.warn('Firestore daily write quota reached for analytics. Pausing analytics writes.');
+      return;
+    }
     console.warn('Analytics visit recording skipped:', err);
   }
 }

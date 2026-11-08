@@ -202,8 +202,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     async function loadSubs() {
       const results = await searchSubtitles({
         mediaType: media.mediaType,
-        tmdbId: media.tmdbId,
-        imdbId: media.imdbId,
+        tmdbId: media.tmdbId || media.id,
+        imdbId: media.imdbId || (media as any).external_ids?.imdb_id,
         season: isMovie ? undefined : currentSeason,
         episode: isMovie ? undefined : currentEpisode
       });

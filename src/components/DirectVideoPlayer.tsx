@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Hls from 'hls.js';
 import {
   Play,
@@ -26,7 +26,8 @@ import {
   Film,
   Sparkles,
   HelpCircle,
-  X
+  X,
+  Search
 } from 'lucide-react';
 import { ResolvedStream, DirectProviderResult, cleanServerDisplay } from '../services/directStreamClient';
 import { SubtitleTrack, Episode } from '../types/media';
@@ -213,6 +214,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const [uploadedSubs, setUploadedSubs] = useState<SubtitleTrack[]>([]);
   const [cues, setCues] = useState<ParsedCue[]>([]);
   const [customSubtitleText, setCustomSubtitleText] = useState<string>('');
+  const [subSearchQuery, setSubSearchQuery] = useState<string>('');
 
   // Subtitle custom styles (image_659a6ea3.png)
   const [subFontSize, setSubFontSize] = useState<number>(100); // 50% - 200%
@@ -815,7 +817,105 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     }
   }
 
-  // Parse custom VTT or SRT subtitle tracks
+  const filteredSubtitles = useMemo(() => {
+    if (!subSearchQuery.trim()) return combinedSubtitles;
+    const q = subSearchQuery.toLowerCase().trim();
+    return combinedSubtitles.filter(
+      s =>
+        (s.label && s.label.toLowerCase().includes(q)) ||
+        (s.language && s.language.toLowerCase().includes(q)) ||
+        (s.languageCode && s.languageCode.toLowerCase().includes(q)) ||
+        (s.source && s.source.toLowerCase().includes(q))
+    );
+  }, [combinedSubtitles, subSearchQuery]);
+
+  // Auto-select subtitle based on user settings (default: Ex-Yu / BHS or English)
+  const autoSelectDoneRef = useRef<boolean>(false);
+  const previousStorageKeyRef = useRef<string | undefined>(storageKey);
+
+  useEffect(() => {
+    if (previousStorageKeyRef.current !== storageKey) {
+      previousStorageKeyRef.current = storageKey;
+      autoSelectDoneRef.current = false;
+      setActiveSubTrackUrl(null);
+      setCues([]);
+      setCustomSubtitleText('');
+    }
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!combinedSubtitles.length) return;
+    if (autoSelectDoneRef.current && activeSubTrackUrl) return;
+    if (!playerSettings.autoLoadSubtitles || playerSettings.defaultSubtitleLang === 'off') {
+      return;
+    }
+
+    const pref = (playerSettings.defaultSubtitleLang || 'exyu').toLowerCase();
+    let bestTrack: SubtitleTrack | undefined;
+
+    if (pref === 'exyu' || pref === 'bhs') {
+      bestTrack = combinedSubtitles.find(s => {
+        const c = (s.languageCode || '').toLowerCase();
+        const l = (s.label || '').toLowerCase();
+        const lang = (s.language || '').toLowerCase();
+        return (
+          c === 'sr' || c === 'hr' || c === 'bs' || c === 'bhs' ||
+          l.includes('serbian') || l.includes('croatian') || l.includes('bosnian') ||
+          lang.includes('serbian') || lang.includes('croatian') || lang.includes('bosnian')
+        );
+      });
+    } else {
+      bestTrack = combinedSubtitles.find(s => {
+        const c = (s.languageCode || '').toLowerCase();
+        const l = (s.label || '').toLowerCase();
+        const lang = (s.language || '').toLowerCase();
+        return c === pref || l.includes(pref) || lang.includes(pref);
+      });
+    }
+
+    // Fallback to English or first available if preferred language not found
+    if (!bestTrack) {
+      bestTrack = combinedSubtitles.find(s => {
+        const c = (s.languageCode || '').toLowerCase();
+        const l = (s.label || '').toLowerCase();
+        return c === 'en' || l.includes('english');
+      }) || combinedSubtitles[0];
+    }
+
+    if (bestTrack?.url) {
+      setActiveSubTrackUrl(bestTrack.url);
+      autoSelectDoneRef.current = true;
+    }
+  }, [combinedSubtitles, activeSubTrackUrl, playerSettings.autoLoadSubtitles, playerSettings.defaultSubtitleLang]);
+
+  // Synchronize style settings from playerSettings
+  useEffect(() => {
+    if (playerSettings.subtitleSize) {
+      const sizeMap: Record<string, number> = {
+        small: 85,
+        medium: 100,
+        large: 125,
+        xlarge: 155
+      };
+      if (sizeMap[playerSettings.subtitleSize]) {
+        setSubFontSize(sizeMap[playerSettings.subtitleSize]);
+      }
+    }
+    if (playerSettings.subtitleColor) {
+      setSubTextColor(playerSettings.subtitleColor);
+    }
+    if (playerSettings.subtitleBackground) {
+      if (playerSettings.subtitleBackground === 'box') {
+        setSubBgColor('#000000');
+        setSubBgOpacity(65);
+      } else {
+        setSubBgColor('transparent');
+        setSubBgOpacity(0);
+      }
+    }
+  }, [playerSettings.subtitleSize, playerSettings.subtitleColor, playerSettings.subtitleBackground]);
+
+  // Parse custom VTT or SRT subtitle tracks with robust multi-tier fallback
   useEffect(() => {
     if (!activeSubTrackUrl) {
       setCustomSubtitleText('');
@@ -833,11 +933,45 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     let isMounted = true;
     async function fetchSub() {
       try {
-        const proxyUrl = `/api/subtitle-proxy?url=${encodeURIComponent(activeSubTrackUrl!)}`;
-        const res = await fetch(proxyUrl);
-        if (!res.ok) throw new Error('Sub load failed');
-        const text = await res.text();
-        if (isMounted) {
+        let text = '';
+
+        // 1. Primary: Dedicated subtitle-proxy (with UTF-8 and Windows-1250 transcoding)
+        try {
+          const proxyUrl = `/api/subtitle-proxy?url=${encodeURIComponent(activeSubTrackUrl!)}`;
+          const res = await fetch(proxyUrl);
+          if (res.ok) {
+            text = await res.text();
+          }
+        } catch (e) {
+          console.warn('Subtitle proxy failed, trying fallback proxy:', e);
+        }
+
+        // 2. Secondary fallback: Generic proxy
+        if (!text) {
+          try {
+            const fallbackProxyUrl = `/api/proxy?url=${encodeURIComponent(activeSubTrackUrl!)}`;
+            const res = await fetch(fallbackProxyUrl);
+            if (res.ok) {
+              text = await res.text();
+            }
+          } catch (e) {
+            console.warn('Generic proxy failed, trying direct fetch:', e);
+          }
+        }
+
+        // 3. Tertiary fallback: Direct browser fetch
+        if (!text) {
+          try {
+            const res = await fetch(activeSubTrackUrl!);
+            if (res.ok) {
+              text = await res.text();
+            }
+          } catch (e) {
+            console.warn('Direct fetch failed:', e);
+          }
+        }
+
+        if (text && isMounted) {
           parseSubtitlesText(text);
         }
       } catch (err) {
@@ -853,52 +987,67 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
   const parseSubtitlesText = (raw: string) => {
     const list: ParsedCue[] = [];
-    const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-    let i = 0;
-    const timeRegex = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{3})/;
+    const clean = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = clean.split('\n');
+    const timeRegex = /(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{3})/;
 
-    while (i < lines.length) {
+    const parseTimestamp = (h?: string, m?: string, s?: string, ms?: string) => {
+      const hours = parseInt(h || '0', 10);
+      const mins = parseInt(m || '0', 10);
+      const secs = parseInt(s || '0', 10);
+      const millis = parseInt(ms || '0', 10);
+      return hours * 3600 + mins * 60 + secs + millis / 1000;
+    };
+
+    let currentCue: { start: number; end: number; textLines: string[] } | null = null;
+    const commitCue = () => {
+      if (currentCue && currentCue.textLines.length) {
+        const text = currentCue.textLines.join('\n').trim();
+        if (text && currentCue.end > currentCue.start) {
+          list.push({ start: currentCue.start, end: currentCue.end, text });
+        }
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
+      if (!line) continue;
+      if (line.startsWith('WEBVTT') || line.startsWith('NOTE') || line.startsWith('STYLE') || line.startsWith('REGION')) continue;
+
       const match = line.match(timeRegex);
       if (match) {
-        const h1 = parseInt(match[1] || '0', 10);
-        const m1 = parseInt(match[2], 10);
-        const s1 = parseInt(match[3], 10);
-        const ms1 = parseInt(match[4], 10);
-        const start = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000;
-
-        const h2 = parseInt(match[5] || '0', 10);
-        const m2 = parseInt(match[6], 10);
-        const s2 = parseInt(match[7], 10);
-        const ms2 = parseInt(match[8], 10);
-        const end = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000;
-
-        i++;
-        const textLines: string[] = [];
-        while (i < lines.length && lines[i].trim() !== '') {
-          textLines.push(lines[i].trim());
-          i++;
+        commitCue();
+        const start = parseTimestamp(match[1], match[2], match[3], match[4]);
+        const end = parseTimestamp(match[5], match[6], match[7], match[8]);
+        currentCue = { start, end, textLines: [] };
+      } else if (currentCue) {
+        let isCueNumber = /^\d+$/.test(line);
+        if (isCueNumber) {
+          let j = i + 1;
+          while (j < lines.length && !lines[j].trim()) j++;
+          if (j < lines.length && lines[j].includes('-->')) {
+            continue;
+          }
         }
-        list.push({
-          start,
-          end,
-          text: textLines.join('\n').replace(/<[^>]+>/g, '')
-        });
+        const cleanLine = line.replace(/<[^>]+>/g, '').trim();
+        if (cleanLine) {
+          currentCue.textLines.push(cleanLine);
+        }
       }
-      i++;
     }
+    commitCue();
     setCues(list);
   };
 
-  // Sync subtitle text with playback & delay
+  // Sync subtitle text with playback & delay (supports overlapping dialogue cues)
   useEffect(() => {
     if (!cues.length || !activeSubTrackUrl) {
       setCustomSubtitleText('');
       return;
     }
     const adjustedTime = currentTime - subDelay;
-    const currentCue = cues.find(c => adjustedTime >= c.start && adjustedTime <= c.end);
-    setCustomSubtitleText(currentCue ? currentCue.text : '');
+    const matchingCues = cues.filter(c => adjustedTime >= c.start && adjustedTime <= c.end);
+    setCustomSubtitleText(matchingCues.map(c => c.text).join('\n'));
   }, [currentTime, cues, subDelay, activeSubTrackUrl]);
 
   // Handle custom subtitle file upload (.vtt, .srt)
@@ -1017,24 +1166,24 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       {/* Subtitles Overlay with Live Customization (image_659a6ea3.png, image_d377490c.png) */}
       {customSubtitleText && (
         <div
-          className={`absolute inset-x-0 z-20 flex justify-center px-6 pointer-events-none transition-all duration-200 ${
-            showControls ? 'bottom-28 sm:bottom-32' : 'bottom-10 sm:bottom-14'
+          className={`absolute inset-x-0 z-20 flex justify-center px-4 sm:px-8 pointer-events-none transition-all duration-200 ${
+            showControls ? 'bottom-24 sm:bottom-28' : 'bottom-8 sm:bottom-12'
           }`}
         >
           <div
-            className="text-center max-w-[85%] leading-relaxed font-semibold transition-all drop-shadow-md"
+            className="text-center max-w-[92%] sm:max-w-[80%] whitespace-pre-line leading-snug font-semibold transition-all drop-shadow-lg select-none"
             style={{
-              fontSize: `calc(1rem * ${subFontSize / 100})`,
+              fontSize: `calc(clamp(1.05rem, 1.8vw, 1.65rem) * ${subFontSize / 100})`,
               color: subTextColor,
               backgroundColor:
-                subBgColor === 'transparent'
+                subBgColor === 'transparent' || subBgOpacity === 0
                   ? 'transparent'
                   : `${subBgColor}${Math.round((subBgOpacity / 100) * 255).toString(16).padStart(2, '0')}`,
               textShadow:
-                subBgColor === 'transparent'
-                  ? '0 0 4px #000, 0 0 8px #000, 0 0 12px #000'
-                  : '0 1px 2px rgba(0,0,0,0.85)',
-              padding: '0.25rem 0.75rem',
+                subBgColor === 'transparent' || subBgOpacity === 0
+                  ? '0 0 3px #000, 0 1px 2px #000, 0 2px 4px #000, 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000'
+                  : '0 1px 3px rgba(0,0,0,0.9)',
+              padding: subBgColor === 'transparent' || subBgOpacity === 0 ? '0.1rem 0.5rem' : '0.35rem 0.85rem',
               borderRadius: '0.5rem'
             }}
           >
@@ -1214,23 +1363,51 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
       {/* 3. SUBTITLES POPOVER (image_66a8b767.png & image_674abbad.png) */}
       {activeModal === 'subtitles' && (
-        <div className="absolute bottom-16 right-4 sm:right-12 z-50 w-72 sm:w-80 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3 text-left animate-in fade-in zoom-in-95 duration-150">
-          <div className="flex items-center gap-2 pb-2.5 mb-2 border-b border-white/10 text-xs font-bold text-zinc-300">
-            <Subtitles className="w-4 h-4 text-zinc-400" />
-            <span>SUBTITLES</span>
+        <div className="absolute bottom-16 right-4 sm:right-12 z-50 w-80 sm:w-96 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3 text-left animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs font-bold text-zinc-300">
+            <div className="flex items-center gap-2">
+              <Subtitles className="w-4 h-4 text-zinc-400" />
+              <span>SUBTITLES</span>
+            </div>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-zinc-300 font-medium">
+              {combinedSubtitles.length} available
+            </span>
           </div>
+
+          {/* Quick Search Filter across all subtitle tracks */}
+          {combinedSubtitles.length > 4 && (
+            <div className="relative mb-2">
+              <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={subSearchQuery}
+                onChange={(e) => setSubSearchQuery(e.target.value)}
+                placeholder="Search language, release, or source..."
+                className="w-full bg-[#1c1c22] border border-white/10 rounded-xl pl-8 pr-7 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[#F5C400]/60 transition-colors"
+              />
+              {subSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSubSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white p-0.5 cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Upload Subtitle Item */}
           <button
             onClick={() => fileInputRef.current?.click()}
             className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 text-xs text-white font-medium transition-colors cursor-pointer mb-1"
           >
-            <span>Upload subtitle</span>
+            <span>Upload custom subtitle (.vtt / .srt)</span>
             <Upload className="w-4 h-4 text-zinc-400" />
           </button>
 
           {/* Subtitle Track List */}
-          <div className="space-y-1 max-h-56 overflow-y-auto no-scrollbar">
+          <div className="space-y-1 max-h-64 sm:max-h-72 overflow-y-auto no-scrollbar pr-0.5">
             {/* Off Option */}
             <button
               onClick={() => {
@@ -1245,8 +1422,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               {activeSubTrackUrl === null && <Check className="w-4 h-4 text-white" />}
             </button>
 
-            {/* Combined tracks */}
-            {combinedSubtitles.map((track) => {
+            {/* Combined & Filtered tracks */}
+            {filteredSubtitles.map((track) => {
               const isSelected = activeSubTrackUrl === track.url;
               return (
                 <button
@@ -1255,15 +1432,41 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                     setActiveSubTrackUrl(track.url);
                     triggerHud('subtitle', `Subtitles: ${track.label || 'Selected'}`);
                   }}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                  title={track.label}
+                  className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-medium transition-colors cursor-pointer gap-2 ${
                     isSelected ? 'bg-[#24242a] text-white' : 'hover:bg-white/5 text-zinc-300'
                   }`}
                 >
-                  <span className="truncate max-w-[200px]">{track.label}</span>
-                  {isSelected && <Check className="w-4 h-4 text-white shrink-0 ml-2" />}
+                  <div className="flex items-center gap-2 truncate">
+                    {track.source === 'opensubtitles_v3' ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#F5C400]/15 text-[#F5C400] border border-[#F5C400]/30 shrink-0">
+                        OS
+                      </span>
+                    ) : track.source === 'vdrk_v2' ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30 shrink-0">
+                        V2
+                      </span>
+                    ) : track.source === 'vdrk_v1' ? (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0">
+                        V1
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0">
+                        Custom
+                      </span>
+                    )}
+                    <span className="truncate">{track.label}</span>
+                  </div>
+                  {isSelected && <Check className="w-4 h-4 text-white shrink-0 ml-1.5" />}
                 </button>
               );
             })}
+
+            {filteredSubtitles.length === 0 && (
+              <div className="py-6 text-center text-xs text-zinc-500">
+                No matching subtitles found for "{subSearchQuery}"
+              </div>
+            )}
           </div>
 
           {/* Bottom Action Bar: Style & Delay (image_66a8b767.png) */}

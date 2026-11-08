@@ -47,8 +47,8 @@ function streamApiPlugin(): Plugin {
   const handleRequest = async (req: any, res: any, next: any) => {
     const url = req.url || '';
 
-    // Route new Hono streaming proxy and orchestrator
-    if (url.startsWith('/api/proxy') || url.startsWith('/api/stream/')) {
+    // Route new Hono streaming proxy, orchestrator, and subtitle proxy
+    if (url.startsWith('/api/proxy') || url.startsWith('/api/stream/') || url.startsWith('/api/subtitle-proxy')) {
       return honoListener(req, res);
     }
 

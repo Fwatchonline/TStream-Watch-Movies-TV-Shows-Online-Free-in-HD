@@ -153,6 +153,11 @@ export async function syncUserProfile(user: User, customDisplayName?: string): P
     }
     return userProfile;
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for syncUserProfile. Returning user profile.');
+      return userProfile;
+    }
     handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
   }
 }
@@ -168,6 +173,11 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
     }
     return null;
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for getUserProfile. Returning null fallback.');
+      return null;
+    }
     handleFirestoreError(err, OperationType.GET, `users/${userId}`);
   }
 }
@@ -191,14 +201,30 @@ export function cleanFirestoreObject<T extends Record<string, any>>(obj: T): Rec
  */
 export async function addToWatchlist(item: Omit<WatchlistItem, 'addedAt'>): Promise<void> {
   const path = `users/${item.userId}/watchlist/${item.tmdbId}`;
+  const now = new Date().toISOString();
+  const fullItem = cleanFirestoreObject({
+    ...item,
+    addedAt: now
+  }) as WatchlistItem;
+
+  // Local sync
+  try {
+    const raw = localStorage.getItem(`tstream_watchlist_${item.userId}`);
+    const list: WatchlistItem[] = raw ? JSON.parse(raw) : [];
+    const filtered = list.filter((r) => String(r.tmdbId) !== String(item.tmdbId));
+    filtered.unshift(fullItem);
+    localStorage.setItem(`tstream_watchlist_${item.userId}`, JSON.stringify(filtered));
+  } catch {}
+
   try {
     const itemRef = doc(db, 'users', item.userId, 'watchlist', String(item.tmdbId));
-    const fullItem = cleanFirestoreObject({
-      ...item,
-      addedAt: new Date().toISOString()
-    });
     await setDoc(itemRef, fullItem);
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for watchlist write. Saved to local storage.');
+      return;
+    }
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
@@ -208,10 +234,25 @@ export async function addToWatchlist(item: Omit<WatchlistItem, 'addedAt'>): Prom
  */
 export async function removeFromWatchlist(userId: string, tmdbId: string | number): Promise<void> {
   const path = `users/${userId}/watchlist/${tmdbId}`;
+  // Local sync
+  try {
+    const raw = localStorage.getItem(`tstream_watchlist_${userId}`);
+    if (raw) {
+      const list: WatchlistItem[] = JSON.parse(raw);
+      const filtered = list.filter((r) => String(r.tmdbId) !== String(tmdbId));
+      localStorage.setItem(`tstream_watchlist_${userId}`, JSON.stringify(filtered));
+    }
+  } catch {}
+
   try {
     const itemRef = doc(db, 'users', userId, 'watchlist', String(tmdbId));
     await deleteDoc(itemRef);
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for watchlist delete. Removed from local storage.');
+      return;
+    }
     handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
@@ -233,6 +274,15 @@ export function subscribeToWatchlist(userId: string, onUpdate: (items: Watchlist
       onUpdate(items);
     },
     (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+        console.warn('Firestore daily quota reached for watchlist. Operating in fallback mode.');
+        try {
+          const raw = localStorage.getItem(`tstream_watchlist_${userId}`);
+          if (raw) onUpdate(JSON.parse(raw));
+        } catch {}
+        return;
+      }
       handleFirestoreError(err, OperationType.GET, `users/${userId}/watchlist`);
     }
   );
@@ -293,6 +343,18 @@ export async function saveUserContinueWatching(
     const payload = cleanFirestoreObject(baseRecord);
     await setDoc(itemRef, payload, { merge: true });
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore quota reached while saving continue watching. Cached locally.');
+      try {
+        const raw = localStorage.getItem(`tstream_continue_${item.userId}`);
+        const list = raw ? JSON.parse(raw) : [];
+        const filtered = list.filter((r: any) => !(r.mediaType === item.mediaType && String(r.tmdbId) === String(item.tmdbId)));
+        filtered.unshift({ ...item, updatedAt: new Date().toISOString() });
+        localStorage.setItem(`tstream_continue_${item.userId}`, JSON.stringify(filtered));
+      } catch {}
+      return;
+    }
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
@@ -311,6 +373,17 @@ export async function removeUserContinueWatching(
     const itemRef = doc(db, 'users', userId, 'continueWatching', docId);
     await deleteDoc(itemRef);
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      try {
+        const raw = localStorage.getItem(`tstream_continue_${userId}`);
+        if (raw) {
+          const list = JSON.parse(raw).filter((r: any) => !(r.mediaType === mediaType && String(r.tmdbId) === String(tmdbId)));
+          localStorage.setItem(`tstream_continue_${userId}`, JSON.stringify(list));
+        }
+      } catch {}
+      return;
+    }
     handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
@@ -333,6 +406,18 @@ export async function getUserContinueWatchingItem(
     }
     return null;
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      try {
+        const raw = localStorage.getItem(`tstream_continue_${userId}`);
+        if (raw) {
+          const list: ContinueWatchingRecord[] = JSON.parse(raw);
+          const found = list.find(r => r.mediaType === mediaType && String(r.tmdbId) === String(tmdbId));
+          if (found) return found;
+        }
+      } catch {}
+      return null;
+    }
     handleFirestoreError(err, OperationType.GET, path);
   }
 }
@@ -357,6 +442,15 @@ export function subscribeToUserContinueWatching(
       onUpdate(items);
     },
     (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+        console.warn('Firestore daily quota reached for continue watching. Operating in fallback mode.');
+        try {
+          const raw = localStorage.getItem(`tstream_continue_${userId}`);
+          if (raw) onUpdate(JSON.parse(raw));
+        } catch {}
+        return;
+      }
       handleFirestoreError(err, OperationType.GET, `users/${userId}/continueWatching`);
     }
   );
@@ -850,6 +944,11 @@ export async function followShow(item: Omit<FollowedShowItem, 'followedAt'>): Pr
     const ref = doc(db, 'users', item.userId, 'followedShows', String(item.showId));
     await setDoc(ref, fullItem);
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for followShow. Kept local sync.');
+      return;
+    }
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
@@ -874,6 +973,11 @@ export async function unfollowShow(userId: string, showId: string | number): Pro
     const ref = doc(db, 'users', userId, 'followedShows', String(showId));
     await deleteDoc(ref);
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for unfollowShow. Kept local sync.');
+      return;
+    }
     handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
@@ -904,6 +1008,15 @@ export function subscribeToFollowedShows(
       onUpdate(items);
     },
     (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+        console.warn('Firestore daily quota reached for followed shows. Operating in fallback mode.');
+        try {
+          const raw = localStorage.getItem(`tstream_followed_${userId}`);
+          if (raw) onUpdate(JSON.parse(raw));
+        } catch {}
+        return;
+      }
       handleFirestoreError(err, OperationType.GET, `users/${userId}/followedShows`);
     }
   );
@@ -930,6 +1043,11 @@ export async function saveEpisodeNotification(notif: EpisodeNotification): Promi
     const ref = doc(db, 'users', notif.userId, 'notifications', notif.id);
     await setDoc(ref, payload, { merge: true });
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for saveEpisodeNotification. Kept local sync.');
+      return;
+    }
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
@@ -953,6 +1071,11 @@ export async function markNotificationAsRead(userId: string, notifId: string): P
     const ref = doc(db, 'users', userId, 'notifications', notifId);
     await updateDoc(ref, { read: true });
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for markNotificationAsRead. Kept local sync.');
+      return;
+    }
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
@@ -976,6 +1099,11 @@ export async function markAllNotificationsAsRead(userId: string): Promise<void> 
     const promises = snap.docs.map(d => updateDoc(d.ref, { read: true }));
     await Promise.all(promises);
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore daily quota reached for markAllNotificationsAsRead. Kept local sync.');
+      return;
+    }
     handleFirestoreError(err, OperationType.UPDATE, `users/${userId}/notifications`);
   }
 }
@@ -1005,6 +1133,15 @@ export function subscribeToEpisodeNotifications(
       onUpdate(items);
     },
     (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+        console.warn('Firestore daily quota reached for notifications. Operating in fallback mode.');
+        try {
+          const raw = localStorage.getItem(`tstream_notifs_${userId}`);
+          if (raw) onUpdate(JSON.parse(raw));
+        } catch {}
+        return;
+      }
       handleFirestoreError(err, OperationType.GET, `users/${userId}/notifications`);
     }
   );

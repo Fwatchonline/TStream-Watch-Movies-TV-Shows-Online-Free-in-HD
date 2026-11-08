@@ -134,16 +134,25 @@ export async function saveUserPlayerSettings(
   currentActiveUserId = userId;
 
   // Persist directly to Firebase Firestore database
-  const userRef = doc(db, 'users', userId);
-  await setDoc(
-    userRef,
-    {
-      userId,
-      playerSettings: merged,
-      updatedAt: new Date().toISOString()
-    },
-    { merge: true }
-  );
+  try {
+    const userRef = doc(db, 'users', userId);
+    await setDoc(
+      userRef,
+      {
+        userId,
+        playerSettings: merged,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+      console.warn('Firestore quota reached while saving player settings. Maintained in session.');
+    } else {
+      throw err;
+    }
+  }
 
   // Notify active players in the current window session
   if (typeof window !== 'undefined') {
