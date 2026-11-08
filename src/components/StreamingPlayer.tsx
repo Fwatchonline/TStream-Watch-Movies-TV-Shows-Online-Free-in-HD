@@ -435,6 +435,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
             <DirectVideoPlayer
               title={media.title}
               isMovie={isMovie}
+              genres={Array.isArray(media.genres) ? media.genres.map((g: any) => typeof g === 'string' ? g : g.name) : []}
+              releaseYear={media.releaseDate ? new Date(media.releaseDate).getFullYear() : (media as any).firstAirDate ? new Date((media as any).firstAirDate).getFullYear() : 2026}
               currentSeason={currentSeason}
               currentEpisode={currentEpisode}
               totalSeasons={tvDetail?.seasons?.length || (media as any).numberOfSeasons || 1}
