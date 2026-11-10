@@ -12,7 +12,16 @@ import {
   getCountFromServer,
   where
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, isFirestoreQuotaExceeded, markFirestoreQuotaExceeded, isQuotaExceededError } from './firebase';
+
+export interface CountryMetric {
+  country: string;
+  countryCode: string;
+  city?: string;
+  count: number;
+  percentage: number;
+  flag: string;
+}
 
 export interface SiteVisitRecord {
   id?: string;
@@ -21,6 +30,10 @@ export interface SiteVisitRecord {
   device: 'Desktop' | 'Mobile' | 'Tablet';
   browser: string;
   os: string;
+  country?: string;
+  countryCode?: string;
+  city?: string;
+  flag?: string;
   isRegistered: boolean;
   userId?: string | null;
   userEmail?: string | null;
@@ -37,6 +50,7 @@ export interface DailyAnalyticsRecord {
   pages?: Record<string, number>;
   devices?: Record<string, number>;
   browsers?: Record<string, number>;
+  countries?: Record<string, number>;
 }
 
 export interface RegisteredUserSummary {
@@ -58,6 +72,8 @@ export interface AnalyticsSummary {
   recentVisits: SiteVisitRecord[];
   dailyTrends: DailyAnalyticsRecord[];
   topPages: Array<{ path: string; count: number }>;
+  topCountries: CountryMetric[];
+  countryBreakdown: Record<string, number>;
   deviceBreakdown: Record<string, number>;
   browserBreakdown: Record<string, number>;
 }
@@ -99,6 +115,141 @@ function getDeviceInfo(): { device: 'Desktop' | 'Mobile' | 'Tablet'; browser: st
   return { device, browser, os };
 }
 
+/**
+ * Convert 2-letter ISO country code into Unicode flag emoji
+ */
+export function getFlagEmoji(countryCode: string): string {
+  if (!countryCode || countryCode.length !== 2) return '🌐';
+  const codePoints = countryCode
+    .toUpperCase()
+    .split('')
+    .map((char) => 127397 + char.charCodeAt(0));
+  return String.fromCodePoint(...codePoints);
+}
+
+/**
+ * Fast zero-latency offline heuristic from browser TimeZone & Locale
+ */
+function getLocalFallbackGeo(): { country: string; countryCode: string; city: string; flag: string } {
+  let timeZone = 'UTC';
+  try {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {}
+
+  const tzMap: Record<string, { country: string; countryCode: string; city: string; flag: string }> = {
+    // Ex-Yu & Balkans
+    'Europe/Belgrade': { country: 'Serbia', countryCode: 'RS', city: 'Belgrade', flag: '🇷🇸' },
+    'Europe/Sarajevo': { country: 'Bosnia & Herzegovina', countryCode: 'BA', city: 'Sarajevo', flag: '🇧🇦' },
+    'Europe/Zagreb': { country: 'Croatia', countryCode: 'HR', city: 'Zagreb', flag: '🇭🇷' },
+    'Europe/Ljubljana': { country: 'Slovenia', countryCode: 'SI', city: 'Ljubljana', flag: '🇸🇮' },
+    'Europe/Skopje': { country: 'North Macedonia', countryCode: 'MK', city: 'Skopje', flag: '🇲🇰' },
+    'Europe/Podgorica': { country: 'Montenegro', countryCode: 'ME', city: 'Podgorica', flag: '🇲🇪' },
+    // Europe
+    'Europe/Vienna': { country: 'Austria', countryCode: 'AT', city: 'Vienna', flag: '🇦🇹' },
+    'Europe/Berlin': { country: 'Germany', countryCode: 'DE', city: 'Berlin', flag: '🇩🇪' },
+    'Europe/Zurich': { country: 'Switzerland', countryCode: 'CH', city: 'Zurich', flag: '🇨🇭' },
+    'Europe/London': { country: 'United Kingdom', countryCode: 'GB', city: 'London', flag: '🇬🇧' },
+    'Europe/Paris': { country: 'France', countryCode: 'FR', city: 'Paris', flag: '🇫🇷' },
+    'Europe/Rome': { country: 'Italy', countryCode: 'IT', city: 'Rome', flag: '🇮🇹' },
+    'Europe/Madrid': { country: 'Spain', countryCode: 'ES', city: 'Madrid', flag: '🇪🇸' },
+    'Europe/Amsterdam': { country: 'Netherlands', countryCode: 'NL', city: 'Amsterdam', flag: '🇳🇱' },
+    'Europe/Brussels': { country: 'Belgium', countryCode: 'BE', city: 'Brussels', flag: '🇧🇪' },
+    'Europe/Stockholm': { country: 'Sweden', countryCode: 'SE', city: 'Stockholm', flag: '🇸🇪' },
+    'Europe/Oslo': { country: 'Norway', countryCode: 'NO', city: 'Oslo', flag: '🇳🇴' },
+    'Europe/Copenhagen': { country: 'Denmark', countryCode: 'DK', city: 'Copenhagen', flag: '🇩🇰' },
+    'Europe/Helsinki': { country: 'Finland', countryCode: 'FI', city: 'Helsinki', flag: '🇫🇮' },
+    'Europe/Warsaw': { country: 'Poland', countryCode: 'PL', city: 'Warsaw', flag: '🇵🇱' },
+    'Europe/Prague': { country: 'Czechia', countryCode: 'CZ', city: 'Prague', flag: '🇨🇿' },
+    'Europe/Budapest': { country: 'Hungary', countryCode: 'HU', city: 'Budapest', flag: '🇭🇺' },
+    'Europe/Bucharest': { country: 'Romania', countryCode: 'RO', city: 'Bucharest', flag: '🇷🇴' },
+    'Europe/Sofia': { country: 'Bulgaria', countryCode: 'BG', city: 'Sofia', flag: '🇧🇬' },
+    'Europe/Athens': { country: 'Greece', countryCode: 'GR', city: 'Athens', flag: '🇬🇷' },
+    'Europe/Istanbul': { country: 'Turkey', countryCode: 'TR', city: 'Istanbul', flag: '🇹🇷' },
+    'Europe/Moscow': { country: 'Russia', countryCode: 'RU', city: 'Moscow', flag: '🇷🇺' },
+    'Europe/Kyiv': { country: 'Ukraine', countryCode: 'UA', city: 'Kyiv', flag: '🇺🇦' },
+    // Americas & Worldwide
+    'America/New_York': { country: 'United States', countryCode: 'US', city: 'New York', flag: '🇺🇸' },
+    'America/Chicago': { country: 'United States', countryCode: 'US', city: 'Chicago', flag: '🇺🇸' },
+    'America/Los_Angeles': { country: 'United States', countryCode: 'US', city: 'Los Angeles', flag: '🇺🇸' },
+    'America/Denver': { country: 'United States', countryCode: 'US', city: 'Denver', flag: '🇺🇸' },
+    'America/Toronto': { country: 'Canada', countryCode: 'CA', city: 'Toronto', flag: '🇨🇦' },
+    'America/Vancouver': { country: 'Canada', countryCode: 'CA', city: 'Vancouver', flag: '🇨🇦' },
+    'America/Mexico_City': { country: 'Mexico', countryCode: 'MX', city: 'Mexico City', flag: '🇲🇽' },
+    'America/Sao_Paulo': { country: 'Brazil', countryCode: 'BR', city: 'São Paulo', flag: '🇧🇷' },
+    'Australia/Sydney': { country: 'Australia', countryCode: 'AU', city: 'Sydney', flag: '🇦🇺' },
+    'Asia/Tokyo': { country: 'Japan', countryCode: 'JP', city: 'Tokyo', flag: '🇯🇵' },
+    'Asia/Dubai': { country: 'United Arab Emirates', countryCode: 'AE', city: 'Dubai', flag: '🇦🇪' }
+  };
+
+  if (tzMap[timeZone]) {
+    return tzMap[timeZone];
+  }
+
+  if (timeZone.startsWith('Europe/')) {
+    const rawCity = timeZone.split('/')[1]?.replace(/_/g, ' ') || 'Europe';
+    return { country: 'Europe', countryCode: 'EU', city: rawCity, flag: '🇪🇺' };
+  }
+  if (timeZone.startsWith('America/')) {
+    const rawCity = timeZone.split('/')[1]?.replace(/_/g, ' ') || 'Americas';
+    return { country: 'United States', countryCode: 'US', city: rawCity, flag: '🇺🇸' };
+  }
+
+  return { country: 'International', countryCode: 'UN', city: 'Global', flag: '🌐' };
+}
+
+/**
+ * Asynchronously fetch visitor location with session caching & fast fallback
+ */
+export async function getVisitorLocation(): Promise<{ country: string; countryCode: string; city: string; flag: string }> {
+  if (typeof window === 'undefined') {
+    return { country: 'Global', countryCode: 'UN', city: 'Unknown', flag: '🌐' };
+  }
+
+  try {
+    const cached = sessionStorage.getItem('tstream_visitor_geo');
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  } catch {}
+
+  const fallback = getLocalFallbackGeo();
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1800);
+    const res = await fetch('https://ipwho.is/', {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' }
+    });
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success !== false && data.country) {
+        const countryCode = (data.country_code || fallback.countryCode || 'UN').toUpperCase();
+        const flag = data.flag?.emoji || getFlagEmoji(countryCode) || fallback.flag;
+        const result = {
+          country: data.country || fallback.country,
+          countryCode,
+          city: data.city || fallback.city,
+          flag
+        };
+        try {
+          sessionStorage.setItem('tstream_visitor_geo', JSON.stringify(result));
+        } catch {}
+        return result;
+      }
+    }
+  } catch {
+    // If external service fails or is blocked by client adblocker, keep fallback
+  }
+
+  try {
+    sessionStorage.setItem('tstream_visitor_geo', JSON.stringify(fallback));
+  } catch {}
+  return fallback;
+}
+
 let isQuotaExceeded = false;
 let lastLoggedPath = '';
 let lastLoggedTime = 0;
@@ -110,7 +261,7 @@ export async function recordSiteVisit(
   path: string,
   user?: { uid: string; email?: string | null } | null
 ): Promise<void> {
-  if (typeof window === 'undefined' || isQuotaExceeded) return;
+  if (typeof window === 'undefined' || isFirestoreQuotaExceeded() || isQuotaExceeded) return;
 
   const now = Date.now();
   // Prevent duplicate logs for the same route within 10 seconds
@@ -122,6 +273,7 @@ export async function recordSiteVisit(
 
   const dateStr = new Date().toISOString().split('T')[0];
   const { device, browser, os } = getDeviceInfo();
+  const geo = await getVisitorLocation();
   const referrer = document.referrer ? new URL(document.referrer, window.location.origin).pathname : 'Direct';
 
   try {
@@ -136,6 +288,10 @@ export async function recordSiteVisit(
       device,
       browser,
       os,
+      country: geo.country,
+      countryCode: geo.countryCode,
+      city: geo.city,
+      flag: geo.flag,
       isRegistered: !!user,
       userId: user?.uid || null,
       userEmail: user?.email || null,
@@ -149,6 +305,7 @@ export async function recordSiteVisit(
     // 2. Aggregate into daily metrics
     const dailyRef = doc(db, 'analytics_daily', dateStr);
     const cleanPathKey = (path.replace(/[/.]/g, '_').substring(0, 40) || 'home');
+    const cleanCountryKey = (geo.country.replace(/[/.]/g, '_').substring(0, 30) || 'unknown');
 
     await setDoc(
       dailyRef,
@@ -159,7 +316,8 @@ export async function recordSiteVisit(
         guestVisits: increment(user ? 0 : 1),
         [`pages.${cleanPathKey}`]: increment(1),
         [`devices.${device}`]: increment(1),
-        [`browsers.${browser}`]: increment(1)
+        [`browsers.${browser}`]: increment(1),
+        [`countries.${cleanCountryKey}`]: increment(1)
       },
       { merge: true }
     );
@@ -176,9 +334,9 @@ export async function recordSiteVisit(
       { merge: true }
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
+    if (isQuotaExceededError(err)) {
       isQuotaExceeded = true;
+      markFirestoreQuotaExceeded();
       console.warn('Firestore daily write quota reached for analytics. Pausing analytics writes.');
       return;
     }
@@ -237,6 +395,15 @@ export async function getRegisteredUsersList(limitCount = 100): Promise<Register
  * Fetch comprehensive website analytics & metrics
  */
 export async function getAnalyticsData(): Promise<AnalyticsSummary> {
+  if (isFirestoreQuotaExceeded()) {
+    try {
+      const cached = localStorage.getItem('tstream_cached_analytics');
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    } catch {}
+  }
+
   let totalVisits = 0;
   let totalPageViews = 0;
   let registeredUsersCount = 0;
@@ -310,7 +477,8 @@ export async function getAnalyticsData(): Promise<AnalyticsSummary> {
         date: d.date || docSnap.id,
         pageViews: d.pageViews || 0,
         registeredVisits: d.registeredVisits || 0,
-        guestVisits: d.guestVisits || 0
+        guestVisits: d.guestVisits || 0,
+        countries: d.countries || {}
       });
 
       if (d.date === todayStr && d.pageViews > todayVisits) {
@@ -325,6 +493,64 @@ export async function getAnalyticsData(): Promise<AnalyticsSummary> {
     dailyTrends.sort((a, b) => a.date.localeCompare(b.date));
   } catch {}
 
+  // 5. Aggregate Countries and Geolocation
+  const countryBreakdown: Record<string, number> = {};
+  const countryDetailMap: Record<string, { count: number; countryCode: string; flag: string; cities: Record<string, number> }> = {};
+
+  recentVisits.forEach((v) => {
+    const cName = v.country || 'Unknown';
+    const cCode = v.countryCode || 'UN';
+    const cFlag = v.flag || getFlagEmoji(cCode);
+
+    countryBreakdown[cName] = (countryBreakdown[cName] || 0) + 1;
+
+    if (!countryDetailMap[cName]) {
+      countryDetailMap[cName] = {
+        count: 0,
+        countryCode: cCode,
+        flag: cFlag,
+        cities: {}
+      };
+    }
+    countryDetailMap[cName].count++;
+    if (v.city && v.city !== 'Unknown') {
+      countryDetailMap[cName].cities[v.city] = (countryDetailMap[cName].cities[v.city] || 0) + 1;
+    }
+  });
+
+  // Also include countries from daily aggregation if recent visits are few
+  dailyTrends.forEach((trend) => {
+    if (trend.countries) {
+      Object.entries(trend.countries).forEach(([cRaw, cCount]) => {
+        const cFormatted = cRaw.replace(/_/g, ' ');
+        countryBreakdown[cFormatted] = Math.max(countryBreakdown[cFormatted] || 0, cCount);
+        if (!countryDetailMap[cFormatted]) {
+          countryDetailMap[cFormatted] = {
+            count: cCount,
+            countryCode: 'UN',
+            flag: '🌐',
+            cities: {}
+          };
+        }
+      });
+    }
+  });
+
+  const totalGeoHits = Math.max(1, Object.values(countryBreakdown).reduce((a, b) => a + b, 0));
+  const topCountries: CountryMetric[] = Object.entries(countryDetailMap)
+    .map(([cName, data]) => {
+      const topCity = Object.entries(data.cities).sort((a, b) => b[1] - a[1])[0]?.[0];
+      return {
+        country: cName,
+        countryCode: data.countryCode,
+        city: topCity,
+        count: data.count,
+        percentage: Math.min(100, Math.round((data.count / totalGeoHits) * 100)),
+        flag: data.flag
+      };
+    })
+    .sort((a, b) => b.count - a.count);
+
   // Format Top Pages
   const topPages = Object.entries(pageCounts)
     .map(([path, count]) => ({ path, count }))
@@ -337,7 +563,7 @@ export async function getAnalyticsData(): Promise<AnalyticsSummary> {
     totalPageViews = totalVisits;
   }
 
-  return {
+  const result: AnalyticsSummary = {
     totalVisits,
     totalPageViews,
     registeredUsersCount,
@@ -346,7 +572,15 @@ export async function getAnalyticsData(): Promise<AnalyticsSummary> {
     recentVisits,
     dailyTrends,
     topPages,
+    topCountries,
+    countryBreakdown,
     deviceBreakdown,
     browserBreakdown
   };
+
+  try {
+    localStorage.setItem('tstream_cached_analytics', JSON.stringify(result));
+  } catch {}
+
+  return result;
 }

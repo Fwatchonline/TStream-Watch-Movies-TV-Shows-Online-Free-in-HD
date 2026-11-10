@@ -72,6 +72,7 @@ import {
   RegisteredUserSummary,
   SiteVisitRecord
 } from '../services/analytics';
+import { LanguageFlag } from '../components/LanguageFlag';
 
 const PRESET_DOT_COLORS = [
   { label: 'Emerald', color: '#34D399' },
@@ -632,7 +633,7 @@ export const AdminPage: React.FC = () => {
       {activeTab === 'analytics' && (
         <div className="space-y-8 animate-in fade-in duration-200">
           {/* Quick Metrics Bar */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="p-4 rounded-xl bg-[#16161a] border border-[#2d2d34]">
               <span className="text-[11px] font-bold uppercase text-[#8E8E93] block">Today's Visits</span>
               <div className="flex items-baseline gap-2 mt-1">
@@ -660,6 +661,25 @@ export const AdminPage: React.FC = () => {
               </div>
               <span className="text-[11px] text-[#A6A6AC] mt-1 block">
                 Personalized player &amp; server profiles synced in cloud
+              </span>
+            </div>
+
+            <div className="p-4 rounded-xl bg-[#16161a] border border-[#2d2d34]">
+              <span className="text-[11px] font-bold uppercase text-[#8E8E93] block">Top Visitor Country</span>
+              <div className="flex items-center gap-2 mt-1">
+                <LanguageFlag
+                  countryCode={analyticsData?.topCountries?.[0]?.countryCode}
+                  name={analyticsData?.topCountries?.[0]?.country}
+                  className="w-7 h-5 rounded-[2px]"
+                />
+                <span className="text-lg font-bold text-white truncate">
+                  {analyticsData?.topCountries?.[0]?.country || 'Global'}
+                </span>
+              </div>
+              <span className="text-[11px] text-amber-400 font-medium mt-1 block">
+                {analyticsData?.topCountries?.[0]
+                  ? `${analyticsData.topCountries[0].count} visits (${analyticsData.topCountries[0].percentage}%)`
+                  : 'Detecting visitor origins...'}
               </span>
             </div>
 
@@ -719,6 +739,67 @@ export const AdminPage: React.FC = () => {
             ) : (
               <div className="py-10 text-center text-xs text-[#8E8E93]">
                 Recording visits... New traffic will appear here as users explore movies and episodes.
+              </div>
+            )}
+          </div>
+
+          {/* Visitor Geography & Countries Breakdown */}
+          <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-[#F5C400]" />
+                  <span>Visitor Geography &amp; Countries</span>
+                </h3>
+                <p className="text-xs text-[#8E8E93] mt-0.5">
+                  Real-time geographic origins and country breakdown of audience visits
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono text-[#F5C400] bg-[#F5C400]/10 px-2.5 py-1 rounded-lg border border-[#F5C400]/20">
+                  {analyticsData?.topCountries?.length || 1} Countries Detected
+                </span>
+              </div>
+            </div>
+
+            {analyticsData?.topCountries && analyticsData.topCountries.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {analyticsData.topCountries.map((c) => (
+                  <div
+                    key={c.country}
+                    className="p-3.5 rounded-xl bg-[#101014] border border-[#25252b] hover:border-[#F5C400]/40 transition-colors flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-2 truncate">
+                          <LanguageFlag countryCode={c.countryCode} name={c.country} className="w-6 h-4 rounded-[2px]" />
+                          <span className="font-bold text-white text-xs truncate">
+                            {c.country}
+                          </span>
+                        </div>
+                        <span className="text-xs font-bold text-amber-400 font-mono shrink-0">
+                          {c.count} {c.count === 1 ? 'visit' : 'visits'} ({c.percentage}%)
+                        </span>
+                      </div>
+                      {c.city && c.city !== 'Unknown' && (
+                        <p className="text-[10px] text-[#8E8E93] flex items-center gap-1 mb-2">
+                          <Compass className="w-3 h-3 text-[#F5C400]" />
+                          <span>Top City: <strong className="text-zinc-300 font-medium">{c.city}</strong></span>
+                        </p>
+                      )}
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-white/5 overflow-hidden mt-1">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-amber-500 to-[#F5C400]"
+                        style={{ width: `${Math.max(6, c.percentage)}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-8 text-center text-xs text-[#8E8E93]">
+                Detecting visitor locations... Traffic will automatically appear with country flags as visitors access the site.
               </div>
             )}
           </div>
@@ -862,6 +943,7 @@ export const AdminPage: React.FC = () => {
                 <thead>
                   <tr className="border-b border-[#2d2d34] text-[#8E8E93]">
                     <th className="pb-3 font-semibold">Route / Path</th>
+                    <th className="pb-3 font-semibold">Location</th>
                     <th className="pb-3 font-semibold">Audience</th>
                     <th className="pb-3 font-semibold">Device</th>
                     <th className="pb-3 font-semibold">Browser &amp; OS</th>
@@ -875,6 +957,15 @@ export const AdminPage: React.FC = () => {
                       <tr key={v.id || i} className="hover:bg-[#1f1f26] transition-colors">
                         <td className="py-2.5 font-mono text-white font-medium">
                           {v.path}
+                        </td>
+                        <td className="py-2.5">
+                          <span className="flex items-center gap-1.5 text-white">
+                            <LanguageFlag countryCode={v.countryCode} name={v.country} className="w-5 h-3.5 rounded-[2px]" />
+                            <span className="font-medium truncate max-w-[110px]">{v.country || 'International'}</span>
+                            {v.city && v.city !== 'Unknown' && (
+                              <span className="text-[#8E8E93] text-[10px] truncate max-w-[80px]">({v.city})</span>
+                            )}
+                          </span>
                         </td>
                         <td className="py-2.5">
                           {v.isRegistered ? (
@@ -901,7 +992,7 @@ export const AdminPage: React.FC = () => {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-[#8E8E93]">
+                      <td colSpan={7} className="py-8 text-center text-[#8E8E93]">
                         No visits recorded yet. Visiting any page will automatically log entries here.
                       </td>
                     </tr>

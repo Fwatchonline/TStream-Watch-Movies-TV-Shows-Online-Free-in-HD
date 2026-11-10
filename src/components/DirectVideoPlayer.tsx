@@ -18,6 +18,8 @@ import {
   ArrowLeft,
   Check,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Download,
   AlertTriangle,
   RefreshCw,
@@ -33,6 +35,7 @@ import { ResolvedStream, DirectProviderResult, cleanServerDisplay } from '../ser
 import { SubtitleTrack, Episode } from '../types/media';
 import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
 import { getUserPlayerSettings, UserPlayerSettings } from '../services/playerSettings';
+import { LanguageFlag } from './LanguageFlag';
 
 interface DirectVideoPlayerProps {
   title: string;
@@ -103,6 +106,44 @@ const RotateCw15Icon: React.FC<{ className?: string }> = ({ className = 'w-5 h-5
     <text x="12" y="15.5" fontSize="7" fontWeight="900" textAnchor="middle" fill="currentColor" stroke="none" fontFamily="sans-serif">15</text>
   </svg>
 );
+
+const LANGUAGE_FLAGS: Record<string, string> = {
+  sr: '🇷🇸',
+  hr: '🇭🇷',
+  bs: '🇧🇦',
+  en: '🇬🇧',
+  es: '🇪🇸',
+  fr: '🇫🇷',
+  de: '🇩🇪',
+  it: '🇮🇹',
+  pt: '🇵🇹',
+  ru: '🇷🇺',
+  tr: '🇹🇷',
+  sl: '🇸🇮',
+  mk: '🇲🇰',
+  sq: '🇦🇱',
+  ar: '🇸🇦',
+  hi: '🇮🇳',
+  id: '🇮🇩',
+  ms: '🇲🇾',
+  nl: '🇳🇱',
+  pl: '🇵🇱',
+  cs: '🇨🇿',
+  hu: '🇭🇺',
+  ro: '🇷🇴',
+  bg: '🇧🇬',
+  el: '🇬🇷',
+  sv: '🇸🇪',
+  no: '🇳🇴',
+  da: '🇩🇰',
+  fi: '🇫🇮',
+  he: '🇮🇱',
+  ko: '🇰🇷',
+  zh: '🇨🇳',
+  ja: '🇯🇵',
+  vi: '🇻🇳',
+  th: '🇹🇭'
+};
 
 export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   title,
@@ -829,6 +870,49 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     );
   }, [combinedSubtitles, subSearchQuery]);
 
+  const [expandedLanguages, setExpandedLanguages] = useState<Record<string, boolean>>({});
+
+  // Group subtitles cleanly by language for dropdown accordions
+  const languageGroups = useMemo(() => {
+    const map = new Map<string, { language: string; languageCode: string; flag: string; tracks: SubtitleTrack[] }>();
+
+    for (const track of filteredSubtitles) {
+      const code = (track.languageCode || 'other').toLowerCase();
+      let langName = track.language || 'Other';
+      if (code === 'sr') langName = 'Serbian';
+      else if (code === 'hr') langName = 'Croatian';
+      else if (code === 'bs') langName = 'Bosnian';
+      else if (code === 'en') langName = 'English';
+
+      const flag = LANGUAGE_FLAGS[code] || '🌐';
+
+      if (!map.has(code)) {
+        map.set(code, {
+          language: langName,
+          languageCode: code,
+          flag,
+          tracks: []
+        });
+      }
+      map.get(code)!.tracks.push(track);
+    }
+
+    return Array.from(map.values());
+  }, [filteredSubtitles]);
+
+  // Auto-expand language containing the active subtitle track
+  useEffect(() => {
+    if (activeSubTrackUrl) {
+      const activeTrack = combinedSubtitles.find(s => s.url === activeSubTrackUrl);
+      if (activeTrack?.languageCode) {
+        setExpandedLanguages(prev => ({
+          ...prev,
+          [activeTrack.languageCode!.toLowerCase()]: true
+        }));
+      }
+    }
+  }, [activeSubTrackUrl, combinedSubtitles]);
+
   // Auto-select subtitle based on user settings (default: Ex-Yu / BHS or English)
   const autoSelectDoneRef = useRef<boolean>(false);
   const previousStorageKeyRef = useRef<string | undefined>(storageKey);
@@ -1422,47 +1506,86 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               {activeSubTrackUrl === null && <Check className="w-4 h-4 text-white" />}
             </button>
 
-            {/* Combined & Filtered tracks */}
-            {filteredSubtitles.map((track) => {
-              const isSelected = activeSubTrackUrl === track.url;
+            {/* Language Dropdown Accordions */}
+            {languageGroups.map((group) => {
+              const isExpanded = subSearchQuery.trim() ? true : !!expandedLanguages[group.languageCode];
+              const hasActiveTrack = group.tracks.some((t) => t.url === activeSubTrackUrl);
+
               return (
-                <button
-                  key={track.url}
-                  onClick={() => {
-                    setActiveSubTrackUrl(track.url);
-                    triggerHud('subtitle', `Subtitles: ${track.label || 'Selected'}`);
-                  }}
-                  title={track.label}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-medium transition-colors cursor-pointer gap-2 ${
-                    isSelected ? 'bg-[#24242a] text-white' : 'hover:bg-white/5 text-zinc-300'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 truncate">
-                    {track.source === 'opensubtitles_v3' ? (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#F5C400]/15 text-[#F5C400] border border-[#F5C400]/30 shrink-0">
-                        OS
+                <div key={group.languageCode} className="rounded-xl overflow-hidden bg-white/[0.03] border border-white/5 mb-1.5">
+                  {/* Dropdown Header */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExpandedLanguages((prev) => ({
+                        ...prev,
+                        [group.languageCode]: !isExpanded
+                      }));
+                    }}
+                    className={`w-full flex items-center justify-between p-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                      hasActiveTrack
+                        ? 'bg-[#24242a] text-white'
+                        : 'hover:bg-white/5 text-zinc-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 truncate">
+                      <LanguageFlag code={group.languageCode} name={group.language} className="w-5 h-3.5 shadow-sm rounded-[2px]" />
+                      <span className="truncate">{group.language}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 text-zinc-400 font-mono">
+                        {group.tracks.length}
                       </span>
-                    ) : track.source === 'vdrk_v2' ? (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30 shrink-0">
-                        V2
-                      </span>
-                    ) : track.source === 'vdrk_v1' ? (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0">
-                        V1
-                      </span>
-                    ) : (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0">
-                        Custom
-                      </span>
-                    )}
-                    <span className="truncate">{track.label}</span>
-                  </div>
-                  {isSelected && <Check className="w-4 h-4 text-white shrink-0 ml-1.5" />}
-                </button>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {hasActiveTrack && (
+                        <span className="w-2 h-2 rounded-full bg-[#F5C400] ring-2 ring-[#F5C400]/30" />
+                      )}
+                      {isExpanded ? (
+                        <ChevronUp className="w-4 h-4 text-zinc-400" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 text-zinc-400" />
+                      )}
+                    </div>
+                  </button>
+
+                  {/* Dropdown Sub-Items (Numbered tracks without provider branding) */}
+                  {isExpanded && (
+                    <div className="p-1 pl-3 space-y-1 bg-black/30 border-t border-white/5">
+                      {group.tracks.map((track, idx) => {
+                        const isSelected = activeSubTrackUrl === track.url;
+                        const itemLabel = track.source === 'custom' || track.id?.startsWith('custom_')
+                          ? (track.label || `Custom Subtitle ${idx + 1}`)
+                          : `${group.language} ${idx + 1}`;
+
+                        return (
+                          <button
+                            key={track.url}
+                            type="button"
+                            onClick={() => {
+                              setActiveSubTrackUrl(track.url);
+                              triggerHud('subtitle', `Subtitles: ${itemLabel}`);
+                            }}
+                            className={`w-full flex items-center justify-between py-2 px-2.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'bg-[#F5C400]/15 text-[#F5C400] font-semibold border border-[#F5C400]/30'
+                                : 'hover:bg-white/5 text-zinc-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <LanguageFlag code={track.languageCode || group.languageCode} name={group.language} className="w-4 h-3 opacity-90 rounded-[2px]" />
+                              <span className="truncate">{itemLabel}</span>
+                            </div>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-[#F5C400] shrink-0 ml-1.5" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               );
             })}
 
-            {filteredSubtitles.length === 0 && (
+            {languageGroups.length === 0 && (
               <div className="py-6 text-center text-xs text-zinc-500">
                 No matching subtitles found for "{subSearchQuery}"
               </div>

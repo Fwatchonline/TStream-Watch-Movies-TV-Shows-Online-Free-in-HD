@@ -253,7 +253,7 @@ export async function searchSubtitles(params: SubtitleSearchParams): Promise<Sub
               id: `os_${item.id || tracks.length}_${normalizedCode}`,
               language: langName,
               languageCode: normalizedCode,
-              label: `${langName} — OpenSubtitles${tag}`,
+              label: `${langName}${tag}`,
               format: fileUrl.toLowerCase().endsWith('.vtt') ? 'vtt' : 'srt',
               url: fileUrl,
               source: 'opensubtitles_v3'
@@ -311,7 +311,7 @@ export async function searchSubtitles(params: SubtitleSearchParams): Promise<Sub
               id: `vdrk_${tracks.length}_${normalizedCode}`,
               language: langName,
               languageCode: normalizedCode,
-              label: `${langName} — VDRK ${ep.sourceLabel} (${rawLabel})`,
+              label: `${langName}`,
               format: fileUrl.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt',
               url: fileUrl,
               source: ep.source

@@ -1,5 +1,5 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, isFirestoreQuotaExceeded, markFirestoreQuotaExceeded, isQuotaExceededError } from './firebase';
 
 export interface UserPlayerSettings {
   defaultServerId: string;
@@ -84,8 +84,20 @@ export async function loadUserPlayerSettingsFromFirestore(userId: string): Promi
     return { ...DEFAULT_PLAYER_SETTINGS };
   }
 
+  currentActiveUserId = userId;
+
+  if (isFirestoreQuotaExceeded()) {
+    try {
+      const raw = localStorage.getItem(`tstream_settings_${userId}`);
+      if (raw) {
+        currentSessionSettings = { ...DEFAULT_PLAYER_SETTINGS, ...JSON.parse(raw) };
+        return { ...currentSessionSettings };
+      }
+    } catch {}
+    return { ...currentSessionSettings };
+  }
+
   try {
-    currentActiveUserId = userId;
     const userRef = doc(db, 'users', userId);
     const snap = await getDoc(userRef);
 
@@ -97,6 +109,10 @@ export async function loadUserPlayerSettingsFromFirestore(userId: string): Promi
           ...data.playerSettings
         };
 
+        try {
+          localStorage.setItem(`tstream_settings_${userId}`, JSON.stringify(currentSessionSettings));
+        } catch {}
+
         if (typeof window !== 'undefined') {
           window.dispatchEvent(
             new CustomEvent('tstream_player_settings_changed', { detail: currentSessionSettings })
@@ -106,7 +122,19 @@ export async function loadUserPlayerSettingsFromFirestore(userId: string): Promi
       }
     }
   } catch (err) {
-    console.warn('Failed to load user player settings from Firestore database:', err);
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExceeded();
+      console.warn('Firestore quota reached while loading player settings. Using cached settings.');
+      try {
+        const raw = localStorage.getItem(`tstream_settings_${userId}`);
+        if (raw) {
+          currentSessionSettings = { ...DEFAULT_PLAYER_SETTINGS, ...JSON.parse(raw) };
+          return { ...currentSessionSettings };
+        }
+      } catch {}
+    } else {
+      console.warn('Failed to load user player settings from Firestore database:', err);
+    }
   }
 
   currentSessionSettings = { ...DEFAULT_PLAYER_SETTINGS };
@@ -133,24 +161,30 @@ export async function saveUserPlayerSettings(
   currentSessionSettings = merged;
   currentActiveUserId = userId;
 
-  // Persist directly to Firebase Firestore database
+  // Always persist to local cache first
   try {
-    const userRef = doc(db, 'users', userId);
-    await setDoc(
-      userRef,
-      {
-        userId,
-        playerSettings: merged,
-        updatedAt: new Date().toISOString()
-      },
-      { merge: true }
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('Quota exceeded') || (err as any)?.code === 'resource-exhausted') {
-      console.warn('Firestore quota reached while saving player settings. Maintained in session.');
-    } else {
-      throw err;
+    localStorage.setItem(`tstream_settings_${userId}`, JSON.stringify(merged));
+  } catch {}
+
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const userRef = doc(db, 'users', userId);
+      await setDoc(
+        userRef,
+        {
+          userId,
+          playerSettings: merged,
+          updatedAt: new Date().toISOString()
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      if (isQuotaExceededError(err)) {
+        markFirestoreQuotaExceeded();
+        console.warn('Firestore quota reached while saving player settings. Maintained in session and local storage.');
+      } else {
+        throw err;
+      }
     }
   }
 
