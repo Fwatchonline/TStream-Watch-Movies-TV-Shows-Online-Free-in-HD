@@ -89,9 +89,33 @@ export default function App() {
       } else if (path === 'az' || params.has('letter')) {
         setSelectedLetter((params.get('letter') || 'A').toUpperCase());
         setCurrentView('az');
+      } else if (path.startsWith('tags/')) {
+        const parts = path.split('/');
+        if (parts[1]) {
+          const clean = decodeURIComponent(parts[1]).replace(/^#/, '').toLowerCase();
+          setSelectedTag(clean);
+          setCurrentView('tags');
+        } else {
+          setSelectedTag(null);
+          setCurrentView('tags');
+        }
+      } else if (path.startsWith('tag/')) {
+        const parts = path.split('/');
+        if (parts[1]) {
+          const clean = decodeURIComponent(parts[1]).replace(/^#/, '').toLowerCase();
+          setSelectedTag(clean);
+          setCurrentView('tags');
+          window.history.replaceState({}, '', `/tags/${clean}`);
+        }
       } else if (path === 'tags') {
         setCurrentView('tags');
-        if (params.get('tag')) setSelectedTag(params.get('tag')!);
+        if (params.get('tag')) {
+          const clean = decodeURIComponent(params.get('tag')!).replace(/^#/, '').toLowerCase();
+          setSelectedTag(clean);
+          window.history.replaceState({}, '', `/tags/${clean}`);
+        } else {
+          setSelectedTag(null);
+        }
       } else if (path === 'search' || params.has('q')) {
         setCurrentView('search');
         if (params.get('q')) setSearchQuery(params.get('q')!);
@@ -196,11 +220,20 @@ export default function App() {
         url: `/az/${selectedLetter || 'A'}`
       });
     } else if (currentView === 'tags') {
-      updateSEO({
-        title: selectedTag ? `Tag: #${selectedTag}` : 'Explore Movies & TV by Tag',
-        description: 'Explore movies and TV series by genre tropes, moods, aesthetics, and tags.',
-        url: '/tags'
-      });
+      if (selectedTag) {
+        const cleanTag = selectedTag.replace(/^#/, '').toLowerCase();
+        updateSEO({
+          title: `Movies & TV Shows Tagged #${cleanTag} — Watch Online Free`,
+          description: `Discover top rated and popular movies and TV series tagged with #${cleanTag}. Stream free in 4K and 1080p HD with subtitles on T Stream.`,
+          url: `/tags/${encodeURIComponent(cleanTag)}`
+        });
+      } else {
+        updateSEO({
+          title: 'Explore Movies & TV Series by Tag & Theme',
+          description: 'Browse movies and TV series by genre tropes, story moods, themes, and aesthetic tags on T Stream.',
+          url: '/tags'
+        });
+      }
     } else if (currentView === 'people') {
       updateSEO({
         title: 'Actors & Film Directors Directory',
@@ -312,8 +345,14 @@ export default function App() {
       newPath = letter === 'ALL' ? '/movies' : `/az/${letter}`;
       setSelectedGenreId(null);
     } else if (view === 'tags') {
-      newPath = extra?.tag ? `/tags?tag=${encodeURIComponent(extra.tag)}` : '/tags';
-      setSelectedTag(extra?.tag || null);
+      if (extra?.tag) {
+        const clean = encodeURIComponent(extra.tag.replace(/^#/, '').toLowerCase());
+        newPath = `/tags/${clean}`;
+        setSelectedTag(extra.tag.replace(/^#/, '').toLowerCase());
+      } else {
+        newPath = '/tags';
+        setSelectedTag(null);
+      }
       setSelectedGenreId(null);
     } else if (view === 'search') {
       newPath = extra?.query ? `/search?q=${encodeURIComponent(extra.query)}` : '/search';

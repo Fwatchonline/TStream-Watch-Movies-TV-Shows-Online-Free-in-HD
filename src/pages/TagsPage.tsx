@@ -12,6 +12,7 @@ import { MediaItem, PaginatedResponse } from '../types/media';
 import { MediaCard } from '../components/MediaCard';
 import { Pagination } from '../components/Pagination';
 import { fetchByTag } from '../services/tmdb';
+import { updateSEO } from '../utils/seo';
 
 interface TagsPageProps {
   onSelectMedia: (item: MediaItem) => void;
@@ -25,7 +26,7 @@ export const TagsPage: React.FC<TagsPageProps> = ({
   initialTag
 }) => {
   const [searchTag, setSearchTag] = useState('');
-  const [activeTag, setActiveTag] = useState<string | null>(initialTag || null);
+  const [activeTag, setActiveTag] = useState<string | null>(initialTag ? initialTag.replace(/^#/, '').toLowerCase() : null);
   const [currentPage, setCurrentPage] = useState(1);
   const [tagData, setTagData] = useState<PaginatedResponse<MediaItem>>({
     page: 1,
@@ -35,25 +36,70 @@ export const TagsPage: React.FC<TagsPageProps> = ({
   });
   const [loading, setLoading] = useState(false);
 
+  // Sync prop changes
+  useEffect(() => {
+    if (initialTag !== undefined) {
+      setActiveTag(initialTag ? initialTag.replace(/^#/, '').toLowerCase() : null);
+    }
+  }, [initialTag]);
+
   // Fetch real matching items from TMDB whenever activeTag or currentPage changes
   useEffect(() => {
     let isMounted = true;
     if (!activeTag) {
       setTagData({ page: 1, totalPages: 1, totalResults: 0, results: [] });
+      updateSEO({
+        title: 'Explore Movies & TV Series by Tag & Theme',
+        description: 'Browse movies and TV series by genre tropes, story moods, themes, and aesthetic tags on T Stream.',
+        url: '/tags',
+        noindex: false
+      });
       return;
+    }
+
+    const cleanTag = activeTag.replace(/^#/, '').trim().toLowerCase();
+
+    // Ensure browser URL is clean /tags/:tag
+    const expectedUrl = `/tags/${encodeURIComponent(cleanTag)}`;
+    if (window.location.pathname !== expectedUrl) {
+      window.history.replaceState({}, '', expectedUrl);
     }
 
     async function loadTagResults() {
       setLoading(true);
       try {
-        const cleanTag = (activeTag || '').replace(/^#/, '').trim();
         const res = await fetchByTag(cleanTag, currentPage);
         if (isMounted) {
           setTagData(res);
           setLoading(false);
+
+          // Update SEO based on whether tag has meaningful content
+          if (res.results.length === 0) {
+            updateSEO({
+              title: `Movies Tagged #${cleanTag}`,
+              description: `No movies currently found tagged with #${cleanTag} on T Stream.`,
+              url: expectedUrl,
+              noindex: true // Prevent thin/empty tag indexing in Google
+            });
+          } else {
+            updateSEO({
+              title: `Movies & TV Shows Tagged #${cleanTag} — Watch Online Free`,
+              description: `Discover top rated and popular movies and TV series tagged with #${cleanTag}. Stream free in 4K and 1080p HD with subtitles on T Stream.`,
+              url: expectedUrl,
+              noindex: false
+            });
+          }
         }
       } catch {
-        if (isMounted) setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+          updateSEO({
+            title: `Movies Tagged #${cleanTag}`,
+            description: `Browse titles tagged #${cleanTag} on T Stream.`,
+            url: expectedUrl,
+            noindex: true
+          });
+        }
       }
     }
 
@@ -64,14 +110,20 @@ export const TagsPage: React.FC<TagsPageProps> = ({
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchTag.trim()) {
-      setActiveTag(searchTag.trim().toLowerCase());
+      const clean = searchTag.trim().replace(/^#/, '').toLowerCase();
+      setActiveTag(clean);
       setCurrentPage(1);
+      window.history.pushState({}, '', `/tags/${encodeURIComponent(clean)}`);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
   const handleTagClick = (tag: string) => {
-    setActiveTag(tag);
+    const clean = tag.replace(/^#/, '').toLowerCase();
+    setActiveTag(clean);
     setCurrentPage(1);
+    window.history.pushState({}, '', `/tags/${encodeURIComponent(clean)}`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
@@ -128,7 +180,12 @@ export const TagsPage: React.FC<TagsPageProps> = ({
             </div>
 
             <button
-              onClick={() => setActiveTag(null)}
+              onClick={() => {
+                setActiveTag(null);
+                setCurrentPage(1);
+                window.history.pushState({}, '', '/tags');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               className="text-xs text-[#F5C400] hover:text-amber-300 font-semibold cursor-pointer"
             >
               ← Back to all tags

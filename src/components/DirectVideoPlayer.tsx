@@ -36,6 +36,8 @@ import { SubtitleTrack, Episode } from '../types/media';
 import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
 import { getUserPlayerSettings, UserPlayerSettings } from '../services/playerSettings';
 import { LanguageFlag } from './LanguageFlag';
+import { detectStreamQualityFromDimensions, getMediaQuality, QualityInfo } from '../services/quality';
+import { QualityBadge } from './QualityBadge';
 
 interface DirectVideoPlayerProps {
   title: string;
@@ -243,6 +245,15 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
   // Quality
   const [selectedQuality, setSelectedQuality] = useState<string>('Auto');
+  const [streamQuality, setStreamQuality] = useState<QualityInfo>(() =>
+    getMediaQuality({
+      title,
+      mediaType: isMovie ? 'movie' : 'tv',
+      releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
+    })
+  );
+  const [availableQualities, setAvailableQualities] = useState<string[]>(['Auto', '1080p', '720p', '480p']);
+  const [streamResolution, setStreamResolution] = useState<{ width: number; height: number } | null>(null);
 
   // Audio tracks
   const [audioTracks, setAudioTracks] = useState<Array<{ id: number; name: string }>>([
@@ -442,6 +453,21 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (hls.levels && hls.levels.length > 0) {
+          const heights = Array.from(new Set(hls.levels.map(l => l.height).filter(h => h > 0))).sort((a, b) => b - a);
+          if (heights.length > 0) {
+            setAvailableQualities(['Auto', ...heights.map(h => (h >= 2160 ? '4K (2160p)' : `${h}p`))]);
+            const top = hls.levels.reduce((prev, curr) => (curr.height > prev.height ? curr : prev), hls.levels[0]);
+            if (top && top.height > 0) {
+              setStreamResolution({ width: top.width || 0, height: top.height });
+              setStreamQuality(detectStreamQualityFromDimensions(top.width || 0, top.height, {
+                title,
+                mediaType: isMovie ? 'movie' : 'tv',
+                releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
+              }));
+            }
+          }
+        }
         if (hls.audioTracks && hls.audioTracks.length > 0) {
           const detected = hls.audioTracks.map((t, idx) => ({
             id: idx,
@@ -450,6 +476,20 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           setAudioTracks([{ id: -1, name: 'Original Audio' }, ...detected]);
         }
         triggerAutoPlay();
+      });
+
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+        if (hls.levels && hls.levels[data.level]) {
+          const lvl = hls.levels[data.level];
+          if (lvl.height > 0) {
+            setStreamResolution({ width: lvl.width || 0, height: lvl.height });
+            setStreamQuality(detectStreamQualityFromDimensions(lvl.width || 0, lvl.height, {
+              title,
+              mediaType: isMovie ? 'movie' : 'tv',
+              releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
+            }));
+          }
+        }
       });
 
       hls.on(Hls.Events.FRAG_LOADED, () => {
@@ -479,12 +519,34 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       });
     } else {
       video.src = streamUrl;
-      video.addEventListener('loadedmetadata', () => {
+      const onMetadataLoaded = () => {
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          setStreamResolution({ width: video.videoWidth, height: video.videoHeight });
+          setStreamQuality(detectStreamQualityFromDimensions(video.videoWidth, video.videoHeight, {
+            title,
+            mediaType: isMovie ? 'movie' : 'tv',
+            releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
+          }));
+        }
         triggerAutoPlay();
-      }, { once: true });
+      };
+      video.addEventListener('loadedmetadata', onMetadataLoaded, { once: true });
     }
 
+    const onVideoResize = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        setStreamResolution({ width: video.videoWidth, height: video.videoHeight });
+        setStreamQuality(detectStreamQualityFromDimensions(video.videoWidth, video.videoHeight, {
+          title,
+          mediaType: isMovie ? 'movie' : 'tv',
+          releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
+        }));
+      }
+    };
+    video.addEventListener('resize', onVideoResize);
+
     return () => {
+      video.removeEventListener('resize', onVideoResize);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -657,11 +719,20 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       if (q === 'Auto') {
         hlsRef.current.currentLevel = -1;
       } else {
-        const heightTarget = parseInt(q, 10);
+        const heightTarget = q.includes('2160') ? 2160 : parseInt(q, 10);
         if (!isNaN(heightTarget) && hlsRef.current.levels) {
           const matchedLevel = hlsRef.current.levels.findIndex(l => l.height === heightTarget);
           if (matchedLevel !== -1) {
             hlsRef.current.currentLevel = matchedLevel;
+            const lvl = hlsRef.current.levels[matchedLevel];
+            if (lvl.height > 0) {
+              setStreamResolution({ width: lvl.width || 0, height: lvl.height });
+              setStreamQuality(detectStreamQualityFromDimensions(lvl.width || 0, lvl.height, {
+                title,
+                mediaType: isMovie ? 'movie' : 'tv',
+                releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
+              }));
+            }
           }
         }
       }
@@ -1797,9 +1868,12 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                   onClick={() => setActiveModal('quality')}
                   className="w-full flex items-center justify-between p-2 rounded-xl hover:bg-white/5 text-zinc-200 transition-colors cursor-pointer"
                 >
-                  <span className="font-semibold text-white">Quality</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-white">Quality</span>
+                    <QualityBadge quality={streamQuality} variant="card" className="scale-90 origin-left" />
+                  </div>
                   <div className="flex items-center gap-1 text-zinc-400">
-                    <span>{selectedQuality}</span>
+                    <span>{selectedQuality === 'Auto' ? `Auto (${streamQuality.label})` : selectedQuality}</span>
                     <ChevronRight className="w-3.5 h-3.5" />
                   </div>
                 </button>
@@ -1984,8 +2058,22 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
             <span>VIDEO QUALITY</span>
           </div>
 
+          {/* Active Stream Quality Status Card */}
+          <div className="p-3 mb-3 rounded-xl bg-white/[0.04] border border-white/10 flex items-center justify-between">
+            <div>
+              <div className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Stream Quality</div>
+              <div className="text-xs font-black text-white mt-0.5">
+                {streamQuality.fullLabel}
+              </div>
+              <div className="text-[10px] text-zinc-400 mt-0.5 font-mono">
+                {streamResolution ? `${streamResolution.width} × ${streamResolution.height}` : streamQuality.resolution}
+              </div>
+            </div>
+            <QualityBadge quality={streamQuality} variant="card" />
+          </div>
+
           <div className="space-y-1">
-            {['Auto', '1080p', '720p', '480p'].map((q) => {
+            {availableQualities.map((q) => {
               const isSelected = selectedQuality === q;
               return (
                 <button
@@ -1998,7 +2086,14 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                     isSelected ? 'bg-[#24242a] text-white' : 'hover:bg-white/5 text-zinc-300'
                   }`}
                 >
-                  <span>{q}</span>
+                  <div className="flex items-center gap-2">
+                    <span>{q}</span>
+                    {q === 'Auto' && (
+                      <span className="text-[10px] text-zinc-400">
+                        ({streamQuality.label})
+                      </span>
+                    )}
+                  </div>
                   {isSelected && <Check className="w-4 h-4 text-white" />}
                 </button>
               );
@@ -2266,8 +2361,20 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
             </div>
           </div>
 
-          {/* Right Controls: Audio [A文], Subtitles [=], Settings [⚙️], Fullscreen [⤢] */}
-          <div className="flex items-center gap-3 sm:gap-4">
+          {/* Right Controls: Quality [4K/1080p], Audio [A文], Subtitles [=], Settings [⚙️], Fullscreen [⤢] */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Live Stream Quality Badge / Quick-Selector Button */}
+            <button
+              onClick={() => setActiveModal(curr => (curr === 'quality' ? 'none' : 'quality'))}
+              className={`p-1 rounded-lg transition-all cursor-pointer hover:opacity-90 active:scale-95 flex items-center ${
+                activeModal === 'quality' ? 'ring-1 ring-white/30' : ''
+              }`}
+              title={`Video Quality: ${streamQuality.fullLabel} (${streamResolution ? `${streamResolution.width}×${streamResolution.height}` : streamQuality.resolution})`}
+              aria-label="Video Quality"
+            >
+              <QualityBadge quality={streamQuality} variant="player" />
+            </button>
+
             {/* Audio Button (image_de22053a.png) */}
             <button
               onClick={() => setActiveModal(curr => (curr === 'audio' ? 'none' : 'audio'))}

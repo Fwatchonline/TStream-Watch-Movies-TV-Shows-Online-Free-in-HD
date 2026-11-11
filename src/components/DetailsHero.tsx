@@ -15,6 +15,7 @@ import {
 import { MediaDetail, MediaType, MediaItem } from '../types/media';
 import { isInWatchlist, toggleWatchlist, isWatched, toggleWatched } from '../services/storage';
 import { useAuth } from '../context/AuthContext';
+import { QualityBadge } from './QualityBadge';
 
 interface DetailsHeroProps {
   media: MediaDetail;
@@ -133,8 +134,8 @@ export const DetailsHero: React.FC<DetailsHeroProps> = ({
               )}
 
               {/* Quality badge */}
-              <div className="absolute top-3 left-3 px-2 py-0.5 rounded bg-black/80 backdrop-blur-md border border-white/10 text-[10px] font-extrabold uppercase tracking-wider text-amber-400">
-                4K ULTRA HD
+              <div className="absolute top-3 left-3">
+                <QualityBadge item={media} variant="full" />
               </div>
             </div>
           </div>

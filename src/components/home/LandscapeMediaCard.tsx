@@ -1,6 +1,7 @@
 import React from 'react';
 import { Play, Star, Calendar } from 'lucide-react';
 import { MediaItem } from '../../types/media';
+import { QualityBadge } from '../QualityBadge';
 
 interface LandscapeMediaCardProps {
   item: MediaItem;
@@ -50,9 +51,7 @@ export const LandscapeMediaCard: React.FC<LandscapeMediaCardProps> = ({
               {badge}
             </span>
           ) : (
-            <span className="px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[9px] font-black tracking-wider text-[#F5C400] border border-[#F5C400]/40">
-              {isMovie ? 'HD' : 'TV'}
-            </span>
+            <QualityBadge item={item} variant="card" />
           )}
         </div>
 

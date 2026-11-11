@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { ChevronLeft, ChevronRight, Play, Flame } from 'lucide-react';
 import { MediaItem } from '../../types/media';
+import { QualityBadge } from '../QualityBadge';
 
 interface TopTenSectionProps {
   items: MediaItem[];
@@ -116,10 +117,10 @@ export const TopTenSection: React.FC<TopTenSectionProps> = ({
                 {/* Gradient Scrim */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-transparent pointer-events-none" />
 
-                {/* Top Right HD / TV Badge */}
-                <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[9px] font-black tracking-wider text-[#F5C400] border border-[#F5C400]/40">
-                  {isMovie ? 'HD' : 'TV'}
-                </span>
+                {/* Top Right Quality Badge */}
+                <div className="absolute top-1.5 right-1.5">
+                  <QualityBadge item={item} variant="card" />
+                </div>
 
                 {/* Bottom Metadata: Media Type and Rating */}
                 <div className="absolute inset-x-0 bottom-0 p-1.5 flex items-center justify-between text-[10px] pointer-events-none">

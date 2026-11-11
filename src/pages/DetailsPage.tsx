@@ -29,6 +29,7 @@ import { isInWatchlist, toggleWatchlist } from '../services/storage';
 import { TrailerModal } from '../components/TrailerModal';
 import { CastCarousel } from '../components/CastCarousel';
 import { RatingViewsBar } from '../components/RatingViewsBar';
+import { QualityBadge } from '../components/QualityBadge';
 import { PageLoadingIndicator } from '../components/PageLoadingIndicator';
 import { ShareModal } from '../components/ShareModal';
 import { ReportIssueModal } from '../components/ReportIssueModal';
@@ -270,9 +271,7 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
           <span className="text-emerald-400 font-bold text-xs">
             {detail.matchPercentage || 78}% Match
           </span>
-          <span className="px-1.5 py-0.2 rounded border border-white/20 text-[10px] font-bold text-slate-300">
-            HD
-          </span>
+          <QualityBadge item={detail} variant="pill" />
           <span className="px-1.5 py-0.2 rounded border border-white/20 text-[10px] font-bold text-slate-300">
             {detail.certification || 'PG-13'}
           </span>

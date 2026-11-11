@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, Film, Tv, Users, Star, ArrowRight, Loader2, Sparkles, ArrowLeft } from 'lucide-react';
 import { MediaItem } from '../../types/media';
 import { fetchCatalog } from '../../services/tmdb';
+import { QualityBadge } from '../QualityBadge';
 
 interface NavSearchProps {
   onSearch: (query: string) => void;
@@ -236,9 +237,7 @@ export const NavSearch: React.FC<NavSearchProps> = ({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="font-bold text-white text-sm truncate">{item.title}</span>
-                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#303038] text-[#F5C400] font-black uppercase shrink-0">
-                          {isMovie ? 'HD' : 'TV'}
-                        </span>
+                        <QualityBadge item={item} variant="card" />
                       </div>
                       <div className="flex items-center gap-2 text-xs text-[#A6A6AC] mt-1">
                         <span>{year}</span>
@@ -369,9 +368,7 @@ export const NavSearch: React.FC<NavSearchProps> = ({
                           }`}>
                             {item.title}
                           </span>
-                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-black/60 border border-white/10 text-slate-300 font-mono uppercase shrink-0">
-                            {isMovie ? 'HD' : 'TV'}
-                          </span>
+                          <QualityBadge item={item} variant="card" />
                         </div>
                         <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400">
                           <span>{year}</span>

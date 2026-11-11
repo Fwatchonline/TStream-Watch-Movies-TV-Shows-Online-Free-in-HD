@@ -23,6 +23,7 @@ import { getMediaDetail, fetchSeasonEpisodes } from '../services/tmdb';
 import { isInWatchlist, toggleWatchlist } from '../services/storage';
 import { StreamingPlayer, PlayerMode, WebServer } from '../components/StreamingPlayer';
 import { RatingViewsBar } from '../components/RatingViewsBar';
+import { QualityBadge } from '../components/QualityBadge';
 import { PlayerLoadingSpinner } from '../components/PlayerLoadingSpinner';
 import { ShareModal } from '../components/ShareModal';
 import { ReportIssueModal } from '../components/ReportIssueModal';
@@ -377,10 +378,8 @@ export const WatchPage: React.FC<WatchPageProps> = ({
                 <span className="text-white font-extrabold">{detail.voteAverage.toFixed(1)}</span>
               </div>
 
-              {/* HD Quality Badge */}
-              <div className="px-2 py-0.5 rounded-md bg-[#1f1f25] border border-[#3A3A40] text-[11px] font-extrabold text-white uppercase tracking-wider">
-                HD
-              </div>
+              {/* Real Quality Badge */}
+              <QualityBadge item={detail} variant="full" />
 
               {/* Closed Captions Badge */}
               <div className="px-2 py-0.5 rounded-md bg-[#1f1f25] border border-[#3A3A40] text-[11px] font-extrabold text-white uppercase tracking-wider">

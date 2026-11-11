@@ -1,0 +1,48 @@
+# Robots.txt for TStream.online
+# Optimized for Googlebot & SEO indexing
+
+User-agent: *
+Allow: /
+Allow: /movies
+Allow: /tv-shows
+Allow: /trending
+Allow: /top-rated
+Allow: /collections
+Allow: /watch/
+Allow: /movie/
+Allow: /tv/
+Allow: /person/
+Allow: /people
+Allow: /random
+Allow: /platform/
+Allow: /az/
+Allow: /tags
+
+# Disallow Private & Admin Areas
+Disallow: /admin
+Disallow: /admin/
+Disallow: /library
+Disallow: /library/
+Disallow: /login
+Disallow: /register
+
+# Disallow Stream Proxy & Upstream APIs (Prevents 502/504 errors on crawlers)
+Disallow: /api/
+Disallow: /api/*
+Disallow: /*/stream-proxy*
+Disallow: /*/stream-resolve*
+
+# Disallow Search Query Parameters & Tracking Links to prevent duplicate content & crawl traps
+Disallow: /search?*
+Disallow: /search/
+Disallow: /*?*ref=*
+Disallow: /*?*utm_*
+Disallow: /*?*fbclid=*
+Disallow: /*?*gclid=*
+Disallow: /*?*session=*
+
+# XML Sitemaps
+Sitemap: https://tstream.online/sitemap.xml
+Sitemap: https://tstream.online/sitemap-main.xml
+Sitemap: https://tstream.online/sitemap-movies.xml
+Sitemap: https://tstream.online/sitemap-tv.xml

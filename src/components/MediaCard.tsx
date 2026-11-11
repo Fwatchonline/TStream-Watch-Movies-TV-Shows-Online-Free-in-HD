@@ -3,6 +3,7 @@ import { Play, Star, Plus, Check } from 'lucide-react';
 import { MediaItem, MediaType } from '../types/media';
 import { isInWatchlist, toggleWatchlist } from '../services/storage';
 import { useAuth } from '../context/AuthContext';
+import { QualityBadge } from './QualityBadge';
 
 interface MediaCardProps {
   item: MediaItem;
@@ -84,9 +85,9 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onSelect, onWatch })
           </div>
         )}
 
-        {/* Format / Age tag */}
-        <div className="absolute top-2.5 right-2.5 px-1.5 py-0.5 rounded-md bg-black/80 backdrop-blur-md border border-[#F5C400]/40 text-[10px] font-bold uppercase tracking-wider text-[#F5C400]">
-          {isMovie ? 'HD' : 'TV'}
+        {/* Real Quality Tag */}
+        <div className="absolute top-2.5 right-2.5">
+          <QualityBadge item={item} variant="card" />
         </div>
 
         {/* Quick Action Overlay on Hover */}

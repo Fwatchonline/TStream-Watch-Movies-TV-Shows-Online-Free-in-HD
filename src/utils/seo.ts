@@ -257,13 +257,19 @@ export function buildMediaMetadata(
   // Keywords
   const keywords = generateMediaKeywords(media, options);
 
-  // Canonical URL (Always points to /watch/ path)
+  // Canonical URL Strategy:
+  // - Movie: Single authoritative canonical URL /movie/:slug
+  // - TV Series: Single authoritative canonical URL /tv/:slug
+  // - TV Episode: Distinct playback URL /watch/tv/:slug/:season/:episode
+  // Playback movie URLs (/watch/movie/:slug) point to /movie/:slug as canonical
   const slug = createMediaSlug(rawTitle, media?.id || media?.tmdbId || 0);
+  const isDistinctEpisode = !isMovie && Boolean(options.isWatching && options.season && options.episode);
+
   const canonicalUrl = isMovie
-    ? `${PRIMARY_ORIGIN}/watch/movie/${slug}`
-    : options.season && options.episode
+    ? `${PRIMARY_ORIGIN}/movie/${slug}`
+    : isDistinctEpisode
     ? `${PRIMARY_ORIGIN}/watch/tv/${slug}/${options.season}/${options.episode}`
-    : `${PRIMARY_ORIGIN}/watch/tv/${slug}`;
+    : `${PRIMARY_ORIGIN}/tv/${slug}`;
 
   // Image & MIME
   const rawImage = media?.backdropPath || media?.posterPath || DEFAULT_IMAGE;
@@ -271,11 +277,12 @@ export function buildMediaMetadata(
   const isDefaultOgImage = image === DEFAULT_IMAGE || image.endsWith('/og-image.png');
   const mimeType = getImageMimeType(image);
 
-  // Schema.org JSON-LD
+  // Schema.org JSON-LD (Strictly authentic data - no fabricated reviews or votes)
+  const schemaType = isMovie ? 'Movie' : isDistinctEpisode ? 'TVEpisode' : 'TVSeries';
   const schema: Record<string, any> = {
     '@context': 'https://schema.org',
-    '@type': isMovie ? 'Movie' : 'TVSeries',
-    'name': rawTitle,
+    '@type': schemaType,
+    'name': isDistinctEpisode && options.episodeName ? `${rawTitle} - ${options.episodeName}` : rawTitle,
     'description': description,
     'url': canonicalUrl,
     'image': image,
@@ -287,16 +294,31 @@ export function buildMediaMetadata(
             'ratingValue': Number(media.voteAverage.toFixed(1)),
             'bestRating': '10',
             'worstRating': '1',
-            'ratingCount': media.voteCount || 100
+            ...(media.voteCount && media.voteCount > 0 ? { 'ratingCount': media.voteCount } : {})
           }
         }
       : {}),
-    ...(media?.genres && Array.isArray(media.genres)
+    ...(media?.genres && Array.isArray(media.genres) && media.genres.length > 0
       ? {
-          'genre': media.genres.map((g: any) => (typeof g === 'string' ? g : g?.name || '')).filter(Boolean)
+          'genre': media.genres
+            .map((g: any) => (typeof g === 'string' ? g : g?.name || ''))
+            .filter((g: string) => Boolean(g && g.trim()))
         }
       : {})
   };
+
+  if (isDistinctEpisode) {
+    schema['episodeNumber'] = options.episode;
+    schema['partOfSeason'] = {
+      '@type': 'TVSeason',
+      'seasonNumber': options.season
+    };
+    schema['partOfSeries'] = {
+      '@type': 'TVSeries',
+      'name': rawTitle,
+      'url': `${PRIMARY_ORIGIN}/tv/${slug}`
+    };
+  }
 
   return {
     title,

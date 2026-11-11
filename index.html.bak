@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-ZD66WMB19X"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-ZD66WMB19X');
+    </script>
+
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+    <title>T Stream — Watch Movies &amp; TV Shows Online Free in HD</title>
+    
+    <!-- Primary Meta Tags -->
+    <meta name="title" content="T Stream — Watch Movies &amp; TV Shows Online Free in HD" />
+    <meta name="description" content="Stream thousands of trending movies and TV series in 4K UHD and 1080p Full HD on T Stream. Fast multi-server HLS playback, multilingual subtitles, and zero ads." />
+    <meta name="keywords" content="t stream, watch movies online, watch series online, free streaming, hd movies, 4k streaming, english subtitles, croatian subtitles, cinema stream" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <link rel="canonical" id="tstream-canonical" href="https://tstream.online/" />
+    <script>
+      (function() {
+        try {
+          var p = window.location.pathname || '/';
+          // Clean trailing slash (unless root)
+          var clean = (p.length > 1 && p.endsWith('/')) ? p.slice(0, -1) : p;
+          var canon = 'https://tstream.online' + clean;
+          var el = document.getElementById('tstream-canonical');
+          if (el) el.setAttribute('href', canon);
+          var og = document.querySelector('meta[property="og:url"]');
+          if (og) og.setAttribute('content', canon);
+          var tw = document.querySelector('meta[name="twitter:url"]');
+          if (tw) tw.setAttribute('content', canon);
+        } catch(e) {}
+      })();
+    </script>
+
+    <!-- Favicon & Touch Icons -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
+    <!-- PWA & Mobile Capabilities -->
+    <meta name="theme-color" content="#F5C400" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="T Stream" />
+    <meta name="application-name" content="T Stream" />
+    <meta name="msapplication-TileColor" content="#121215" />
+
+    <!-- OpenGraph / Facebook / LinkedIn / Discord -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://tstream.online/" />
+    <meta property="og:site_name" content="T Stream" />
+    <meta property="og:title" content="T Stream — Watch Movies &amp; TV Shows Online Free in HD" />
+    <meta property="og:description" content="Stream thousands of trending movies and TV series in 4K UHD and 1080p Full HD on T Stream. Fast multi-server playback, multilingual subtitles, and zero ads." />
+    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image:secure_url" content="/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="T Stream — Watch Movies &amp; TV Shows Online Free in HD" />
+
+    <!-- Twitter / X Cards -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://tstream.online/" />
+    <meta name="twitter:site" content="@tstream" />
+    <meta name="twitter:creator" content="@tstream" />
+    <meta name="twitter:title" content="T Stream — Watch Movies &amp; TV Shows Online Free in HD" />
+    <meta name="twitter:description" content="Stream thousands of trending movies and TV series in 4K UHD and 1080p Full HD on T Stream. Fast multi-server playback, multilingual subtitles, and zero ads." />
+    <meta name="twitter:image" content="/og-image.png" />
+    <meta name="twitter:image:alt" content="T Stream — Watch Movies &amp; TV Shows Online Free in HD" />
+
+    <!-- Google Fonts Preconnect -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+
+    <!-- Schema.org JSON-LD Structured Data -->
+    <script type="application/ld+json" id="json-ld-schema">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "@id": "https://tstream.online/#website",
+          "url": "https://tstream.online/",
+          "name": "T Stream",
+          "description": "Watch movies and TV shows online in 4K and 1080p HD with subtitles and multi-server playback.",
+          "publisher": {
+            "@type": "Organization",
+            "name": "T Stream",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://tstream.online/icon.png"
+            }
+          },
+          "potentialAction": {
+            "@type": "SearchAction",
+            "target": "https://tstream.online/search?q={search_term_string}",
+            "query-input": "required name=search_term_string"
+          }
+        },
+        {
+          "@type": "WebApplication",
+          "@id": "https://tstream.online/#webapp",
+          "name": "T Stream Web App",
+          "url": "https://tstream.online/",
+          "applicationCategory": "EntertainmentApplication",
+          "operatingSystem": "All",
+          "browserRequirements": "Requires JavaScript. Requires HTML5.",
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+          }
+        }
+      ]
+    }
+    </script>
+  </head>
+  <body class="bg-[#232326] text-[#F3F3F3] min-h-screen antialiased selection:bg-[#F5C400] selection:text-black">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
