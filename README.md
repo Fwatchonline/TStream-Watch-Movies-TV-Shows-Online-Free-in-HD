@@ -86,29 +86,33 @@ nano .env
 ```
 Upišite sledeće promenljive (prilagodite ukoliko imate sopstveni TMDB ključ):
 ```dotenv
-VITE_TMDB_API_KEY=844dba0bfd8f3a4f3799f6130ef9e335
+TMDB_API_KEY=your_tmdb_api_key_here
+VITE_TMDB_API_KEY=your_tmdb_api_key_here
 APP_URL=https://tstream.online
 PORT=3000
+HOST=0.0.0.0
 ```
 *(Sačuvajte pritiskom na `Ctrl + O`, `Enter`, pa izađite sa `Ctrl + X`)*.
 
 ---
 
-### Korak 4: Build aplikacije (Kompajliranje i generisanje Sitemapa)
+### Korak 4: Build aplikacije (Sitemap, Vite, Prerender i Node.js Produkcijski Server)
 Pokrenite automatizovani build:
 ```bash
 npm run build
 ```
 Ova komanda automatski:
-1. Pokreće `scripts/generate-sitemaps.cjs` i pravi sveže XML mape sajta u `/dist` i `/public`.
-2. Kompajlira TypeScript i Tailwind CSS u brze produkcijske fajlove u folderu `/dist`.
+1. Pokreće `scripts/generate-sitemaps.ts` i pravi sveže XML mape sajta u `/public` i `/dist`.
+2. Kompajlira TypeScript i Tailwind CSS u `/dist`.
+3. Pokreće `scripts/prerender.ts` za pre-rendering i strogu SEO validaciju statičkih stranica.
+4. Pakuje `server.ts` u produkcijski Node.js server `dist/server.mjs`.
 
 ---
 
 ### Korak 5: Pokretanje servisa u pozadini preko PM2
-Pokrenite aplikaciju kao trajni sistemski proces:
+Pokrenite produkcijski Node.js SEO + API server kao trajni sistemski proces:
 ```bash
-pm2 start npm --name "tstream" -- run preview -- --port 3000 --host 0.0.0.0
+pm2 start npm --name "tstream" -- start
 pm2 save
 pm2 startup
 ```
@@ -121,66 +125,7 @@ Kreirajte Nginx konfiguracioni fajl za vaš domen:
 ```bash
 sudo nano /etc/nginx/sites-available/tstream.online
 ```
-Zalepite sledeću proverenu konfiguraciju (koja uključuje SPA fallback i zaštitu od 502 Bad Gateway grešaka):
-
-```nginx
-server {
-    listen 80;
-    listen [::]:80;
-    server_name tstream.online www.tstream.online;
-
-    root /var/www/tstream/dist;
-    index index.html;
-
-    # Buffer & Timeout podesavanja za stabilan striming
-    client_max_body_size 50M;
-    proxy_connect_timeout 60s;
-    proxy_send_timeout 120s;
-    proxy_read_timeout 120s;
-    proxy_buffer_size 128k;
-    proxy_buffers 4 256k;
-    proxy_busy_buffers_size 256k;
-
-    # Gzip kompresija
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json image/svg+xml;
-
-    # Kesiranje statickih fajlova
-    location ~* \.(?:ico|css|js|gif|jpe?g|png|svg|woff2?|webp|mp4|webm|m3u8|ts)$ {
-        expires 30d;
-        add_header Cache-Control "public, no-transform";
-        try_files $uri =404;
-    }
-
-    # XML Sitemaps & robots.txt
-    location ~* \.(?:xml|txt)$ {
-        expires 1d;
-        add_header Cache-Control "public, no-transform";
-        try_files $uri =404;
-    }
-
-    # Proxy ka Node.js servisu za stream API rute
-    location /api/ {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # SPA routing fallback: /watch/movie/..., /movies itd. uvek serviraju index.html
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    error_page 404 /index.html;
-}
-```
+Pogledajte kompletnu produkcijsku Nginx konfiguraciju u fajlu [`nginx.conf.example`](./nginx.conf.example) koja pravilno prosleđuje nepoznate rute ka Node.js SSR/SEO serveru (`@seo_runtime` na portu 3000) tako da nepostojeće stranice vraćaju pravi HTTP 404 umesto lažnog 200 OK.
 
 Aktivirajte sajt i testirajte Nginx:
 ```bash
@@ -252,7 +197,8 @@ Ako želite da hostujete frontend na **Vercel** platformi sa globalnim CDN-om:
    - **Build Command**: `npm run build`
    - **Output Directory**: `dist`
 5. U sekciji **Environment Variables** dodajte:
-   - `VITE_TMDB_API_KEY`: `844dba0bfd8f3a4f3799f6130ef9e335`
+   - `TMDB_API_KEY`: `<your_tmdb_api_key>`
+   - `VITE_TMDB_API_KEY`: `<your_tmdb_api_key>`
    - `APP_URL`: `https://tstream.online` (ili vaš Vercel domen)
 6. Kliknite **Deploy**.
 

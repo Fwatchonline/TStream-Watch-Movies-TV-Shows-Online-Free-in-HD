@@ -30,14 +30,14 @@ import { ReportIssueModal } from '../components/ReportIssueModal';
 import { EmbedServerConfig, subscribeToEmbedServers, resolveEmbedUrl, DEFAULT_SERVERS } from '../services/embedServers';
 import { getUserPlayerSettings } from '../services/playerSettings';
 import { createMediaSlug } from '../utils/slug';
-import { updateMediaSEO } from '../utils/seo';
+import { updateMediaSEO, updateSEO } from '../utils/seo';
 
 interface WatchPageProps {
   mediaId: number;
   mediaType: 'movie' | 'tv';
   season?: number;
   episode?: number;
-  onBackToDetails: () => void;
+  onBackToDetails: (media?: MediaItem) => void;
   onSelectMedia: (item: MediaItem) => void;
 }
 
@@ -136,6 +136,13 @@ export const WatchPage: React.FC<WatchPageProps> = ({
               setActiveWebServer(srv.id as WebServer);
             }
           }
+        } else {
+          updateSEO({
+            title: '404 — Title Not Found',
+            description: 'The requested movie or episode could not be found on T Stream.',
+            noindex: true,
+            url: '/404'
+          });
         }
         setLoading(false);
       }
@@ -146,12 +153,21 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     };
   }, [mediaId, mediaType]);
 
-  // Update SEO when TV season/episode changes
+  // Update SEO when TV season/episode changes or episodes load
   useEffect(() => {
     if (detail && detail.mediaType === 'tv') {
-      updateMediaSEO(detail, { season: currentSeason, episode: currentEpisode, isWatching: true });
+      const seasonEps = episodesMap[currentSeason] || (detail as TVDetail).seasons?.find(s => s.seasonNumber === currentSeason)?.episodes || [];
+      const activeEp = seasonEps.find(e => e.episodeNumber === currentEpisode);
+      updateMediaSEO(detail, {
+        season: currentSeason,
+        episode: currentEpisode,
+        episodeName: activeEp?.name,
+        episodeOverview: activeEp?.overview,
+        episodeAirDate: activeEp?.airDate,
+        isWatching: true
+      });
     }
-  }, [currentSeason, currentEpisode, detail]);
+  }, [currentSeason, currentEpisode, detail, episodesMap]);
 
   // Load TV episodes for the season if series
   useEffect(() => {
@@ -253,13 +269,33 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     }
   };
 
-  if (loading || !detail) {
+  if (loading) {
     return (
       <div className="min-h-[75vh] flex items-center justify-center bg-[#121215]">
         <PlayerLoadingSpinner
           title="Initializing Cinema Stream"
           subtitle="Loading high definition streams, audio tracks, and multilingual subtitles..."
         />
+      </div>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <div className="min-h-[75vh] flex items-center justify-center bg-[#121215] px-4 py-16">
+        <div className="text-center max-w-lg mx-auto">
+          <div className="text-7xl font-black text-[#F5C400] mb-3">404</div>
+          <h1 className="text-3xl font-extrabold text-white mb-3">Title Not Found</h1>
+          <p className="text-sm text-[#A6A6AC] mb-8 leading-relaxed">
+            The movie or television episode you requested could not be found.
+          </p>
+          <button
+            onClick={() => onBackToDetails()}
+            className="px-6 py-2.5 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] text-black font-extrabold text-xs sm:text-sm transition-colors cursor-pointer"
+          >
+            Browse Catalog
+          </button>
+        </div>
       </div>
     );
   }
@@ -314,14 +350,14 @@ export const WatchPage: React.FC<WatchPageProps> = ({
         {/* 1. Breadcrumbs Navigation */}
         <div className="flex items-center gap-2 text-xs text-[#A6A6AC] font-medium mb-4">
           <button
-            onClick={() => onBackToDetails()}
+            onClick={() => onBackToDetails(detail)}
             className="hover:text-white transition-colors cursor-pointer"
           >
-            Home
+            {isMovie ? 'Movie Details' : 'Series Details'}
           </button>
           <span className="text-[#55555c]">/</span>
           <button
-            onClick={() => onBackToDetails()}
+            onClick={() => onBackToDetails(detail)}
             className="hover:text-white transition-colors cursor-pointer"
           >
             {isMovie ? 'Movies' : 'TV Shows'}

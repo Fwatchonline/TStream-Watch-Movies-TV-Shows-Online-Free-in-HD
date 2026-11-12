@@ -31,21 +31,6 @@
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://tstream.online/new-episodes</loc>
-    <changefreq>daily</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/people</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/random</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
     <loc>https://tstream.online/tags</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
@@ -116,7 +101,12 @@
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/platform/disney</loc>
+    <loc>https://tstream.online/platform/apple</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/platform/max</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
@@ -126,12 +116,17 @@
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/platform/apple</loc>
+    <loc>https://tstream.online/platform/disney</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/platform/hbo</loc>
+    <loc>https://tstream.online/platform/peacock</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/platform/paramount</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
@@ -141,7 +136,7 @@
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/platform/paramount</loc>
+    <loc>https://tstream.online/platform/crunchyroll</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
@@ -156,22 +151,7 @@
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tstream.online/az/C</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
     <loc>https://tstream.online/az/D</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/E</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/F</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
@@ -191,27 +171,12 @@
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tstream.online/az/J</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/K</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
     <loc>https://tstream.online/az/L</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://tstream.online/az/M</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/N</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
@@ -226,16 +191,6 @@
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tstream.online/az/Q</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/R</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
     <loc>https://tstream.online/az/S</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
@@ -246,32 +201,7 @@
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tstream.online/az/U</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/V</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
     <loc>https://tstream.online/az/W</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/X</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/Y</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/az/Z</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>

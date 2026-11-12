@@ -1,4 +1,5 @@
 import { SubtitleTrack, MediaType } from '../types/media';
+import { getTmdbApiKey } from './tmdb';
 
 export interface SubtitleSearchParams {
   mediaType: MediaType;
@@ -7,8 +8,6 @@ export interface SubtitleSearchParams {
   season?: number;
   episode?: number;
 }
-
-const TMDB_API_KEY = '844dba0bfd8f3a4f3799f6130ef9e335';
 
 /**
  * Comprehensive ISO 639-1 / ISO 639-2 language dictionary
@@ -173,10 +172,11 @@ export function normalizeLanguageCode(code: string): { normalizedCode: string; l
  * Retrieves the IMDb ID for a given TMDB media item if not already known
  */
 async function resolveImdbId(mediaType: MediaType, tmdbId: number): Promise<string | null> {
-  if (!tmdbId) return null;
+  const apiKey = getTmdbApiKey();
+  if (!tmdbId || !apiKey) return null;
   try {
     const res = await fetch(
-      `https://api.themoviedb.org/3/${mediaType}/${tmdbId}/external_ids?api_key=${TMDB_API_KEY}`,
+      `https://api.themoviedb.org/3/${mediaType}/${tmdbId}/external_ids?api_key=${apiKey}`,
       { headers: { Accept: 'application/json' } }
     );
     if (!res.ok) return null;

@@ -14,31 +14,74 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy to TStream VPS
+  ci:
+    name: Test, Lint & Build Verification
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run unit & SEO tests
+        run: npm test
+
+      - name: Type check
+        run: npm run lint
+
+      - name: Build production bundle & verify prerender
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          VITE_TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: npm run build
+
+  deploy:
+    name: Deploy to TStream VPS
+    needs: ci
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate deployment secrets
+        shell: bash
+        env:
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_SSH_KEY_B64"
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_PORT"
+
       - name: Configure SSH
         shell: bash
         env:
           VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
         run: |
           set -euo pipefail
-
-          test -n "$VPS_SSH_KEY_B64"
-          test -n "$VPS_HOST"
-          test -n "$VPS_PORT"
 
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
 
           printf '%s' "$VPS_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
-
           ssh-keygen -y -f "$HOME/.ssh/id_ed25519" > /dev/null
 
           if [[ "$VPS_PORT" == "22" ]]; then
@@ -47,14 +90,12 @@ jobs:
             KNOWN_HOST="[$VPS_HOST]:$VPS_PORT"
           fi
 
-          printf '%s %s\n' "$KNOWN_HOST" \
-            'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPnHaOxj0O4nk4a7572Ng/mhXpM/D8wcD09msz/hAdEI root@vultr' \
-            > "$HOME/.ssh/known_hosts"
-
+          HOST_KEY="${VPS_SSH_HOST_KEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPnHaOxj0O4nk4a7572Ng/mhXpM/D8wcD09msz/hAdEI root@vultr}"
+          printf '%s %s\n' "$KNOWN_HOST" "$HOST_KEY" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
           ssh-keygen -F "$KNOWN_HOST" -f "$HOME/.ssh/known_hosts"
 
-      - name: Deploy latest main
+      - name: Run remote deployment script & verify HTTP endpoints
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -63,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ssh -T \
+          ssh \
             -i "$HOME/.ssh/id_ed25519" \
             -p "$VPS_PORT" \
             -o IdentitiesOnly=yes \
@@ -71,4 +112,5 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o ConnectTimeout=15 \
-            "$VPS_USER@$VPS_HOST"
+            "$VPS_USER@$VPS_HOST" \
+            "cd /var/www/tstream && bash scripts/update-vps.sh && npx tsx scripts/verify-production.ts --base-url=http://127.0.0.1:3000"

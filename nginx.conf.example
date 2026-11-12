@@ -1,9 +1,9 @@
-# Nginx Production Configuration for TStream.online
+# Nginx Production Configuration for TStream.online (Hybrid SSG + Node.js Runtime SEO)
 # File location on VPS: /etc/nginx/sites-available/tstream.online
 # Enable with: sudo ln -sf /etc/nginx/sites-available/tstream.online /etc/nginx/sites-enabled/
 # Test with: sudo nginx -t && sudo systemctl reload nginx
 
-# 1. HTTP (port 80) to HTTPS (port 443) 301 Permanent Redirect
+# 1. HTTP (port 80) -> Canonical HTTPS non-www 301 Permanent Redirect
 server {
     listen 80;
     listen [::]:80;
@@ -11,7 +11,7 @@ server {
     return 301 https://tstream.online$request_uri;
 }
 
-# 2. Redirect www (HTTPS) to non-www canonical domain (301 Permanent Redirect)
+# 2. WWW (HTTPS) -> Canonical non-www HTTPS 301 Permanent Redirect
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
@@ -32,16 +32,12 @@ server {
     root /var/www/tstream/dist;
     index index.html;
 
-    # SSL Certificates (Let's Encrypt Certbot)
-    ssl_certificate /etc/letsencrypt/live/tstream.online/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/tstream.online/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
+    # Preserve genuine upstream 404/503 status codes from Node.js SEO/API server
+    proxy_intercept_errors off;
 
-    # Buffer & Timeout settings for streaming stability
+    # Buffer & Timeout settings for streaming & SSR stability
     client_max_body_size 50M;
-    proxy_connect_timeout 60s;
+    proxy_connect_timeout 30s;
     proxy_send_timeout 120s;
     proxy_read_timeout 120s;
     proxy_buffer_size 128k;
@@ -60,16 +56,16 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
-    # Static Assets Caching (JS, CSS, Images, Fonts, Video Chunks)
-    location ~* \.(?:ico|css|js|gif|jpe?g|png|svg|woff2?|webp|mp4|webm|m3u8|ts)$ {
+    # Static Assets (JS, CSS, Images, Fonts, Video Chunks) — missing assets return genuine 404
+    location ~* \.(?:ico|css|js|mjs|map|gif|jpe?g|png|svg|woff2?|webp|mp4|webm|m3u8|ts|webmanifest)$ {
         expires 30d;
         add_header Cache-Control "public, no-transform";
         try_files $uri =404;
     }
 
-    # XML Sitemaps & robots.txt (Direct static delivery with proper MIME types)
+    # XML Sitemaps & robots.txt — direct static delivery with genuine 404 if missing
     location ~* \.xml$ {
-        default_type text/xml;
+        default_type application/xml;
         expires 1d;
         add_header Cache-Control "public, no-transform";
         try_files $uri =404;
@@ -82,7 +78,7 @@ server {
         try_files $uri =404;
     }
 
-    # Proxy API & Stream routes to Node.js / PM2 service on port 3000
+    # Proxy API & Stream routes to Node.js / PM2 production server (dist/server.mjs) on port 3000
     location /api/ {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -95,12 +91,25 @@ server {
         proxy_cache_bypass $http_upgrade;
     }
 
-    # SPA Routing & Build-Time Pre-rendered Pages
-    # Checks: 1) exact static file, 2) directory, 3) pre-rendered index.html, 4) fallback to main index.html
+    # Hybrid SSG + Runtime SEO Routing:
+    # - Requests with query strings (?page=2, ?genre=28, /search?q=...) bypass static files
+    #   and route directly to Node runtime (@seo_runtime) for dynamic canonical & noindex headers.
+    # - Query-less routes check pre-rendered static HTML first ($uri/index.html), then
+    #   fall back to @seo_runtime so live TMDB routes return 200 and nonexistent routes return 404.
     location / {
-        try_files $uri $uri/ $uri/index.html /index.html;
+        if ($is_args = "?") {
+            return 418;
+        }
+        error_page 418 = @seo_runtime;
+        try_files $uri $uri/index.html @seo_runtime;
     }
 
-    # 404 Handler for genuinely missing assets
-    # Does NOT redirect 5xx server errors to index.html to prevent false 200 OK responses
+    location @seo_runtime {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
 }

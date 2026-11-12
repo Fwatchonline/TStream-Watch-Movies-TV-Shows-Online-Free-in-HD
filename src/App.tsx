@@ -24,6 +24,7 @@ import { AuthProvider } from './context/AuthContext';
 import { MediaItem, MediaDetail } from './types/media';
 import { createMediaSlug, parseMediaSlug } from './utils/slug';
 import { updateSEO } from './utils/seo';
+import { getPlatformById } from './services/platformData';
 import { recordSiteVisit } from './services/analytics';
 import { auth } from './services/firebase';
 
@@ -59,7 +60,9 @@ export default function App() {
         setSelectedGenreId(null);
       }
 
-      if (path === 'movies') {
+      if (path === '' || path === 'index.html') {
+        setCurrentView('home');
+      } else if (path === 'movies') {
         setCurrentView('movies');
       } else if (path === 'tv-shows') {
         setCurrentView('tv-shows');
@@ -73,39 +76,56 @@ export default function App() {
         setCurrentView('collections');
       } else if (path.startsWith('platform/')) {
         const parts = path.split('/');
-        if (parts[1]) {
-          setSelectedPlatform(parts[1]);
+        const plat = parts.length === 2 ? getPlatformById(parts[1]) : undefined;
+        if (plat) {
+          setSelectedPlatform(parts[1].toLowerCase());
           setCurrentView('platform');
+        } else {
+          setCurrentView('notfound');
         }
       } else if (path === 'platform' || params.has('platform')) {
-        setSelectedPlatform(params.get('platform') || 'netflix');
-        setCurrentView('platform');
+        const platParam = params.get('platform') || 'netflix';
+        if (getPlatformById(platParam)) {
+          setSelectedPlatform(platParam.toLowerCase());
+          setCurrentView('platform');
+        } else {
+          setCurrentView('notfound');
+        }
       } else if (path.startsWith('az/')) {
         const parts = path.split('/');
-        if (parts[1]) {
-          setSelectedLetter(parts[1].toUpperCase());
+        const letter = parts[1]?.toUpperCase();
+        if (parts.length === 2 && letter && (/^[A-Z]$/.test(letter) || letter === '0-9')) {
+          setSelectedLetter(letter);
           setCurrentView('az');
+        } else {
+          setCurrentView('notfound');
         }
       } else if (path === 'az' || params.has('letter')) {
-        setSelectedLetter((params.get('letter') || 'A').toUpperCase());
-        setCurrentView('az');
+        const letter = (params.get('letter') || 'A').toUpperCase();
+        if (/^[A-Z]$/.test(letter) || letter === '0-9') {
+          setSelectedLetter(letter);
+          setCurrentView('az');
+        } else {
+          setCurrentView('notfound');
+        }
       } else if (path.startsWith('tags/')) {
         const parts = path.split('/');
-        if (parts[1]) {
+        if (parts.length === 2 && parts[1]) {
           const clean = decodeURIComponent(parts[1]).replace(/^#/, '').toLowerCase();
           setSelectedTag(clean);
           setCurrentView('tags');
         } else {
-          setSelectedTag(null);
-          setCurrentView('tags');
+          setCurrentView('notfound');
         }
       } else if (path.startsWith('tag/')) {
         const parts = path.split('/');
-        if (parts[1]) {
+        if (parts.length === 2 && parts[1]) {
           const clean = decodeURIComponent(parts[1]).replace(/^#/, '').toLowerCase();
           setSelectedTag(clean);
           setCurrentView('tags');
           window.history.replaceState({}, '', `/tags/${clean}`);
+        } else {
+          setCurrentView('notfound');
         }
       } else if (path === 'tags') {
         setCurrentView('tags');
@@ -127,10 +147,16 @@ export default function App() {
         setCurrentView('people');
       } else if (path.startsWith('person/')) {
         const parts = path.split('/');
-        const pid = parseInt(parts[1], 10);
-        if (!isNaN(pid)) {
-          setSelectedPersonId(pid);
-          setCurrentView('person');
+        if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+          const pid = parseInt(parts[1], 10);
+          if (pid > 0) {
+            setSelectedPersonId(pid);
+            setCurrentView('person');
+          } else {
+            setCurrentView('notfound');
+          }
+        } else {
+          setCurrentView('notfound');
         }
       } else if (path === 'admin') {
         setCurrentView('admin');
@@ -139,25 +165,34 @@ export default function App() {
       } else if (path.startsWith('movie/') || path.startsWith('tv/')) {
         const parts = path.split('/');
         const type = (parts[0] === 'tv' ? 'tv' : 'movie') as 'movie' | 'tv';
-        const parsed = parseMediaSlug(parts[1]);
-        if (parsed && !isNaN(parsed.id)) {
+        const parsed = parts.length === 2 ? parseMediaSlug(parts[1]) : null;
+        if (parsed && Number.isInteger(parsed.id) && parsed.id > 0) {
           setSelectedMediaType(type);
           setSelectedMediaId(parsed.id);
           setCurrentView('details');
+        } else {
+          setCurrentView('notfound');
         }
       } else if (path.startsWith('watch/')) {
         const parts = path.split('/');
-        const type = (parts[1] === 'tv' ? 'tv' : 'movie') as 'movie' | 'tv';
-        const parsed = parseMediaSlug(parts[2]);
-        if (parsed && !isNaN(parsed.id)) {
-          setSelectedMediaType(type);
-          setSelectedMediaId(parsed.id);
-          setCurrentView('watch');
-          if (parts[3]) setWatchSeason(parseInt(parts[3], 10) || 1);
-          if (parts[4]) setWatchEpisode(parseInt(parts[4], 10) || 1);
+        if ((parts[1] === 'movie' && parts.length === 3) || (parts[1] === 'tv' && (parts.length === 3 || parts.length === 5))) {
+          const type = (parts[1] === 'tv' ? 'tv' : 'movie') as 'movie' | 'tv';
+          const parsed = parseMediaSlug(parts[2]);
+          const validNums = parts.length !== 5 || (/^\d+$/.test(parts[3]) && /^\d+$/.test(parts[4]) && parseInt(parts[3], 10) >= 1 && parseInt(parts[4], 10) >= 1);
+          if (parsed && Number.isInteger(parsed.id) && parsed.id > 0 && validNums) {
+            setSelectedMediaType(type);
+            setSelectedMediaId(parsed.id);
+            setCurrentView('watch');
+            setWatchSeason(parts[3] ? parseInt(parts[3], 10) : 1);
+            setWatchEpisode(parts[4] ? parseInt(parts[4], 10) : 1);
+          } else {
+            setCurrentView('notfound');
+          }
+        } else {
+          setCurrentView('notfound');
         }
       } else {
-        setCurrentView('home');
+        setCurrentView('notfound');
       }
     };
 
@@ -168,36 +203,38 @@ export default function App() {
 
   // Update SEO for main catalog pages with explicit canonical URLs and index directives
   useEffect(() => {
+    const urlWithQuery = `${window.location.pathname}${window.location.search}`;
     if (currentView === 'home') {
       updateSEO({ url: '/' });
     } else if (currentView === 'movies') {
       updateSEO({
         title: 'Popular & Latest Movies Free HD',
         description: 'Browse and watch thousands of blockbuster movies online in HD 1080p and 4K on T Stream.',
-        url: '/movies'
+        url: urlWithQuery.startsWith('/movies') ? urlWithQuery : '/movies'
       });
     } else if (currentView === 'tv-shows') {
       updateSEO({
         title: 'TV Shows & Full Episodes Free',
         description: 'Stream full seasons and episodes of your favorite TV series and dramas on T Stream.',
-        url: '/tv-shows'
+        url: urlWithQuery.startsWith('/tv-shows') ? urlWithQuery : '/tv-shows'
       });
     } else if (currentView === 'trending') {
       updateSEO({
         title: 'Trending Movies & TV Shows Today',
         description: 'Discover the hottest and most popular movies and series streaming right now on T Stream.',
-        url: '/trending'
+        url: urlWithQuery.startsWith('/trending') ? urlWithQuery : '/trending'
       });
     } else if (currentView === 'top-rated') {
       updateSEO({
         title: 'Top Rated Movies & Shows of All Time',
         description: 'Explore the highest critically-acclaimed films and television series on T Stream.',
-        url: '/top-rated'
+        url: urlWithQuery.startsWith('/top-rated') ? urlWithQuery : '/top-rated'
       });
     } else if (currentView === 'new-episodes') {
       updateSEO({
         title: 'New TV Episodes & Releases Today — Free HD Stream',
         description: 'Track the latest TV episodes airing today and this week. Follow your favorite TV series to get instant notifications when new episodes air on T Stream.',
+        noindex: true,
         url: '/new-episodes'
       });
     } else if (currentView === 'collections') {
@@ -211,7 +248,7 @@ export default function App() {
       updateSEO({
         title: `${name} Hub — Movies & TV Series`,
         description: `Stream movies and television series from ${name} on T Stream.`,
-        url: `/platform/${selectedPlatform || 'netflix'}`
+        url: urlWithQuery.startsWith('/platform/') ? urlWithQuery : `/platform/${selectedPlatform || 'netflix'}`
       });
     } else if (currentView === 'az') {
       updateSEO({
@@ -238,16 +275,17 @@ export default function App() {
       updateSEO({
         title: 'Actors & Film Directors Directory',
         description: 'Explore popular film and TV cast members, directors, and filmographies on T Stream.',
+        noindex: true,
         url: '/people'
       });
     } else if (currentView === 'random') {
       updateSEO({
         title: 'Random Movie & TV Show Picker — Reshuffle 20 Titles',
         description: 'Spin the wheel and pick from 20 random movies and TV series to watch online in HD on T Stream.',
+        noindex: true,
         url: '/random'
       });
     } else if (currentView === 'search') {
-      // Search result pages must be noindex to prevent Google crawl traps & thin content
       updateSEO({
         title: searchQuery ? `Search: "${searchQuery}"` : 'Search Movies & TV Shows',
         description: 'Search across tens of thousands of movies, series, actors, and sagas on T Stream.',
@@ -255,7 +293,6 @@ export default function App() {
         url: '/search'
       });
     } else if (currentView === 'library') {
-      // Personal user library must never be indexed
       updateSEO({
         title: 'My Watchlist & Library',
         description: 'Access your saved bookmarks, watchlist, and watched history on T Stream.',
@@ -263,7 +300,6 @@ export default function App() {
         url: '/library'
       });
     } else if (currentView === 'admin') {
-      // Operations panel must never be indexed
       updateSEO({
         title: 'Server & Player Settings',
         description: 'Configure custom streaming server priorities and player preferences on T Stream.',
@@ -277,9 +313,15 @@ export default function App() {
         noindex: true,
         url: '/settings'
       });
+    } else if (currentView === 'notfound') {
+      updateSEO({
+        title: '404 — Page Not Found',
+        description: 'The movie, television series, tag, or page you were looking for could not be found on T Stream.',
+        noindex: true,
+        url: '/404'
+      });
     }
 
-    // Automatically record site visits for analytics
     const currentPath = window.location.pathname || '/';
     recordSiteVisit(currentPath, auth.currentUser);
   }, [currentView, searchQuery, selectedLetter, selectedPlatform, selectedTag]);
@@ -527,9 +569,12 @@ export default function App() {
             mediaType={selectedMediaType}
             season={watchSeason}
             episode={watchEpisode}
-            onBackToDetails={() => {
-              setCurrentView('details');
-              window.history.pushState({}, '', `/${selectedMediaType}/${selectedMediaId}`);
+            onBackToDetails={(media) => {
+              if (media) {
+                handleSelectMedia(media);
+              } else {
+                navigateTo(selectedMediaType === 'tv' ? 'tv-shows' : 'movies');
+              }
             }}
             onSelectMedia={handleSelectMedia}
           />
@@ -640,6 +685,38 @@ export default function App() {
 
         {currentView === 'settings' && (
           <SettingsPage onNavigate={navigateTo} />
+        )}
+
+        {currentView === 'notfound' && (
+          <div className="min-h-[70vh] flex items-center justify-center px-4 py-16">
+            <div className="text-center max-w-lg mx-auto">
+              <div className="text-7xl font-black text-[#F5C400] mb-3">404</div>
+              <h1 className="text-3xl font-extrabold text-white mb-3">Page Not Found</h1>
+              <p className="text-sm text-[#A6A6AC] mb-8 leading-relaxed">
+                The movie, television series, episode, tag, or page you were looking for could not be found or may have been removed.
+              </p>
+              <div className="flex flex-wrap justify-center gap-3 text-xs sm:text-sm font-bold">
+                <button
+                  onClick={() => navigateTo('home')}
+                  className="px-5 py-2.5 bg-[#F5C400] hover:bg-[#e0b400] text-black rounded-xl transition-colors cursor-pointer"
+                >
+                  T Stream Home
+                </button>
+                <button
+                  onClick={() => navigateTo('movies')}
+                  className="px-5 py-2.5 bg-white/10 hover:bg-white/15 text-white rounded-xl transition-colors cursor-pointer"
+                >
+                  Browse Movies
+                </button>
+                <button
+                  onClick={() => navigateTo('tv-shows')}
+                  className="px-5 py-2.5 bg-white/10 hover:bg-white/15 text-white rounded-xl transition-colors cursor-pointer"
+                >
+                  Browse TV Shows
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
 

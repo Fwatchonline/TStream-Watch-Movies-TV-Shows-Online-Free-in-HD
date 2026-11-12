@@ -136,10 +136,12 @@ export const TagsPage: React.FC<TagsPageProps> = ({
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-          Explore Tags
+          {activeTag ? `Movies & Shows Tagged #${activeTag}` : 'Explore Tags'}
         </h1>
         <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-xl">
-          Browse movie keywords, story themes and motifs. Each tag has its own page with matching films.
+          {activeTag
+            ? `Browse movies and television series matching the #${activeTag} theme on T Stream.`
+            : 'Browse movie keywords, story themes and motifs. Each tag has its own page with matching films.'}
         </p>
       </div>
 

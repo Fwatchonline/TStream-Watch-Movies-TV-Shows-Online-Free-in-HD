@@ -36,7 +36,7 @@ import { ReportIssueModal } from '../components/ReportIssueModal';
 import { getPlatformById } from '../services/platformData';
 import { autoDiscoverMovieFranchise, DiscoveredCollection } from '../services/collectionStore';
 import { createMediaSlug } from '../utils/slug';
-import { updateMediaSEO } from '../utils/seo';
+import { updateMediaSEO, updateSEO } from '../utils/seo';
 
 interface DetailsPageProps {
   mediaId: number;
@@ -137,6 +137,13 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
               }
             });
           }
+        } else {
+          updateSEO({
+            title: '404 — Title Not Found',
+            description: 'The requested movie or television series could not be found on T Stream.',
+            noindex: true,
+            url: '/404'
+          });
         }
         setLoading(false);
       }
@@ -170,10 +177,30 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
     }
   };
 
-  if (loading || !detail) {
+  if (loading) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center">
         <PageLoadingIndicator label="Loading title details..." />
+      </div>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center px-4 py-16">
+        <div className="text-center max-w-lg mx-auto">
+          <div className="text-7xl font-black text-[#F5C400] mb-3">404</div>
+          <h1 className="text-3xl font-extrabold text-white mb-3">Title Not Found</h1>
+          <p className="text-sm text-[#A6A6AC] mb-8 leading-relaxed">
+            The movie or television series you are looking for does not exist or has been removed.
+          </p>
+          <button
+            onClick={onBack}
+            className="px-6 py-2.5 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] text-black font-extrabold text-xs sm:text-sm transition-colors cursor-pointer"
+          >
+            Back to Home
+          </button>
+        </div>
       </div>
     );
   }

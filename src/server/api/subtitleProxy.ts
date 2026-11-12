@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
+import { safeFetchStream, ProxySecurityError } from '../utils/safeProxyFetch';
 
 export const subtitleProxyRoute = new Hono();
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+const MAX_SUBTITLE_SIZE = 5 * 1024 * 1024;
 
 subtitleProxyRoute.options('*', (c) => {
   c.header('Access-Control-Allow-Origin', '*');
@@ -19,9 +21,13 @@ subtitleProxyRoute.get('*', async (c) => {
     return c.text('Missing url parameter', 400);
   }
 
-  // Safety check on protocol
-  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-    return c.text('Invalid url protocol', 400);
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return c.text('Invalid url protocol', 400);
+    }
+  } catch {
+    return c.text('Invalid subtitle URL', 400);
   }
 
   const headers: Record<string, string> = {
@@ -34,18 +40,34 @@ subtitleProxyRoute.get('*', async (c) => {
     headers['Origin'] = 'https://sub.vdrk.site';
   }
 
-  try {
-    const upstreamRes = await fetch(targetUrl, {
-      headers,
-      signal: c.req.raw.signal
-    });
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(() => timeoutController.abort(), 10000);
+  const combinedSignal =
+    typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([c.req.raw.signal, timeoutController.signal])
+      : timeoutController.signal;
 
-    if (!upstreamRes.ok) {
-      return c.text(`Upstream returned ${upstreamRes.status}`, upstreamRes.status as any);
+  try {
+    const { response } = await safeFetchStream(targetUrl, headers, combinedSignal, 'GET');
+    const status = response.statusCode || 502;
+
+    if (status < 200 || status >= 300) {
+      response.destroy();
+      return c.text(`Upstream returned ${status}`, (status >= 400 && status <= 599 ? status : 502) as any);
     }
 
-    const arrayBuffer = await upstreamRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of response) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.length;
+      if (total > MAX_SUBTITLE_SIZE) {
+        response.destroy();
+        return c.text('Subtitle file exceeds maximum allowed size', 502);
+      }
+      chunks.push(buf);
+    }
+    const buffer = Buffer.concat(chunks);
 
     // Multi-encoding detector: Try UTF-8 first, fallback to Windows-1250 (Latin-2) for Ex-Yu diacritics
     let decodedText: string;
@@ -53,22 +75,27 @@ subtitleProxyRoute.get('*', async (c) => {
       const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
       decodedText = utf8Decoder.decode(buffer);
     } catch {
-      // UTF-8 had invalid bytes; decode using windows-1250 which covers Serbian/Croatian/Bosnian č, ć, ž, š, đ
       try {
         const cp1250Decoder = new TextDecoder('windows-1250');
         decodedText = cp1250Decoder.decode(buffer);
       } catch {
-        // Fallback to non-fatal utf-8
         decodedText = new TextDecoder('utf-8').decode(buffer);
       }
     }
 
-    // Ensure WEBVTT format or return raw text
     c.header('Content-Type', 'text/vtt; charset=utf-8');
     c.header('Access-Control-Allow-Origin', '*');
     c.header('Cache-Control', 'public, max-age=86400');
     return c.body(decodedText);
   } catch (err: any) {
-    return c.text(`Subtitle fetch failed: ${err.message}`, 502);
+    if (err instanceof ProxySecurityError) {
+      return c.text('Upstream destination blocked by security policy', 403);
+    }
+    if (err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('timeout')) {
+      return c.text('Subtitle upstream timed out', 504);
+    }
+    return c.text(`Subtitle fetch failed: ${err?.message || 'Upstream unavailable'}`, 502);
+  } finally {
+    clearTimeout(timeout);
   }
 });

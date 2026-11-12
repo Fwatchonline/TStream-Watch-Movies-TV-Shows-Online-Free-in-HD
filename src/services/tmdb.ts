@@ -23,15 +23,18 @@ import {
 import { getPlatformById } from './platformData';
 
 export const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
-export const DEFAULT_TMDB_API_KEY = '844dba0bfd8f3a4f3799f6130ef9e335';
+export const DEFAULT_TMDB_API_KEY = '';
 
 export function getTmdbApiKey(): string {
   if (typeof window !== 'undefined') {
     const custom = localStorage.getItem('tstream_tmdb_api_key');
     if (custom && custom.trim()) return custom.trim();
   }
-  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_TMDB_API_KEY) {
-    return import.meta.env.VITE_TMDB_API_KEY;
+  if (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_TMDB_API_KEY) {
+    return String((import.meta as any).env.VITE_TMDB_API_KEY).trim();
+  }
+  if (typeof process !== 'undefined' && process.env) {
+    return (process.env.VITE_TMDB_API_KEY || process.env.TMDB_API_KEY || '').trim();
   }
   return DEFAULT_TMDB_API_KEY;
 }
@@ -191,6 +194,14 @@ export async function fetchCatalog(
 ): Promise<PaginatedResponse<MediaItem>> {
   const safePage = Math.max(1, Math.floor(Number(page) || 1));
   const apiKey = getTmdbApiKey();
+
+  if (!apiKey) {
+    return queryLocalCatalog({
+      ...extraFilters,
+      page: safePage,
+      mediaType: extraFilters.mediaType || (category.includes('tv') ? 'tv' : category.includes('movie') ? 'movie' : 'all')
+    });
+  }
 
   try {
     // 1. Platform / Studio Specific Search (e.g. Netflix, Apple TV+, HBO Max, Disney+, etc.)
@@ -566,82 +577,94 @@ export async function fetchCatalog(
 export async function getMediaDetail(id: number, type: MediaType): Promise<MediaDetail | null> {
   const apiKey = getTmdbApiKey();
 
-  try {
-    const res = await fetch(
-      `${TMDB_BASE_URL}/${type}/${id}?api_key=${apiKey}&append_to_response=videos,credits,recommendations,similar,external_ids,keywords`
-    );
-    if (res.ok) {
-      const data = await res.json();
-
-      // If movie has belongs_to_collection, fetch collection parts from TMDB
-      // If movie has belongs_to_collection, fetch full collection parts from TMDB
-      if (type === 'movie') {
-        if (data.belongs_to_collection && data.belongs_to_collection.id) {
-          try {
-            const colRes = await fetch(`${TMDB_BASE_URL}/collection/${data.belongs_to_collection.id}?api_key=${apiKey}`);
-            if (colRes.ok) {
-              const colData = await colRes.json();
-              data.belongs_to_collection.name = colData.name || data.belongs_to_collection.name;
-              data.belongs_to_collection.overview = colData.overview || data.belongs_to_collection.overview;
-              data.belongs_to_collection.poster_path = colData.poster_path || data.belongs_to_collection.poster_path;
-              data.belongs_to_collection.backdrop_path = colData.backdrop_path || data.belongs_to_collection.backdrop_path;
-              data.belongs_to_collection.parts = (colData.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'));
-            }
-          } catch {
-            // ignore collection fetch failure
-          }
+  if (apiKey) {
+    try {
+      const res = await fetch(
+        `${TMDB_BASE_URL}/${type}/${id}?api_key=${apiKey}&append_to_response=videos,credits,recommendations,similar,external_ids,keywords`
+      );
+      if (res.status === 404) {
+        // Check strictly if this ID exists in local curated catalog before returning null
+        if (type === 'movie') {
+          const foundMovie = DETAILED_MOVIES.find(m => m.id === id || m.tmdbId === id);
+          if (foundMovie) return foundMovie;
         } else {
-          // Automatic franchise search by title if belongs_to_collection is absent (e.g. Pirates, Fast and Furious, Avatar, etc.)
-          try {
-            const cleanTitle = (data.title || '').split(/[:–—\-]/)[0].trim();
-            if (cleanTitle.length >= 3) {
-              const sRes = await fetch(`${TMDB_BASE_URL}/search/collection?api_key=${apiKey}&query=${encodeURIComponent(cleanTitle)}`);
-              if (sRes.ok) {
-                const sData = await sRes.json();
-                const matchedCol = sData.results?.[0];
-                if (matchedCol && matchedCol.id) {
-                  const colRes = await fetch(`${TMDB_BASE_URL}/collection/${matchedCol.id}?api_key=${apiKey}`);
-                  if (colRes.ok) {
-                    const colData = await colRes.json();
-                    data.belongs_to_collection = {
-                      id: colData.id,
-                      name: colData.name,
-                      overview: colData.overview,
-                      poster_path: colData.poster_path,
-                      backdrop_path: colData.backdrop_path,
-                      parts: (colData.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'))
-                    };
+          const foundTV = DETAILED_TV_SHOWS.find(t => t.id === id || t.tmdbId === id);
+          if (foundTV) return foundTV;
+        }
+        return null;
+      }
+      if (res.ok) {
+        const data = await res.json();
+
+        // If movie has belongs_to_collection, fetch full collection parts from TMDB
+        if (type === 'movie') {
+          if (data.belongs_to_collection && data.belongs_to_collection.id) {
+            try {
+              const colRes = await fetch(`${TMDB_BASE_URL}/collection/${data.belongs_to_collection.id}?api_key=${apiKey}`);
+              if (colRes.ok) {
+                const colData = await colRes.json();
+                data.belongs_to_collection.name = colData.name || data.belongs_to_collection.name;
+                data.belongs_to_collection.overview = colData.overview || data.belongs_to_collection.overview;
+                data.belongs_to_collection.poster_path = colData.poster_path || data.belongs_to_collection.poster_path;
+                data.belongs_to_collection.backdrop_path = colData.backdrop_path || data.belongs_to_collection.backdrop_path;
+                data.belongs_to_collection.parts = (colData.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'));
+              }
+            } catch {
+              // ignore collection fetch failure
+            }
+          } else {
+            // Automatic franchise search by title if belongs_to_collection is absent
+            try {
+              const cleanTitle = (data.title || '').split(/[:–—\-]/)[0].trim();
+              if (cleanTitle.length >= 3) {
+                const sRes = await fetch(`${TMDB_BASE_URL}/search/collection?api_key=${apiKey}&query=${encodeURIComponent(cleanTitle)}`);
+                if (sRes.ok) {
+                  const sData = await sRes.json();
+                  const matchedCol = sData.results?.[0];
+                  if (matchedCol && matchedCol.id) {
+                    const colRes = await fetch(`${TMDB_BASE_URL}/collection/${matchedCol.id}?api_key=${apiKey}`);
+                    if (colRes.ok) {
+                      const colData = await colRes.json();
+                      data.belongs_to_collection = {
+                        id: colData.id,
+                        name: colData.name,
+                        overview: colData.overview,
+                        poster_path: colData.poster_path,
+                        backdrop_path: colData.backdrop_path,
+                        parts: (colData.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'))
+                      };
+                    }
                   }
                 }
               }
+            } catch {
+              // ignore
             }
-          } catch {
-            // ignore
           }
         }
-      }
 
-      if (type === 'tv') {
-        const tvDetail = normalizeTMDBDetail(data, type) as TVDetail;
-        const primarySeason = tvDetail.seasons?.find(s => s.seasonNumber === 1) || tvDetail.seasons?.[0];
-        if (primarySeason) {
-          try {
-            const episodes = await fetchSeasonEpisodes(tvDetail.id, primarySeason.seasonNumber);
-            primarySeason.episodes = episodes;
-          } catch {
-            // ignore
+        if (type === 'tv') {
+          const tvDetail = normalizeTMDBDetail(data, type) as TVDetail;
+          const primarySeason = tvDetail.seasons?.find(s => s.seasonNumber === 1) || tvDetail.seasons?.[0];
+          if (primarySeason) {
+            try {
+              const episodes = await fetchSeasonEpisodes(tvDetail.id, primarySeason.seasonNumber);
+              primarySeason.episodes = episodes;
+            } catch {
+              // ignore
+            }
           }
+          return tvDetail;
         }
-        return tvDetail;
-      }
 
-      return normalizeTMDBDetail(data, type);
+        return normalizeTMDBDetail(data, type);
+      }
+    } catch (err) {
+      console.warn('TMDB API detail fetch failed, checking local catalog:', err);
     }
-  } catch (err) {
-    console.warn('TMDB API detail fetch failed, checking local catalog:', err);
   }
 
-  // Fallback to local detailed items
+  // Fallback to local curated items when offline or unmatched
   if (type === 'movie') {
     const foundMovie = DETAILED_MOVIES.find(m => m.id === id || m.tmdbId === id);
     if (foundMovie) return foundMovie;
@@ -650,11 +673,16 @@ export async function getMediaDetail(id: number, type: MediaType): Promise<Media
   } else {
     const foundTV = DETAILED_TV_SHOWS.find(t => t.id === id || t.tmdbId === id);
     if (foundTV) return foundTV;
-    const basic = EXPANDED_CATALOG.find(t => (t.id === id || t.tmdbId === id) && t.mediaType === 'tv');
+    const basic = EXPANDED_CATALOG.find(t => (t.id === id || t.tmdbId === id) && mTypeMatches(t, 'tv'));
     if (basic) return createDefaultTVDetail(basic);
   }
 
-  return DETAILED_MOVIES[0];
+  // Genuine 404: do NOT substitute another movie/show
+  return null;
+}
+
+function mTypeMatches(item: MediaItem, type: MediaType): boolean {
+  return item.mediaType === type;
 }
 
 /**
@@ -663,21 +691,23 @@ export async function getMediaDetail(id: number, type: MediaType): Promise<Media
 export async function getCollectionDetail(collectionId: number): Promise<CollectionSummary | null> {
   const apiKey = getTmdbApiKey();
 
-  try {
-    const res = await fetch(`${TMDB_BASE_URL}/collection/${collectionId}?api_key=${apiKey}`);
-    if (res.ok) {
-      const raw = await res.json();
-      return {
-        id: raw.id,
-        name: raw.name,
-        overview: raw.overview,
-        posterPath: raw.poster_path ? `https://image.tmdb.org/t/p/w500${raw.poster_path}` : null,
-        backdropPath: raw.backdrop_path ? `https://image.tmdb.org/t/p/original${raw.backdrop_path}` : null,
-        parts: (raw.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'))
-      };
+  if (apiKey) {
+    try {
+      const res = await fetch(`${TMDB_BASE_URL}/collection/${collectionId}?api_key=${apiKey}`);
+      if (res.ok) {
+        const raw = await res.json();
+        return {
+          id: raw.id,
+          name: raw.name,
+          overview: raw.overview,
+          posterPath: raw.poster_path ? `https://image.tmdb.org/t/p/w500${raw.poster_path}` : null,
+          backdropPath: raw.backdrop_path ? `https://image.tmdb.org/t/p/original${raw.backdrop_path}` : null,
+          parts: (raw.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'))
+        };
+      }
+    } catch (err) {
+      console.warn('TMDB collection fetch failed:', err);
     }
-  } catch (err) {
-    console.warn('TMDB collection fetch failed:', err);
   }
 
   const collections: Record<number, CollectionSummary> = {
@@ -687,42 +717,54 @@ export async function getCollectionDetail(collectionId: number): Promise<Collect
     295: PIRATES_COLLECTION
   };
 
-  return collections[collectionId] || SPIDERMAN_COLLECTION;
+  return collections[collectionId] || null;
 }
 
 /**
- * Fetch movies by keyword / tag from TMDB API
+ * Fetch movies & TV series by keyword / tag from TMDB API with clean local catalog fallback
  */
 export async function fetchByTag(tagName: string, page = 1): Promise<PaginatedResponse<MediaItem>> {
   const apiKey = getTmdbApiKey();
   const safePage = Math.max(1, Math.floor(Number(page) || 1));
 
-  try {
-    // 1. Search for keyword ID
-    const kwRes = await fetch(`${TMDB_BASE_URL}/search/keyword?api_key=${apiKey}&query=${encodeURIComponent(tagName)}&page=1`);
-    if (kwRes.ok) {
-      const kwData = await kwRes.json();
-      const firstKw = kwData.results?.[0];
-      if (firstKw && firstKw.id) {
-        // 2. Discover movies with this keyword
-        const disRes = await fetch(`${TMDB_BASE_URL}/discover/movie?api_key=${apiKey}&with_keywords=${firstKw.id}&page=${safePage}&sort_by=popularity.desc`);
-        if (disRes.ok) {
-          const disData = await disRes.json();
-          const results: MediaItem[] = (disData.results || []).map((r: any) => normalizeTMDBItem(r, 'movies'));
-          return {
-            page: disData.page || safePage,
-            totalPages: Math.min(disData.total_pages || 1, 500),
-            totalResults: disData.total_results || results.length,
-            results
-          };
+  if (apiKey) {
+    try {
+      const kwRes = await fetch(`${TMDB_BASE_URL}/search/keyword?api_key=${apiKey}&query=${encodeURIComponent(tagName)}&page=1`);
+      if (kwRes.ok) {
+        const kwData = await kwRes.json();
+        const keywords = Array.isArray(kwData?.results) ? kwData.results : [];
+        const cleanTag = tagName.trim().toLowerCase();
+        const firstKw = keywords.find((k: any) => String(k.name || '').toLowerCase() === cleanTag) || keywords[0];
+        if (firstKw && firstKw.id) {
+          const [disMovRes, disTvRes] = await Promise.all([
+            fetch(`${TMDB_BASE_URL}/discover/movie?api_key=${apiKey}&with_keywords=${firstKw.id}&page=${safePage}&sort_by=popularity.desc`).catch(() => null),
+            fetch(`${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&with_keywords=${firstKw.id}&page=${safePage}&sort_by=popularity.desc`).catch(() => null)
+          ]);
+
+          const [disMovData, disTvData] = await Promise.all([
+            disMovRes && disMovRes.ok ? disMovRes.json() : { results: [], total_pages: 1, total_results: 0 },
+            disTvRes && disTvRes.ok ? disTvRes.json() : { results: [], total_pages: 1, total_results: 0 }
+          ]);
+
+          const movResults: MediaItem[] = (disMovData.results || []).map((r: any) => normalizeTMDBItem(r, 'movies'));
+          const tvResults: MediaItem[] = (disTvData.results || []).map((r: any) => normalizeTMDBItem(r, 'tv'));
+          const combined = [...movResults, ...tvResults].sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+
+          if (combined.length > 0) {
+            return {
+              page: safePage,
+              totalPages: Math.min(Math.max(disMovData.total_pages || 1, disTvData.total_pages || 1), 500),
+              totalResults: (disMovData.total_results || 0) + (disTvData.total_results || 0),
+              results: combined
+            };
+          }
         }
       }
+    } catch (err) {
+      console.warn('TMDB discover by keyword failed, using fallback:', err);
     }
-  } catch (err) {
-    console.warn('TMDB discover by keyword failed, using fallback:', err);
   }
 
-  // Fallback to local catalog
   return queryLocalCatalog({
     query: tagName,
     page: safePage
@@ -734,50 +776,42 @@ export async function fetchByTag(tagName: string, page = 1): Promise<PaginatedRe
  */
 export async function fetchSeasonEpisodes(tvId: number, seasonNumber: number): Promise<Episode[]> {
   const apiKey = getTmdbApiKey();
-  try {
-    const res = await fetch(`${TMDB_BASE_URL}/tv/${tvId}/season/${seasonNumber}?api_key=${apiKey}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.episodes) && data.episodes.length > 0) {
-        return data.episodes.map((ep: any) => ({
-          id: ep.id,
-          episodeNumber: ep.episode_number,
-          seasonNumber: ep.season_number ?? seasonNumber,
-          name: ep.name || `Episode ${ep.episode_number}`,
-          overview: ep.overview || 'No synopsis available for this episode.',
-          stillPath: ep.still_path
-            ? `https://image.tmdb.org/t/p/w500${ep.still_path}`
-            : null,
-          airDate: ep.air_date || '',
-          voteAverage: ep.vote_average ? Number(ep.vote_average.toFixed(1)) : 8.0,
-          runtime: ep.runtime || undefined
-        }));
+  if (apiKey) {
+    try {
+      const res = await fetch(`${TMDB_BASE_URL}/tv/${tvId}/season/${seasonNumber}?api_key=${apiKey}`);
+      if (res.status === 404) {
+        return [];
       }
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.episodes) && data.episodes.length > 0) {
+          return data.episodes.map((ep: any) => ({
+            id: ep.id,
+            episodeNumber: ep.episode_number,
+            seasonNumber: ep.season_number ?? seasonNumber,
+            name: ep.name || `Episode ${ep.episode_number}`,
+            overview: ep.overview || 'No synopsis available for this episode.',
+            stillPath: ep.still_path
+              ? `https://image.tmdb.org/t/p/w500${ep.still_path}`
+              : null,
+            airDate: ep.air_date || '',
+            voteAverage: ep.vote_average ? Number(ep.vote_average.toFixed(1)) : 0,
+            runtime: ep.runtime || undefined
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch season ${seasonNumber} episodes for tv ${tvId}:`, err);
     }
-  } catch (err) {
-    console.warn(`Failed to fetch season ${seasonNumber} episodes for tv ${tvId}:`, err);
   }
 
-  // Check local detailed TV fallback
   const foundTV = DETAILED_TV_SHOWS.find(t => t.id === tvId || t.tmdbId === tvId);
   const foundSeason = foundTV?.seasons?.find(s => s.seasonNumber === seasonNumber);
   if (foundSeason?.episodes && foundSeason.episodes.length > 0) {
     return foundSeason.episodes;
   }
 
-  // Fallback: generate clean episode list matching episodeCount
-  const count = foundSeason?.episodeCount || 8;
-  return Array.from({ length: count }, (_, i) => ({
-    id: Number(`${tvId}${seasonNumber}${i + 1}`),
-    episodeNumber: i + 1,
-    seasonNumber,
-    name: `Episode ${i + 1}`,
-    overview: `Episode ${i + 1} of Season ${seasonNumber}.`,
-    stillPath: null,
-    airDate: '',
-    voteAverage: 8.0,
-    runtime: 45
-  }));
+  return [];
 }
 
 function normalizeTMDBDetail(raw: any, type: MediaType): MediaDetail {
@@ -1035,7 +1069,8 @@ export async function fetchRandomMedia(
   const sort = randomSorts[Math.floor(Math.random() * randomSorts.length)];
   const genreParam = genreId ? `&with_genres=${genreId}` : '';
 
-  try {
+  if (apiKey) {
+    try {
     let pool: MediaItem[] = [];
 
     if (mediaType === 'movie') {
@@ -1067,16 +1102,17 @@ export async function fetchRandomMedia(
     // Filter valid items with poster and title
     const valid = pool.filter(item => item.posterPath && item.title && !item.posterPath.includes('null'));
 
-    if (valid.length > 0) {
-      // Fisher-Yates shuffle
-      for (let i = valid.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [valid[i], valid[j]] = [valid[j], valid[i]];
+      if (valid.length > 0) {
+        // Fisher-Yates shuffle
+        for (let i = valid.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [valid[i], valid[j]] = [valid[j], valid[i]];
+        }
+        return valid.slice(0, count);
       }
-      return valid.slice(0, count);
+    } catch (err) {
+      console.warn('fetchRandomMedia failed, using catalog fallback:', err);
     }
-  } catch (err) {
-    console.warn('fetchRandomMedia failed, using catalog fallback:', err);
   }
 
   // Fallback to shuffled EXPANDED_CATALOG
@@ -1220,54 +1256,62 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
  */
 export async function fetchPersonDetail(personId: number): Promise<PersonDetail | null> {
   const apiKey = getTmdbApiKey();
-  try {
-    const res = await fetch(`${TMDB_BASE_URL}/person/${personId}?api_key=${apiKey}&append_to_response=combined_credits`);
-    if (res.ok) {
-      const raw = await res.json();
-      const credits = raw.combined_credits || {};
+  if (apiKey) {
+    try {
+      const res = await fetch(`${TMDB_BASE_URL}/person/${personId}?api_key=${apiKey}&append_to_response=combined_credits`);
+      if (res.status === 404) {
+        return null;
+      }
+      if (res.ok) {
+        const raw = await res.json();
+        const credits = raw.combined_credits || {};
 
-      const castItems: MediaItem[] = (credits.cast || [])
-        .filter((c: any) => c.poster_path || c.backdrop_path)
-        .map((c: any) => normalizeTMDBItem(c, c.media_type === 'tv' ? 'tv' : 'movies'))
-        .sort((a: any, b: any) => (b.popularity || 0) - (a.popularity || 0));
+        const castItems: MediaItem[] = (credits.cast || [])
+          .filter((c: any) => c.poster_path || c.backdrop_path)
+          .map((c: any) => normalizeTMDBItem(c, c.media_type === 'tv' ? 'tv' : 'movies'))
+          .sort((a: any, b: any) => (b.popularity || 0) - (a.popularity || 0));
 
-      const crewItems: Array<MediaItem & { job: string }> = (credits.crew || [])
-        .filter((c: any) => (c.poster_path || c.backdrop_path) && (c.job === 'Director' || c.department === 'Directing' || c.job === 'Writer'))
-        .map((c: any) => ({
-          ...normalizeTMDBItem(c, c.media_type === 'tv' ? 'tv' : 'movies'),
-          job: c.job || 'Director'
-        }))
-        .sort((a: any, b: any) => (b.popularity || 0) - (a.popularity || 0));
+        const crewItems: Array<MediaItem & { job: string }> = (credits.crew || [])
+          .filter((c: any) => (c.poster_path || c.backdrop_path) && (c.job === 'Director' || c.department === 'Directing' || c.job === 'Writer'))
+          .map((c: any) => ({
+            ...normalizeTMDBItem(c, c.media_type === 'tv' ? 'tv' : 'movies'),
+            job: c.job || 'Director'
+          }))
+          .sort((a: any, b: any) => (b.popularity || 0) - (a.popularity || 0));
 
-      return {
-        id: raw.id,
-        name: raw.name,
-        biography: raw.biography || `${raw.name} is a renowned figure in cinema recognized across global film and television.`,
-        birthday: raw.birthday,
-        deathday: raw.deathday,
-        placeOfBirth: raw.place_of_birth,
-        profilePath: raw.profile_path ? `https://image.tmdb.org/t/p/h632${raw.profile_path}` : null,
-        knownForDepartment: raw.known_for_department || 'Acting',
-        popularity: raw.popularity || 0,
-        combinedCredits: {
-          cast: castItems,
-          crew: crewItems
-        }
-      };
+        return {
+          id: raw.id,
+          name: raw.name,
+          biography: raw.biography || `${raw.name} is a renowned figure in cinema recognized across global film and television.`,
+          birthday: raw.birthday,
+          deathday: raw.deathday,
+          placeOfBirth: raw.place_of_birth,
+          profilePath: raw.profile_path ? `https://image.tmdb.org/t/p/h632${raw.profile_path}` : null,
+          knownForDepartment: raw.known_for_department || 'Acting',
+          popularity: raw.popularity || 0,
+          combinedCredits: {
+            cast: castItems,
+            crew: crewItems
+          }
+        };
+      }
+    } catch (err) {
+      console.warn('TMDB person detail fetch failed:', err);
     }
-  } catch (err) {
-    console.warn('TMDB person detail fetch failed:', err);
   }
 
-  // Fallback to local
   const matched = FALLBACK_POPULAR_PEOPLE.find(p => p.id === personId);
+  if (!matched) {
+    return null;
+  }
+
   return {
     id: personId,
-    name: matched?.name || 'Cinema Artist',
-    biography: `${matched?.name || 'This artist'} has made prominent contributions to award-winning feature films and television series streaming in high definition on T Stream.`,
-    profilePath: matched?.profilePath || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500&auto=format&fit=crop&q=80',
-    knownForDepartment: matched?.knownForDepartment || 'Acting',
-    popularity: matched?.popularity || 80,
+    name: matched.name,
+    biography: `${matched.name} has made prominent contributions to award-winning feature films and television series streaming in high definition on T Stream.`,
+    profilePath: matched.profilePath,
+    knownForDepartment: matched.knownForDepartment,
+    popularity: matched.popularity,
     combinedCredits: {
       cast: EXPANDED_CATALOG.slice(0, 8),
       crew: EXPANDED_CATALOG.slice(0, 4).map(item => ({ ...item, job: 'Director' }))
@@ -1285,32 +1329,34 @@ export async function fetchPopularPeople(
   const apiKey = getTmdbApiKey();
   const safePage = Math.max(1, Math.min(page, 50));
 
-  try {
-    const res = await fetch(`${TMDB_BASE_URL}/person/popular?api_key=${apiKey}&page=${safePage}`);
-    if (res.ok) {
-      const data = await res.json();
-      let results: PersonSummary[] = (data.results || []).map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        profilePath: p.profile_path ? `https://image.tmdb.org/t/p/h632${p.profile_path}` : null,
-        knownForDepartment: p.known_for_department || 'Acting',
-        popularity: p.popularity || 0,
-        knownFor: (p.known_for || []).map((k: any) => k.title || k.name || '')
-      }));
+  if (apiKey) {
+    try {
+      const res = await fetch(`${TMDB_BASE_URL}/person/popular?api_key=${apiKey}&page=${safePage}`);
+      if (res.ok) {
+        const data = await res.json();
+        let results: PersonSummary[] = (data.results || []).map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          profilePath: p.profile_path ? `https://image.tmdb.org/t/p/h632${p.profile_path}` : null,
+          knownForDepartment: p.known_for_department || 'Acting',
+          popularity: p.popularity || 0,
+          knownFor: (p.known_for || []).map((k: any) => k.title || k.name || '')
+        }));
 
-      if (department !== 'all') {
-        results = results.filter(p => p.knownForDepartment.toLowerCase() === department.toLowerCase());
+        if (department !== 'all') {
+          results = results.filter(p => p.knownForDepartment.toLowerCase() === department.toLowerCase());
+        }
+
+        return {
+          page: data.page || safePage,
+          totalPages: Math.min(data.total_pages || 1, 50),
+          totalResults: data.total_results || results.length,
+          results
+        };
       }
-
-      return {
-        page: data.page || safePage,
-        totalPages: Math.min(data.total_pages || 1, 50),
-        totalResults: data.total_results || results.length,
-        results
-      };
+    } catch (err) {
+      console.warn('TMDB popular people fetch failed:', err);
     }
-  } catch (err) {
-    console.warn('TMDB popular people fetch failed:', err);
   }
 
   let filteredFallback = [...FALLBACK_POPULAR_PEOPLE];
@@ -1340,28 +1386,30 @@ export async function searchPeople(
     return fetchPopularPeople(page, 'all');
   }
 
-  try {
-    const res = await fetch(`${TMDB_BASE_URL}/search/person?api_key=${apiKey}&query=${encodeURIComponent(queryStr)}&page=${safePage}`);
-    if (res.ok) {
-      const data = await res.json();
-      const results: PersonSummary[] = (data.results || []).map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        profilePath: p.profile_path ? `https://image.tmdb.org/t/p/h632${p.profile_path}` : null,
-        knownForDepartment: p.known_for_department || 'Acting',
-        popularity: p.popularity || 0,
-        knownFor: (p.known_for || []).map((k: any) => k.title || k.name || '')
-      }));
+  if (apiKey) {
+    try {
+      const res = await fetch(`${TMDB_BASE_URL}/search/person?api_key=${apiKey}&query=${encodeURIComponent(queryStr)}&page=${safePage}`);
+      if (res.ok) {
+        const data = await res.json();
+        const results: PersonSummary[] = (data.results || []).map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          profilePath: p.profile_path ? `https://image.tmdb.org/t/p/h632${p.profile_path}` : null,
+          knownForDepartment: p.known_for_department || 'Acting',
+          popularity: p.popularity || 0,
+          knownFor: (p.known_for || []).map((k: any) => k.title || k.name || '')
+        }));
 
-      return {
-        page: data.page || safePage,
-        totalPages: Math.min(data.total_pages || 1, 20),
-        totalResults: data.total_results || results.length,
-        results
-      };
+        return {
+          page: data.page || safePage,
+          totalPages: Math.min(data.total_pages || 1, 20),
+          totalResults: data.total_results || results.length,
+          results
+        };
+      }
+    } catch (err) {
+      console.warn('TMDB search people failed:', err);
     }
-  } catch (err) {
-    console.warn('TMDB search people failed:', err);
   }
 
   const q = queryStr.toLowerCase();

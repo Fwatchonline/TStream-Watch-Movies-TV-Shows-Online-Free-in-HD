@@ -1,6 +1,6 @@
 /**
  * Professional Google SEO, OpenGraph, Twitter/X cards, Dynamic Keywords,
- * and JSON-LD Schema.org Generator for TStream.online
+ * Canonical & Query Parameter Policy, and JSON-LD Schema.org Generator for TStream.online
  */
 
 import { createMediaSlug } from './slug.ts';
@@ -16,6 +16,12 @@ export interface SEOConfig {
   schema?: Record<string, any>;
 }
 
+export interface QueryCanonicalPolicy {
+  canonicalUrl: string;
+  noindex: boolean;
+  reason?: string;
+}
+
 export const PRIMARY_ORIGIN = 'https://tstream.online';
 export const DEFAULT_TITLE = 'T Stream — Watch Movies & TV Shows Online Free in HD';
 export const DEFAULT_DESC =
@@ -23,6 +29,36 @@ export const DEFAULT_DESC =
 export const DEFAULT_IMAGE = 'https://tstream.online/og-image.png';
 export const DEFAULT_KEYWORDS =
   't stream, watch movies online, watch series online, free streaming, hd movies, 4k streaming, english subtitles, croatian subtitles, cinema stream';
+
+const TRACKING_PARAMS = new Set([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_term',
+  'utm_content',
+  'utm_id',
+  'fbclid',
+  'gclid',
+  'yclid',
+  'mc_cid',
+  'mc_eid',
+  'ref',
+  'referrer',
+  'source',
+  'session',
+  'sid',
+  '_ga',
+  '_gl'
+]);
+
+const PAGINATED_INDEXABLE_PREFIXES = [
+  '/movies',
+  '/tv-shows',
+  '/trending',
+  '/top-rated',
+  '/tags/',
+  '/platform/'
+];
 
 /**
  * Normalizes, trims, and deduplicates keywords.
@@ -53,9 +89,6 @@ export function normalizeKeywords(keywords: string[] | string | undefined): stri
 
 /**
  * Generates dynamic, highly-relevant keywords from real TMDB media data.
- * Adheres strictly to TStream production specification:
- * - Movie: Title, Title (Year), Title movie, Title (Year) watch online, watch Title online, TMDB genres, Genre movies, T Stream (max 15)
- * - TV show / episode: Title, Title (Year), Title TV series, Title (Year) watch online, watch Title online, TMDB genres, Genre TV series, T Stream, season/episode phrases
  */
 export function generateMediaKeywords(
   media: any,
@@ -78,33 +111,27 @@ export function generateMediaKeywords(
 
   const keywords: string[] = [];
 
-  // 1. Original / displayed title
   keywords.push(rawTitle);
 
-  // 2. Title with year
   if (year && !isNaN(Number(year))) {
     keywords.push(`${rawTitle} (${year})`);
   }
 
-  // 3. Title + content type
   if (isMovie) {
     keywords.push(`${rawTitle} movie`);
   } else {
     keywords.push(`${rawTitle} TV series`);
   }
 
-  // 4. "watch online" phrases
   if (year && !isNaN(Number(year))) {
     keywords.push(`${rawTitle} (${year}) watch online`);
   }
   keywords.push(`watch ${rawTitle} online`);
 
-  // 5. TMDB genres
   for (const g of rawGenres) {
     keywords.push(g);
   }
 
-  // 6. Genre + content type combinations
   for (const g of rawGenres) {
     if (isMovie) {
       keywords.push(`${g} movie`);
@@ -113,10 +140,8 @@ export function generateMediaKeywords(
     }
   }
 
-  // 7. Brand
   keywords.push('T Stream');
 
-  // 8. TV episode specific keywords
   if (!isMovie && options.season) {
     keywords.push(`${rawTitle} season ${options.season}`);
     if (options.episode) {
@@ -161,35 +186,109 @@ export function getImageMimeType(url: string): string {
 }
 
 /**
- * Clean & normalize canonical URLs according to Google Search Central guidelines:
- * - Always HTTPS
- * - Canonical domain https://tstream.online
- * - Strip tracking & non-essential query parameters (?genreId, ?ref, ?utm_*, ?fbclid, etc.)
- * - Normalize trailing slashes (strip trailing slash unless root '/')
+ * Explicit Canonical & Query Parameter Policy:
+ * - Always HTTPS, non-WWW: https://tstream.online
+ * - Strips tracking/session query parameters (?utm_*, ?fbclid, ?ref, ?session)
+ * - Strips trailing slashes (except root '/')
+ * - Preserves ?page=N (when N > 1) on indexable paginated browse routes without filter bloat
+ * - Marks search pages and multi-filter/sort parameter URLs as noindex and canonicalizes filters to clean base path
  */
-export function buildCanonicalUrl(pathOrUrl?: string): string {
+export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy {
   try {
-    let cleanPath = '/';
+    let rawPath = '/';
+    let rawSearch = '';
+
     if (pathOrUrl) {
-      if (pathOrUrl.startsWith('http')) {
+      if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
         const parsed = new URL(pathOrUrl);
-        cleanPath = parsed.pathname;
+        rawPath = parsed.pathname;
+        rawSearch = parsed.search;
       } else {
-        cleanPath = pathOrUrl.split('?')[0].split('#')[0];
+        const noHash = pathOrUrl.split('#')[0];
+        const qIndex = noHash.indexOf('?');
+        if (qIndex !== -1) {
+          rawPath = noHash.slice(0, qIndex);
+          rawSearch = noHash.slice(qIndex);
+        } else {
+          rawPath = noHash;
+        }
       }
     } else if (typeof window !== 'undefined') {
-      cleanPath = window.location.pathname;
+      rawPath = window.location.pathname;
+      rawSearch = window.location.search;
     }
 
-    if (!cleanPath.startsWith('/')) cleanPath = '/' + cleanPath;
-    if (cleanPath.length > 1 && cleanPath.endsWith('/')) {
-      cleanPath = cleanPath.slice(0, -1);
+    if (!rawPath.startsWith('/')) rawPath = '/' + rawPath;
+    if (rawPath.length > 1 && rawPath.endsWith('/')) {
+      rawPath = rawPath.slice(0, -1);
     }
 
-    return `${PRIMARY_ORIGIN}${cleanPath}`;
+    const params = new URLSearchParams(rawSearch);
+    // Strip tracking/session parameters
+    for (const key of Array.from(params.keys())) {
+      const lower = key.toLowerCase();
+      if (TRACKING_PARAMS.has(lower) || lower.startsWith('utm_')) {
+        params.delete(key);
+      }
+    }
+
+    // Search pages: always noindex
+    if (rawPath === '/search' || params.has('q')) {
+      return {
+        canonicalUrl: `${PRIMARY_ORIGIN}/search`,
+        noindex: true,
+        reason: 'search_page'
+      };
+    }
+
+    // Check remaining content-altering query parameters
+    const pageRaw = params.get('page');
+    const pageNum = pageRaw ? parseInt(pageRaw, 10) : 1;
+    const hasFilterParams =
+      params.has('sortBy') ||
+      params.has('year') ||
+      params.has('minRating') ||
+      params.has('country') ||
+      params.has('genreId') ||
+      params.has('filter');
+
+    if (hasFilterParams) {
+      // Filtered/sorted combinations must not create unlimited indexable URLs
+      return {
+        canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
+        noindex: true,
+        reason: 'filtered_catalog_view'
+      };
+    }
+
+    // Distinct paginated pages (?page=2, ?page=3, ...)
+    const isPaginatedIndexable = PAGINATED_INDEXABLE_PREFIXES.some(
+      p => rawPath === p || (p.endsWith('/') && rawPath.startsWith(p))
+    );
+    if (isPaginatedIndexable && !isNaN(pageNum) && pageNum > 1) {
+      return {
+        canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}?page=${pageNum}`,
+        noindex: false
+      };
+    }
+
+    return {
+      canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
+      noindex: false
+    };
   } catch {
-    return PRIMARY_ORIGIN;
+    return {
+      canonicalUrl: `${PRIMARY_ORIGIN}/`,
+      noindex: false
+    };
   }
+}
+
+/**
+ * Clean & normalize canonical URLs according to Google Search Central guidelines.
+ */
+export function buildCanonicalUrl(pathOrUrl?: string): string {
+  return resolveRouteSeoPolicy(pathOrUrl).canonicalUrl;
 }
 
 export interface MediaMetadataResult {
@@ -211,7 +310,14 @@ export interface MediaMetadataResult {
  */
 export function buildMediaMetadata(
   media: any,
-  options: { season?: number; episode?: number; episodeName?: string; isWatching?: boolean } = {}
+  options: {
+    season?: number;
+    episode?: number;
+    episodeName?: string;
+    episodeOverview?: string;
+    episodeAirDate?: string;
+    isWatching?: boolean;
+  } = {}
 ): MediaMetadataResult {
   const isMovie = media?.mediaType === 'movie';
   const rawTitle = (media?.title || media?.name || 'Untitled').trim();
@@ -222,17 +328,17 @@ export function buildMediaMetadata(
     : '';
   const yearStr = year && !isNaN(Number(year)) ? ` (${year})` : '';
 
-  // Exact Title Formats:
-  // - Movie detail: "The Amazing Spider-Man 2 (2014) — Watch Free HD Movie — T Stream"
-  // - Movie watch:  "Watch The Amazing Spider-Man 2 (2014) Full Movie Free Online in HD — T Stream"
-  // - TV detail:     "Breaking Bad (2008) — Watch Free HD TV Show — T Stream"
-  // - TV episode:    "Watch Breaking Bad Season 1 Episode 1 Free HD — T Stream"
+  const isDistinctEpisode = !isMovie && Boolean(options.isWatching && options.season && options.episode);
+
   let title = '';
   if (options.isWatching) {
     if (isMovie) {
       title = `Watch ${rawTitle}${yearStr} Full Movie Free Online in HD — T Stream`;
     } else {
-      title = `Watch ${rawTitle} Season ${options.season || 1} Episode ${options.episode || 1} Free HD — T Stream`;
+      const epSuffix = options.episodeName && !/^episode\s+\d+$/i.test(options.episodeName.trim())
+        ? ` "${options.episodeName.trim()}"`
+        : '';
+      title = `Watch ${rawTitle} Season ${options.season || 1} Episode ${options.episode || 1}${epSuffix} Free HD — T Stream`;
     }
   } else {
     if (isMovie) {
@@ -242,43 +348,52 @@ export function buildMediaMetadata(
     }
   }
 
-  // Description: word-aware truncation or fallback
   let description = '';
-  if (media?.overview && media.overview.trim()) {
+  if (isDistinctEpisode && options.episodeOverview && options.episodeOverview.trim()) {
+    description = truncateAtWord(options.episodeOverview, 160);
+  } else if (media?.overview && media.overview.trim()) {
     description = truncateAtWord(media.overview, 160);
   } else {
-    if (options.isWatching && !isMovie && options.season && options.episode) {
+    if (isDistinctEpisode) {
       description = `Watch ${rawTitle} Season ${options.season} Episode ${options.episode} online in HD with subtitles on T Stream.`;
     } else {
       description = `Stream ${rawTitle}${yearStr} in Full HD 1080p and 4K on T Stream with multi-language subtitles and fast streaming servers.`;
     }
   }
 
-  // Keywords
   const keywords = generateMediaKeywords(media, options);
 
   // Canonical URL Strategy:
-  // - Movie: Single authoritative canonical URL /movie/:slug
-  // - TV Series: Single authoritative canonical URL /tv/:slug
-  // - TV Episode: Distinct playback URL /watch/tv/:slug/:season/:episode
-  // Playback movie URLs (/watch/movie/:slug) point to /movie/:slug as canonical
+  // - Movie detail & Movie watch: https://tstream.online/movie/{slug}
+  // - TV series detail: https://tstream.online/tv/{slug}
+  // - TV episode playback: https://tstream.online/watch/tv/{slug}/{season}/{episode}
   const slug = createMediaSlug(rawTitle, media?.id || media?.tmdbId || 0);
-  const isDistinctEpisode = !isMovie && Boolean(options.isWatching && options.season && options.episode);
-
   const canonicalUrl = isMovie
     ? `${PRIMARY_ORIGIN}/movie/${slug}`
     : isDistinctEpisode
     ? `${PRIMARY_ORIGIN}/watch/tv/${slug}/${options.season}/${options.episode}`
     : `${PRIMARY_ORIGIN}/tv/${slug}`;
 
-  // Image & MIME
   const rawImage = media?.backdropPath || media?.posterPath || DEFAULT_IMAGE;
   const image = rawImage.startsWith('http') ? rawImage : `${PRIMARY_ORIGIN}${rawImage}`;
   const isDefaultOgImage = image === DEFAULT_IMAGE || image.endsWith('/og-image.png');
   const mimeType = getImageMimeType(image);
 
-  // Schema.org JSON-LD (Strictly authentic data - no fabricated reviews or votes)
+  // Schema.org JSON-LD (Strictly authentic data - NEVER fabricate ratings or review counts)
+  const hasGenuineRating = Boolean(
+    media?.voteAverage &&
+      media.voteAverage > 0 &&
+      media?.voteCount &&
+      media.voteCount > 0
+  );
+
   const schemaType = isMovie ? 'Movie' : isDistinctEpisode ? 'TVEpisode' : 'TVSeries';
+  const datePublished = isDistinctEpisode && options.episodeAirDate
+    ? options.episodeAirDate
+    : year && !isNaN(Number(year))
+    ? String(year)
+    : undefined;
+
   const schema: Record<string, any> = {
     '@context': 'https://schema.org',
     '@type': schemaType,
@@ -286,15 +401,15 @@ export function buildMediaMetadata(
     'description': description,
     'url': canonicalUrl,
     'image': image,
-    ...(year && !isNaN(Number(year)) ? { 'datePublished': String(year) } : {}),
-    ...(media?.voteAverage && media.voteAverage > 0
+    ...(datePublished ? { 'datePublished': datePublished } : {}),
+    ...(hasGenuineRating
       ? {
           'aggregateRating': {
             '@type': 'AggregateRating',
             'ratingValue': Number(media.voteAverage.toFixed(1)),
             'bestRating': '10',
             'worstRating': '1',
-            ...(media.voteCount && media.voteCount > 0 ? { 'ratingCount': media.voteCount } : {})
+            'ratingCount': media.voteCount
           }
         }
       : {}),
@@ -352,7 +467,10 @@ export function updateSEO(config: SEOConfig = {}) {
       ? config.image
       : `${PRIMARY_ORIGIN}${config.image}`
     : DEFAULT_IMAGE;
-  const canonicalUrl = config.url ? buildCanonicalUrl(config.url) : buildCanonicalUrl();
+
+  const policy = config.url ? resolveRouteSeoPolicy(config.url) : resolveRouteSeoPolicy();
+  const canonicalUrl = policy.canonicalUrl;
+  const effectiveNoindex = Boolean(config.noindex || policy.noindex);
   const isDefaultOgImage = image === DEFAULT_IMAGE || image.endsWith('/og-image.png') || image === '/og-image.png';
   const mimeType = getImageMimeType(image);
 
@@ -367,7 +485,7 @@ export function updateSEO(config: SEOConfig = {}) {
   updateMetaTag('name', 'keywords', keywords);
 
   // 4. Robots Tag (Explicit index or noindex)
-  if (config.noindex) {
+  if (effectiveNoindex) {
     updateMetaTag('name', 'robots', 'noindex, nofollow');
   } else {
     updateMetaTag(
@@ -377,11 +495,18 @@ export function updateSEO(config: SEOConfig = {}) {
     );
   }
 
-  // 5. Canonical Link
-  let canonicalEl = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+  // 5. Canonical Link (single authoritative declaration)
+  const existingCanonicals = document.querySelectorAll('link[rel="canonical"]');
+  if (existingCanonicals.length > 1) {
+    existingCanonicals.forEach((el, idx) => {
+      if (idx > 0) el.remove();
+    });
+  }
+  let canonicalEl = existingCanonicals[0] as HTMLLinkElement | undefined;
   if (!canonicalEl) {
     canonicalEl = document.createElement('link');
     canonicalEl.setAttribute('rel', 'canonical');
+    canonicalEl.id = 'tstream-canonical';
     document.head.appendChild(canonicalEl);
   }
   canonicalEl.setAttribute('href', canonicalUrl);
@@ -397,7 +522,6 @@ export function updateSEO(config: SEOConfig = {}) {
   updateMetaTag('property', 'og:type', config.type || 'website');
   updateMetaTag('property', 'og:site_name', 'T Stream');
 
-  // Handle OG image dimensions: Keep 1200x630 ONLY on default home banner; REMOVE for unknown TMDB dimensions
   if (isDefaultOgImage) {
     updateMetaTag('property', 'og:image:width', '1200');
     updateMetaTag('property', 'og:image:height', '630');
@@ -477,7 +601,14 @@ export function updateSEO(config: SEOConfig = {}) {
  */
 export function updateMediaSEO(
   media: any,
-  options: { season?: number; episode?: number; episodeName?: string; isWatching?: boolean } = {}
+  options: {
+    season?: number;
+    episode?: number;
+    episodeName?: string;
+    episodeOverview?: string;
+    episodeAirDate?: string;
+    isWatching?: boolean;
+  } = {}
 ) {
   if (!media) return;
   const metadata = buildMediaMetadata(media, options);
@@ -494,11 +625,11 @@ export function updateMediaSEO(
 }
 
 function updateMetaTag(attrName: 'name' | 'property', attrVal: string, content: string) {
-  let tag = document.querySelector(`meta[${attrName}="${attrVal}"]`) as HTMLMetaElement | null;
-  if (!tag) {
-    tag = document.createElement('meta');
-    tag.setAttribute(attrName, attrVal);
-    document.head.appendChild(tag);
+  let el = document.querySelector(`meta[${attrName}="${attrVal}"]`);
+  if (!el) {
+    el = document.createElement('meta');
+    el.setAttribute(attrName, attrVal);
+    document.head.appendChild(el);
   }
-  tag.setAttribute('content', content);
+  el.setAttribute('content', content);
 }

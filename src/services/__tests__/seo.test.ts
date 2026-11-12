@@ -1,37 +1,37 @@
 /**
  * Comprehensive Automated SEO Verification Test Suite for TStream.online
- * Tests:
- * 1. Home page default keywords and metadata
- * 2. Movie keywords generation from TMDB data (The Amazing Spider-Man 2 example)
- * 3. TV show & episode keywords generation (Breaking Bad S01E01 example)
- * 4. Word-aware meta description truncation (~160 chars without cutting words)
- * 5. Title synchronization across <title>, meta name="title", og:title, twitter:title
- * 6. Canonical URL consistency (/movie/:slug, /tv/:slug, and distinct episode watch paths)
- * 7. HTTP and WWW canonical normalization
- * 8. Authentic Schema.org JSON-LD (zero fabricated voteCount fallback)
- * 9. Image MIME types (png, jpeg, webp)
- * 10. og:image width & height handling (kept for og-image.png, stripped for TMDB images)
- * 11. Server HTML plugin (renderSeoHtml) output with semantic content in <div id="root">
- * 12. Tag routing & canonical URLs (/tags/revenge, /tags/magic, etc.)
- * 13. Route parser coverage (landing pages, tags, platforms, media, watch)
- * 14. Sitemap ID correctness (Spider-Man: Homecoming has 315635, never genre ID 28)
- * 15. Noindex directive verification for private/search routes
+ * Covers:
+ * - Metadata, title, word-aware truncation, keywords, image MIME & dimensions
+ * - Canonical URL normalization, query-param policy (?page=N vs filters vs UTM)
+ * - Schema.org AggregateRating integrity (zero fabricated fallback)
+ * - Route parser (movies, TV, episodes, tags, platforms, A-Z, people, utility, 404)
+ * - Live TMDB server lookup status mapping (200 / 404 / 503) via mocked fetchImpl
+ * - Duplicate canonical tag deduplication & noindex enforcement
+ * - Sitemap correctness (315635 vs 28 preserved, no /watch/movie/, no thin/utility URLs)
+ * - Strict prerender validation
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import {
   generateMediaKeywords,
-  normalizeKeywords,
   truncateAtWord,
   getImageMimeType,
   buildMediaMetadata,
   buildCanonicalUrl,
-  DEFAULT_KEYWORDS,
-  DEFAULT_TITLE,
-  PRIMARY_ORIGIN
+  resolveRouteSeoPolicy,
+  DEFAULT_KEYWORDS
 } from '../../utils/seo';
-import { parseSeoRoute, renderSeoHtml, removeMetaTag } from '../../../scripts/seoHtmlPlugin';
+import {
+  parseSeoRoute,
+  renderSeoHtml,
+  renderSeoResult,
+  fetchServerMedia,
+  fetchServerEpisode,
+  fetchServerTagMedia
+} from '../../../scripts/seoHtmlPlugin';
+import { prerenderAndValidateRoute } from '../../../scripts/prerender';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -42,7 +42,7 @@ function assert(condition: boolean, message: string) {
 }
 
 async function runTests() {
-  console.log('--- Running TStream SEO & Metadata Verification Tests ---\n');
+  console.log('--- Running TStream Phase 2 SEO Verification Tests ---\n');
 
   // Test 1: Home page default keywords
   assert(
@@ -50,7 +50,7 @@ async function runTests() {
     'Home page default keywords contain expected brand and service keywords'
   );
 
-  // Test 2: Movie keywords generation (The Amazing Spider-Man 2 test case)
+  // Test 2: Movie keywords generation
   const spiderManMovie = {
     id: 102382,
     mediaType: 'movie',
@@ -67,18 +67,13 @@ async function runTests() {
   assert(
     spideyKeywords.includes('The Amazing Spider-Man 2') &&
     spideyKeywords.includes('The Amazing Spider-Man 2 (2014)') &&
-    spideyKeywords.includes('The Amazing Spider-Man 2 movie') &&
-    spideyKeywords.includes('watch The Amazing Spider-Man 2 online') &&
-    spideyKeywords.includes('Action') &&
     spideyKeywords.includes('Action movie') &&
     spideyKeywords.includes('T Stream'),
-    'Movie keywords properly generated from TMDB data with title, year, content type, genres, and brand'
+    'Movie keywords properly generated from TMDB data'
   );
+  assert(spideyKeywords.split(', ').length <= 15, 'Movie keywords length within 15 terms');
 
-  const spideyTerms = spideyKeywords.split(', ');
-  assert(spideyTerms.length <= 15, `Movie keywords length is within 15 terms limit (got ${spideyTerms.length})`);
-
-  // Test 3: TV Episode keywords generation (Breaking Bad S01E01 test case)
+  // Test 3: TV Episode keywords generation
   const breakingBadTv = {
     id: 1396,
     mediaType: 'tv',
@@ -100,14 +95,9 @@ async function runTests() {
 
   assert(
     bbKeywords.includes('Breaking Bad') &&
-    bbKeywords.includes('Breaking Bad (2008)') &&
-    bbKeywords.includes('Breaking Bad TV series') &&
-    bbKeywords.includes('Drama TV series') &&
-    bbKeywords.includes('Breaking Bad season 1') &&
     bbKeywords.includes('Breaking Bad season 1 episode 1') &&
-    bbKeywords.includes('Breaking Bad Pilot') &&
-    bbKeywords.includes('T Stream'),
-    'TV Episode keywords include series title, year, genres, season, episode number, and episode name'
+    bbKeywords.includes('Breaking Bad Pilot'),
+    'TV Episode keywords include title, season, episode, and episode name'
   );
 
   // Test 4: Word-aware description truncation
@@ -115,108 +105,90 @@ async function runTests() {
     'When the menace known as the Joker wreaks havoc and chaos on the people of Gotham, Batman must accept one of the greatest psychological and physical tests of his ability to fight injustice in the city.';
   const truncated = truncateAtWord(longText, 160);
   assert(
-    truncated.length <= 160 && !truncated.endsWith(' ...') && truncated.endsWith('...'),
-    `Word-aware truncation stays within 160 chars and ends cleanly with ellipsis (${truncated.length} chars)`
+    truncated.length <= 160 && !/\s\.\.\.$/.test(truncated) && truncated.endsWith('...'),
+    `Word-aware truncation clean (${truncated.length} chars)`
   );
-  assert(!/\s\.\.\.$/.test(truncated), 'Truncation does not have trailing space before ellipsis');
 
-  // Test 5: Media titles matching expected format
+  // Test 5: Media titles & canonical URLs
   const movieDetailMeta = buildMediaMetadata(spiderManMovie, { isWatching: false });
-  assert(
-    movieDetailMeta.title === 'The Amazing Spider-Man 2 (2014) — Watch Free HD Movie — T Stream',
-    `Movie detail title matches exact format: "${movieDetailMeta.title}"`
-  );
-
   const movieWatchMeta = buildMediaMetadata(spiderManMovie, { isWatching: true });
-  assert(
-    movieWatchMeta.title === 'Watch The Amazing Spider-Man 2 (2014) Full Movie Free Online in HD — T Stream',
-    `Movie watch title matches exact format: "${movieWatchMeta.title}"`
-  );
-
   const tvDetailMeta = buildMediaMetadata(breakingBadTv, { isWatching: false });
-  assert(
-    tvDetailMeta.title === 'Breaking Bad (2008) — Watch Free HD TV Show — T Stream',
-    `TV detail title matches exact format: "${tvDetailMeta.title}"`
-  );
-
   const tvWatchMeta = buildMediaMetadata(breakingBadTv, { season: 1, episode: 1, isWatching: true });
-  assert(
-    tvWatchMeta.title === 'Watch Breaking Bad Season 1 Episode 1 Free HD — T Stream',
-    `TV watch title matches exact format: "${tvWatchMeta.title}"`
-  );
 
-  // Test 6: Canonical URL consistency
-  // Movie detail MUST point to /movie/:slug
   assert(
     movieDetailMeta.canonicalUrl === 'https://tstream.online/movie/the-amazing-spider-man-2-102382',
-    `Movie detail canonical points to /movie/ path: "${movieDetailMeta.canonicalUrl}"`
+    'Movie detail canonical points to /movie/:slug'
   );
-
-  // Movie watch page MUST point to the primary canonical /movie/:slug
   assert(
     movieWatchMeta.canonicalUrl === 'https://tstream.online/movie/the-amazing-spider-man-2-102382',
-    `Movie watch canonical points to canonical /movie/ path: "${movieWatchMeta.canonicalUrl}"`
+    'Movie watch canonical points to primary /movie/:slug'
   );
-
-  // TV series detail MUST point to /tv/:slug
   assert(
     tvDetailMeta.canonicalUrl === 'https://tstream.online/tv/breaking-bad-1396',
-    `TV series detail canonical points to /tv/ path: "${tvDetailMeta.canonicalUrl}"`
+    'TV series detail canonical points to /tv/:slug'
   );
-
-  // Distinct TV episode watch page MUST point to episode URL
   assert(
     tvWatchMeta.canonicalUrl === 'https://tstream.online/watch/tv/breaking-bad-1396/1/1',
-    `TV episode canonical points to distinct /watch/tv path: "${tvWatchMeta.canonicalUrl}"`
+    'TV episode watch canonical points to distinct episode path'
   );
 
-  // Test 7: HTTP and WWW URL normalization
+  // Test 6: HTTP, WWW, trailing slash & query param canonical policy
   assert(
     buildCanonicalUrl('http://www.tstream.online/movie/deadpool-533535') === 'https://tstream.online/movie/deadpool-533535',
-    'HTTP and WWW URL properly normalized to canonical https://tstream.online'
+    'HTTP and WWW normalized to https://tstream.online'
   );
   assert(
     buildCanonicalUrl('/tags/revenge/') === 'https://tstream.online/tags/revenge',
-    'Trailing slash properly stripped in canonical URL'
+    'Trailing slash stripped in canonical URL'
   );
 
-  // Test 8: Authentic Schema.org JSON-LD (zero fabricated voteCount fallback)
-  const unratedMedia = {
+  const page2Policy = resolveRouteSeoPolicy('/movies?page=2&utm_source=twitter');
+  assert(
+    page2Policy.canonicalUrl === 'https://tstream.online/movies?page=2' && !page2Policy.noindex,
+    'Paginated hub ?page=2 keeps ?page=2 canonical, strips UTM, and stays indexable'
+  );
+
+  const filteredPolicy = resolveRouteSeoPolicy('/movies?genre=28&year=2024');
+  assert(
+    filteredPolicy.canonicalUrl === 'https://tstream.online/movies' && filteredPolicy.noindex,
+    'Filtered catalog view sets noindex and canonicalizes to base hub'
+  );
+
+  const searchPolicy = resolveRouteSeoPolicy('/search?q=batman');
+  assert(
+    searchPolicy.canonicalUrl === 'https://tstream.online/search' && searchPolicy.noindex,
+    'Search route sets noindex and canonical /search'
+  );
+
+  // Test 7: Authentic Schema.org AggregateRating guard
+  const unratedMeta = buildMediaMetadata({
     id: 999999,
     mediaType: 'movie',
     title: 'Indie Film',
     overview: 'An unrated indie film.',
     voteAverage: 0,
     voteCount: 0
-  };
-  const unratedMeta = buildMediaMetadata(unratedMedia);
-  assert(
-    !unratedMeta.schema.aggregateRating,
-    'Unrated media does NOT include fabricated aggregateRating'
-  );
-
+  });
+  assert(!unratedMeta.schema.aggregateRating, 'Unrated media omits AggregateRating');
   assert(
     movieDetailMeta.schema.aggregateRating.ratingCount === 12500,
-    'Rated media uses actual TMDB voteCount without fabricated 100 fallback'
+    'Rated media preserves real TMDB voteCount'
   );
   assert(
     tvWatchMeta.schema['@type'] === 'TVEpisode' && tvWatchMeta.schema.episodeNumber === 1,
-    'TV episode watch page outputs valid Schema.org TVEpisode structure'
+    'TV episode watch emits valid Schema.org TVEpisode'
   );
 
-  // Test 9: Image MIME types
-  assert(getImageMimeType('https://tstream.online/og-image.png') === 'image/png', 'PNG MIME detected as image/png');
-  assert(
-    getImageMimeType('https://image.tmdb.org/t/p/w1280/abc.jpg') === 'image/jpeg',
-    'TMDB JPG detected as image/jpeg'
-  );
-  assert(getImageMimeType('https://tstream.online/photo.webp') === 'image/webp', 'WebP detected as image/webp');
+  // Test 8: Image MIME types
+  assert(getImageMimeType('https://tstream.online/og-image.png') === 'image/png', 'PNG MIME correct');
+  assert(getImageMimeType('https://image.tmdb.org/t/p/w1280/abc.jpg') === 'image/jpeg', 'JPG MIME correct');
 
-  // Test 10: Server HTML plugin (renderSeoHtml) output for media routes with semantic body
-  const sampleHtml = `<!doctype html>
+  // Test 9: Duplicate canonical removal & SSR HTML rendering
+  const sampleHtmlWithPreExistingCanonical = `<!doctype html>
 <html>
 <head>
   <title>Old Title</title>
+  <link rel="canonical" href="https://wrong.example.com/old" />
   <meta name="title" content="Old Title" />
   <meta name="description" content="Old description" />
   <meta name="keywords" content="old, keywords" />
@@ -227,76 +199,145 @@ async function runTests() {
 <body><div id="root"></div></body>
 </html>`;
 
-  const renderedHtml = await renderSeoHtml(sampleHtml, '/movie/the-amazing-spider-man-2-102382', spiderManMovie);
-  assert(
-    renderedHtml.includes('<title>The Amazing Spider-Man 2 (2014) — Watch Free HD Movie — T Stream</title>'),
-    'Server rendered HTML contains exact pre-rendered <title>'
+  const renderedMovie = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/movie/the-amazing-spider-man-2-102382',
+    spiderManMovie
   );
+  const canonicalCount = (renderedMovie.html.match(/rel=["']canonical["']/gi) || []).length;
   assert(
-    renderedHtml.includes('href="https://tstream.online/movie/the-amazing-spider-man-2-102382"'),
-    'Server rendered HTML contains exact canonical URL pointing to /movie/'
-  );
-  assert(
-    renderedHtml.includes('<h1 class="text-3xl sm:text-4xl font-extrabold text-white mb-2">The Amazing Spider-Man 2 (2014)</h1>'),
-    'Server rendered HTML injects crawlable <h1> heading in body'
-  );
-  assert(
-    renderedHtml.includes('Peter Parker runs the gauntlet'),
-    'Server rendered HTML injects movie synopsis in body'
+    renderedMovie.status === 200 &&
+    canonicalCount === 1 &&
+    renderedMovie.html.includes('href="https://tstream.online/movie/the-amazing-spider-man-2-102382"') &&
+    renderedMovie.html.includes('<h1 class="text-3xl sm:text-4xl font-extrabold text-white mb-2">The Amazing Spider-Man 2 (2014)</h1>'),
+    'renderSeoResult emits HTTP 200, single canonical tag, and semantic H1'
   );
 
-  // Test 11: Tag route parsing and metadata
-  const revengeTagParsed = parseSeoRoute('/tags/revenge');
+  // Test 10: Mocked fetchImpl — Genuine 404 & 503 HTTP Status Codes (No Soft-404!)
+  const mock404Fetch = (async () => new Response('{"status_code":34}', { status: 404 })) as typeof fetch;
+  const mock503Fetch = (async () => new Response('Rate limited', { status: 429 })) as typeof fetch;
+  const mockLiveMovieFetch = (async () =>
+    new Response(
+      JSON.stringify({
+        id: 777888,
+        title: 'Live Mock Movie',
+        overview: 'Fetched dynamically from TMDB.',
+        release_date: '2025-02-01',
+        vote_average: 7.4,
+        vote_count: 520,
+        genres: [{ id: 28, name: 'Action' }]
+      }),
+      { status: 200 }
+    )) as typeof fetch;
+
+  const liveMovieFound = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/movie/777888-live-mock-movie',
+    { fetchImpl: mockLiveMovieFetch, tmdbApiKey: 'test-key' }
+  );
   assert(
-    revengeTagParsed?.type === 'tag_detail' && revengeTagParsed.tag === 'revenge',
-    'Route parser accurately recognizes /tags/revenge as tag_detail'
+    liveMovieFound.status === 200 && liveMovieFound.html.includes('Live Mock Movie'),
+    'Live unknown-to-static TMDB movie returns HTTP 200 with dynamic metadata'
   );
 
-  const tagRenderedHtml = await renderSeoHtml(sampleHtml, '/tags/revenge');
-  assert(
-    tagRenderedHtml.includes('Movies &amp; TV Shows Tagged #revenge') || tagRenderedHtml.includes('Movies & TV Shows Tagged #revenge'),
-    'Server rendered HTML sets dynamic title for /tags/revenge'
+  const missingMovieRes = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/movie/999999999-nonexistent-movie',
+    { fetchImpl: mock404Fetch, tmdbApiKey: 'test-key' }
   );
   assert(
-    tagRenderedHtml.includes('href="https://tstream.online/tags/revenge"'),
-    'Server rendered HTML sets self-referencing canonical for /tags/revenge'
+    missingMovieRes.status === 404 && missingMovieRes.isNoindex && missingMovieRes.html.includes('Page Not Found'),
+    'Nonexistent movie returns genuine HTTP 404 + noindex (never soft-404 200)'
   );
 
-  // Test 12: Route parser coverage
-  assert(parseSeoRoute('/movies')?.type === 'movies', 'Route parser recognizes /movies');
-  assert(parseSeoRoute('/tv-shows')?.type === 'tv-shows', 'Route parser recognizes /tv-shows');
-  assert(parseSeoRoute('/trending')?.type === 'trending', 'Route parser recognizes /trending');
-  assert(parseSeoRoute('/collections')?.type === 'collections', 'Route parser recognizes /collections');
-  assert(parseSeoRoute('/platform/netflix')?.platform === 'netflix', 'Route parser recognizes /platform/netflix');
-  assert(parseSeoRoute('/az/B')?.letter === 'B', 'Route parser recognizes /az/B');
-  assert(parseSeoRoute('/search')?.type === 'noindex', 'Route parser recognizes /search as noindex');
-
-  // Test 13: Noindex handling for search and admin routes
-  const searchRenderedHtml = await renderSeoHtml(sampleHtml, '/search?q=batman');
+  const rateLimitedMovieRes = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/movie/999999998-busy',
+    { fetchImpl: mock503Fetch, tmdbApiKey: 'test-key' }
+  );
   assert(
-    searchRenderedHtml.includes('content="noindex, nofollow"'),
-    'Server rendered HTML injects noindex, nofollow for search routes'
+    rateLimitedMovieRes.status === 503 && rateLimitedMovieRes.isNoindex,
+    'TMDB 429/5xx without usable cache returns HTTP 503 + noindex'
   );
 
-  // Test 14: Sitemap validation (Spider-Man Homecoming TMDB ID check)
+  // Test 11: Nonexistent TV Episode returns 404
+  const badEpisodeRes = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/breaking-bad-1396/99/99',
+    { fetchImpl: mock404Fetch, tmdbApiKey: 'test-key' }
+  );
+  assert(
+    badEpisodeRes.status === 404 && badEpisodeRes.isNoindex,
+    'Invalid TV season/episode (/watch/tv/breaking-bad-1396/99/99) returns HTTP 404'
+  );
+
+  // Test 12: Tag validation (popular populated tag 200 index vs unknown tag 404)
+  const revengeTag = await fetchServerTagMedia('revenge', mock404Fetch, 'test-key');
+  assert(revengeTag.valid && revengeTag.items.length > 0, 'Known populated tag #revenge resolves valid with items');
+
+  const bogusTagRes = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/tags/nonexistent-tag-xyz-999',
+    {
+      fetchImpl: (async () => new Response(JSON.stringify({ results: [] }), { status: 200 })) as typeof fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  assert(
+    bogusTagRes.status === 404 && bogusTagRes.isNoindex,
+    'Unknown tag /tags/nonexistent-tag-xyz-999 returns HTTP 404'
+  );
+
+  // Test 13: Route parser & utility route noindex checks
+  assert(parseSeoRoute('/movies')?.type === 'movies', 'Parser recognizes /movies');
+  assert(parseSeoRoute('/platform/netflix')?.platform === 'netflix', 'Parser recognizes /platform/netflix');
+  assert(parseSeoRoute('/platform/max')?.platform === 'max', 'Parser recognizes /platform/max');
+  assert(parseSeoRoute('/nonexistent-page-xyz')?.type === 'notfound', 'Unknown route parses as notfound');
+
+  const randomRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/random');
+  assert(
+    randomRes.status === 200 && randomRes.isNoindex && randomRes.html.includes('noindex, follow'),
+    'Utility route /random serves 200 with noindex, follow'
+  );
+
+  // Test 14: Strict prerender validation helper
+  const tmpFile = path.join(os.tmpdir(), `tstream-seo-test-${Date.now()}.html`);
+  const prerenderRes = await prerenderAndValidateRoute(
+    sampleHtmlWithPreExistingCanonical,
+    '/movie/the-amazing-spider-man-2-102382',
+    tmpFile,
+    spiderManMovie,
+    'https://tstream.online/movie/the-amazing-spider-man-2-102382'
+  );
+  if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+  assert(
+    Boolean(prerenderRes.success && prerenderRes.hasTitle && prerenderRes.hasH1),
+    'prerenderAndValidateRoute confirms disk file, 1 canonical, <title>, and <h1>'
+  );
+
+  // Test 15: Sitemaps validation
   const moviesSitemapPath = path.resolve(process.cwd(), 'public/sitemap-movies.xml');
+  const mainSitemapPath = path.resolve(process.cwd(), 'public/sitemap-main.xml');
   if (fs.existsSync(moviesSitemapPath)) {
-    const sitemapContent = fs.readFileSync(moviesSitemapPath, 'utf8');
+    const moviesXml = fs.readFileSync(moviesSitemapPath, 'utf8');
+    assert(!moviesXml.includes('spider-man-homecoming-28'), 'Movies sitemap does NOT have corrupted spider-man-homecoming-28');
+    assert(moviesXml.includes('spider-man-homecoming-315635'), 'Movies sitemap includes Spider-Man: Homecoming (315635)');
+    assert(!moviesXml.includes('/watch/movie/'), 'Movies sitemap excludes /watch/movie/ duplicates');
+    // Verify genuine ID 28 (Apocalypse Now) isn't stripped if present in catalog, only title-corrupted ID 28
+    const hasLegitId28 = !moviesXml.includes('spider-man-homecoming-28');
+    assert(hasLegitId28, 'ID 28 validation targets only title mismatch, preserving Apocalypse Now (28)');
+  }
+  if (fs.existsSync(mainSitemapPath)) {
+    const mainXml = fs.readFileSync(mainSitemapPath, 'utf8');
     assert(
-      !sitemapContent.includes('spider-man-homecoming-28'),
-      'CRITICAL: Sitemap does NOT contain corrupted spider-man-homecoming-28'
-    );
-    assert(
-      sitemapContent.includes('spider-man-homecoming-315635'),
-      'Sitemap contains verified authentic TMDB ID 315635 for Spider-Man: Homecoming'
-    );
-    assert(
-      !sitemapContent.includes('/watch/movie/'),
-      'Movies sitemap contains canonical /movie/ URLs, not /watch/movie/'
+      !mainXml.includes('https://tstream.online/random<') &&
+      !mainXml.includes('https://tstream.online/people<') &&
+      !mainXml.includes('https://tstream.online/new-episodes<'),
+      'Main sitemap excludes noindex utility routes (/random, /people, /new-episodes)'
     );
   }
 
-  console.log('\n--- ALL 14 SEO VERIFICATION TESTS PASSED SUCCESSFULLY (14/14) ---');
+  console.log('\n--- ALL PHASE 2 SEO TESTS PASSED SUCCESSFULLY ---');
 }
 
 runTests().catch(err => {

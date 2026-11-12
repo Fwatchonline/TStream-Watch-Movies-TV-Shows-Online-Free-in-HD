@@ -6,6 +6,7 @@ import { MediaCard } from '../components/MediaCard';
 import { FilterBar } from '../components/FilterBar';
 import { Pagination } from '../components/Pagination';
 import { PLATFORMS_LIST, getPlatformById } from '../services/platformData';
+import { updateSEO } from '../utils/seo';
 
 interface CatalogPageProps {
   category: 'movies' | 'tv-shows' | 'trending' | 'search' | 'platform' | 'az' | 'top-rated';
@@ -113,6 +114,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     const queryStr = params.toString();
     const newUrl = queryStr ? `${window.location.pathname}?${queryStr}` : window.location.pathname;
     window.history.replaceState({}, '', newUrl);
+    return newUrl;
   }, []);
 
   // Sync initialGenreId prop if passed
@@ -152,8 +154,40 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
 
   useEffect(() => {
     loadData();
-    updateUrl(filters);
-  }, [loadData, updateUrl, filters]);
+    const updatedPath = updateUrl(filters);
+    const pageSuffix = filters.page && filters.page > 1 ? ` — Page ${filters.page}` : '';
+    if (category === 'search') {
+      updateSEO({
+        title: filters.query ? `Search: "${filters.query}"` : 'Search Movies & TV Shows',
+        noindex: true,
+        url: '/search'
+      });
+    } else if (category === 'movies') {
+      updateSEO({
+        title: `Popular & Latest Movies Free HD${pageSuffix}`,
+        description: 'Browse and watch thousands of blockbuster movies online in HD 1080p and 4K on T Stream.',
+        url: updatedPath
+      });
+    } else if (category === 'tv-shows') {
+      updateSEO({
+        title: `TV Shows & Full Episodes Free${pageSuffix}`,
+        description: 'Stream full seasons and episodes of your favorite TV series and dramas on T Stream.',
+        url: updatedPath
+      });
+    } else if (category === 'trending') {
+      updateSEO({
+        title: `Trending Movies & TV Shows Today${pageSuffix}`,
+        description: 'Discover the hottest and most popular movies and series streaming right now on T Stream.',
+        url: updatedPath
+      });
+    } else if (category === 'top-rated') {
+      updateSEO({
+        title: `Top Rated Movies & Shows of All Time${pageSuffix}`,
+        description: 'Explore the highest critically-acclaimed films and television series on T Stream.',
+        url: updatedPath
+      });
+    }
+  }, [loadData, updateUrl, filters, category]);
 
   // Handle page transitions (Preserves all existing query params and filters!)
   const handlePageChange = (newPage: number) => {
