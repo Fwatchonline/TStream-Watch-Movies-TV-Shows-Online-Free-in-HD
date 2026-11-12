@@ -14,6 +14,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { loadBuildEnv } from './loadEnv.mjs';
 import {
   DETAILED_MOVIES,
   DETAILED_TV_SHOWS,
@@ -31,6 +32,8 @@ import {
   fetchServerPlatformMedia
 } from './seoHtmlPlugin.ts';
 import { PLATFORM_CONFIGS } from '../src/services/platformConfig.ts';
+
+loadBuildEnv();
 
 const DOMAIN = 'https://tstream.online';
 const PUBLIC_DIR = path.resolve(process.cwd(), 'public');

@@ -40,8 +40,16 @@ import {
   PLATFORM_CONFIGS,
   PLATFORM_ALIASES,
   getPlatformConfigById,
+  getConfiguredWatchRegion,
+  normalizeWatchRegion,
   type PlatformMeta
 } from '../src/services/platformConfig.ts';
+import {
+  buildPlatformDiscoverPlan,
+  computeBalancedTopRatedPlan,
+  mergeBalancedTopRatedSlices,
+  sortNormalizedMedia
+} from '../src/services/platformDiscovery.ts';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 const PAGE_SIZE = 12;
@@ -1041,19 +1049,28 @@ function normalizeServerTmdbListItem(r: any, forcedType?: 'movie' | 'tv') {
 }
 
 /**
- * Fetches genuine platform-specific movies & series (via TMDB watch providers/networks or verified catalog IDs).
+ * Fetches genuine platform-specific movies & series availability using the exact same
+ * shared watch-provider criteria and region scoping as browser discovery.
  * Never fabricates unrelated movies/series when platform data is empty or unavailable.
  */
 export async function fetchServerPlatformMedia(
   platConfig: PlatformMeta,
   page = 1,
   fetchImpl: typeof fetch = fetch,
-  tmdbApiKey: string = getServerTmdbApiKey()
-): Promise<{ items: any[]; totalPages: number }> {
+  tmdbApiKey: string = getServerTmdbApiKey(),
+  watchRegion?: string
+): Promise<{ items: any[]; totalPages: number; watchRegion: string; source: 'live' | 'offline' }> {
+  const effectiveRegion = normalizeWatchRegion(watchRegion || platConfig.watchRegion || getConfiguredWatchRegion());
   const verifiedSet = new Set(platConfig.verifiedCatalogIds || []);
   const localVerified = getAllCatalogMedia().filter(item => verifiedSet.has(item.id));
   const useCache = fetchImpl === fetch;
-  const cacheKey = `platform:${platConfig.id}:${page}`;
+  const plan = buildPlatformDiscoverPlan(platConfig, {
+    page,
+    mediaType: 'all',
+    sortBy: 'popularity.desc',
+    watchRegion: effectiveRegion
+  });
+  const cacheKey = plan.cacheKey;
 
   if (useCache) {
     const fresh = serverPlatformCache.getFresh(cacheKey);
@@ -1066,7 +1083,9 @@ export async function fetchServerPlatformMedia(
     const start = (page - 1) * PAGE_SIZE;
     const result = {
       items: start >= localVerified.length ? [] : localVerified.slice(start, start + PAGE_SIZE),
-      totalPages
+      totalPages,
+      watchRegion: effectiveRegion,
+      source: 'offline' as const
     };
     if (useCache) serverPlatformCache.set(cacheKey, result);
     return result;
@@ -1076,38 +1095,37 @@ export async function fetchServerPlatformMedia(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
     try {
-      const watchRegion = encodeURIComponent(platConfig.watchRegion || 'US');
-      const watchProviderId = encodeURIComponent(platConfig.watchProviderId);
-      const networkId = encodeURIComponent(platConfig.networkId);
+      const authedPlan = buildPlatformDiscoverPlan(platConfig, {
+        page,
+        mediaType: 'all',
+        sortBy: 'popularity.desc',
+        watchRegion: effectiveRegion,
+        apiKeyQuery: effectiveKey
+      });
       const [tvRes, movRes] = await Promise.all([
-        fetchImpl(
-          `${TMDB_BASE_URL}/discover/tv?api_key=${effectiveKey}&with_watch_providers=${watchProviderId}&watch_region=${watchRegion}&with_networks=${networkId}&sort_by=popularity.desc&page=${page}`,
-          { signal: controller.signal }
-        ),
-        fetchImpl(
-          `${TMDB_BASE_URL}/discover/movie?api_key=${effectiveKey}&with_watch_providers=${watchProviderId}&watch_region=${watchRegion}&sort_by=popularity.desc&page=${page}`,
-          { signal: controller.signal }
-        )
+        authedPlan.tvPathAndQuery
+          ? fetchImpl(`${TMDB_BASE_URL}${authedPlan.tvPathAndQuery}`, { signal: controller.signal })
+          : Promise.resolve(null),
+        authedPlan.moviePathAndQuery
+          ? fetchImpl(`${TMDB_BASE_URL}${authedPlan.moviePathAndQuery}`, { signal: controller.signal })
+          : Promise.resolve(null)
       ]);
 
-      const tvTransientFail = tvRes.status === 429 || tvRes.status >= 500;
-      const movTransientFail = movRes.status === 429 || movRes.status >= 500;
+      const tvTransientFail = Boolean(tvRes && (tvRes.status === 429 || tvRes.status >= 500));
+      const movTransientFail = Boolean(movRes && (movRes.status === 429 || movRes.status >= 500));
 
-      if (tvTransientFail && movTransientFail) {
+      if ((!tvRes || tvTransientFail) && (!movRes || movTransientFail)) {
         if (useCache) {
           const stale = serverPlatformCache.getStale(cacheKey);
           if (stale) return stale;
         }
-        if (localVerified.length > 0 && page === 1) {
-          return { items: localVerified.slice(0, PAGE_SIZE), totalPages: Math.max(1, Math.ceil(localVerified.length / PAGE_SIZE)) };
-        }
-        throw make503Error(`TMDB platform discovery returned HTTP ${tvRes.status}/${movRes.status}`);
+        throw make503Error(`TMDB platform discovery returned HTTP ${tvRes?.status || 503}/${movRes?.status || 503}`);
       }
 
       const merged = new Map<string, any>();
       let maxTotalPages = 1;
 
-      if (tvRes.ok) {
+      if (tvRes && tvRes.ok) {
         const tvJson = await tvRes.json();
         maxTotalPages = Math.max(maxTotalPages, Math.min(Number(tvJson.total_pages || 1), 500));
         for (const r of tvJson.results || []) {
@@ -1117,7 +1135,7 @@ export async function fetchServerPlatformMedia(
         }
       }
 
-      if (movRes.ok) {
+      if (movRes && movRes.ok) {
         const movJson = await movRes.json();
         maxTotalPages = Math.max(maxTotalPages, Math.min(Number(movJson.total_pages || 1), 500));
         for (const r of movJson.results || []) {
@@ -1127,19 +1145,14 @@ export async function fetchServerPlatformMedia(
         }
       }
 
-      if (page === 1 && merged.size === 0 && localVerified.length > 0) {
-        for (const item of localVerified) {
-          merged.set(`${item.mediaType || 'movie'}:${item.id}`, item);
-        }
-      }
-
-      const items = Array.from(merged.values())
-        .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
-        .slice(0, PAGE_SIZE);
+      // Note: Do NOT fabricate content on empty HTTP 200 live watch-provider response!
+      const items = sortNormalizedMedia(Array.from(merged.values()), 'popularity.desc').slice(0, PAGE_SIZE);
 
       const result = {
         items,
-        totalPages: items.length === 0 && page === 1 ? 1 : maxTotalPages
+        totalPages: items.length === 0 && page === 1 ? 1 : maxTotalPages,
+        watchRegion: effectiveRegion,
+        source: 'live' as const
       };
       if (useCache) serverPlatformCache.set(cacheKey, result);
       return result;
@@ -1147,9 +1160,6 @@ export async function fetchServerPlatformMedia(
       if (useCache) {
         const stale = serverPlatformCache.getStale(cacheKey);
         if (stale) return stale;
-      }
-      if (localVerified.length > 0 && page === 1) {
-        return { items: localVerified.slice(0, PAGE_SIZE), totalPages: Math.max(1, Math.ceil(localVerified.length / PAGE_SIZE)) };
       }
       if (err?.status === 503) throw err;
       throw make503Error('TMDB platform discovery unavailable');
@@ -1172,7 +1182,15 @@ export async function fetchServerCatalogPage(
     const all = getAllCatalogMedia();
     if (routeType === 'movies') return all.filter(i => i.mediaType === 'movie');
     if (routeType === 'tv-shows') return all.filter(i => i.mediaType === 'tv');
-    if (routeType === 'top-rated') return [...all].sort((a, b) => (b.voteAverage || 0) - (a.voteAverage || 0));
+    if (routeType === 'top-rated') {
+      return [...all].sort((a, b) => {
+        const diffAvg = (b.voteAverage || 0) - (a.voteAverage || 0);
+        if (diffAvg !== 0) return diffAvg;
+        const diffCount = (b.voteCount || 0) - (a.voteCount || 0);
+        if (diffCount !== 0) return diffCount;
+        return (a.id || 0) - (b.id || 0);
+      });
+    }
     return all;
   };
 
@@ -1197,6 +1215,80 @@ export async function fetchServerCatalogPage(
     return result;
   }
 
+  if (routeType === 'top-rated') {
+    return coalesceLookup(cacheKey, useCache, async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
+      try {
+        const plan = computeBalancedTopRatedPlan(page, PAGE_SIZE / 2);
+        const [movResList, tvResList] = await Promise.all([
+          Promise.all(
+            plan.tmdbPages.map(p =>
+              fetchImpl(`${TMDB_BASE_URL}/movie/top_rated?api_key=${effectiveKey}&page=${p}`, { signal: controller.signal })
+            )
+          ),
+          Promise.all(
+            plan.tmdbPages.map(p =>
+              fetchImpl(`${TMDB_BASE_URL}/tv/top_rated?api_key=${effectiveKey}&page=${p}`, { signal: controller.signal })
+            )
+          )
+        ]);
+
+        const anyMovTransient = movResList.some(r => r.status === 429 || r.status >= 500);
+        const anyTvTransient = tvResList.some(r => r.status === 429 || r.status >= 500);
+        const allMovFailed = movResList.every(r => !r.ok);
+        const allTvFailed = tvResList.every(r => !r.ok);
+
+        if ((allMovFailed && anyMovTransient) && (allTvFailed && anyTvTransient)) {
+          if (useCache) {
+            const stale = serverCatalogCache.getStale(cacheKey);
+            if (stale) return stale;
+          }
+          const totalPagesOffline = Math.max(1, Math.ceil(offlinePool.length / PAGE_SIZE));
+          const startOffline = (page - 1) * PAGE_SIZE;
+          if (page <= totalPagesOffline && offlinePool.length > 0) {
+            return { items: offlinePool.slice(startOffline, startOffline + PAGE_SIZE), totalPages: totalPagesOffline };
+          }
+          throw make503Error('TMDB top-rated endpoints temporarily unavailable');
+        }
+
+        const movJsons = await Promise.all(movResList.map(r => (r.ok ? r.json() : { results: [], total_results: 0 })));
+        const tvJsons = await Promise.all(tvResList.map(r => (r.ok ? r.json() : { results: [], total_results: 0 })));
+
+        const movPool = movJsons
+          .flatMap((j: any) => j.results || [])
+          .filter((r: any) => r?.id && (r.title || r.name))
+          .map((r: any) => normalizeServerTmdbListItem(r, 'movie'));
+        const tvPool = tvJsons
+          .flatMap((j: any) => j.results || [])
+          .filter((r: any) => r?.id && (r.name || r.title))
+          .map((r: any) => normalizeServerTmdbListItem(r, 'tv'));
+
+        const movieSlice = movPool.slice(plan.sliceStartInBuffer, plan.sliceEndInBuffer);
+        const tvSlice = tvPool.slice(plan.sliceStartInBuffer, plan.sliceEndInBuffer);
+        const items = mergeBalancedTopRatedSlices(movieSlice, tvSlice, PAGE_SIZE);
+
+        const maxMovTotal = Number(movJsons[0]?.total_results || movPool.length || 0);
+        const maxTvTotal = Number(tvJsons[0]?.total_results || tvPool.length || 0);
+        const maxPairs = Math.min(Math.floor(maxMovTotal / plan.perTypeCount), Math.floor(maxTvTotal / plan.perTypeCount));
+        const totalPages = Math.max(1, Math.min(Math.max(maxPairs, items.length > 0 ? page : 1), 500));
+
+        const result = { items, totalPages };
+        if (useCache) serverCatalogCache.set(cacheKey, result);
+        return result;
+      } catch (err: any) {
+        if (useCache) {
+          const stale = serverCatalogCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
+        if (err?.status === 503) throw err;
+        throw make503Error('TMDB top-rated discovery unavailable');
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
+  }
+
   return coalesceLookup(cacheKey, useCache, async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
@@ -1208,9 +1300,6 @@ export async function fetchServerCatalogPage(
     } else if (routeType === 'trending') {
       tmdbUrl = `${TMDB_BASE_URL}/trending/all/week?api_key=${effectiveKey}&page=${page}`;
       forcedType = undefined;
-    } else if (routeType === 'top-rated') {
-      tmdbUrl = `${TMDB_BASE_URL}/discover/movie?api_key=${effectiveKey}&sort_by=vote_average.desc&vote_count.gte=500&page=${page}`;
-      forcedType = 'movie';
     }
 
     try {
@@ -2004,9 +2093,18 @@ export async function renderSeoResult(
     }
 
     paginationBasePath = `/platform/${platConfig.id}`;
-    let platRes: { items: any[]; totalPages: number } = { items: [], totalPages: 1 };
+    const reqUrlObj = new URL(urlPath.startsWith('/') ? `https://tstream.online${urlPath}` : urlPath);
+    const requestedRegion = reqUrlObj.searchParams.get('watchRegion') || reqUrlObj.searchParams.get('region') || undefined;
+    const effectiveRegion = normalizeWatchRegion(requestedRegion || platConfig.watchRegion || getConfiguredWatchRegion());
+
+    let platRes: { items: any[]; totalPages: number; watchRegion: string; source: 'live' | 'offline' } = {
+      items: [],
+      totalPages: 1,
+      watchRegion: effectiveRegion,
+      source: 'offline'
+    };
     try {
-      platRes = await fetchServerPlatformMedia(platConfig, currentPage, fetchImpl, tmdbApiKey);
+      platRes = await fetchServerPlatformMedia(platConfig, currentPage, fetchImpl, tmdbApiKey, effectiveRegion);
     } catch (err: any) {
       if (err?.status === 503) {
         return {
@@ -2026,12 +2124,16 @@ export async function renderSeoResult(
       pageCanonical = `${PRIMARY_ORIGIN}/platform/${platConfig.id}`;
     }
 
+    const scopeNote = platRes.source === 'live'
+      ? `Showing ${platConfig.name} watch-provider availability in region ${platRes.watchRegion}.`
+      : `Showing verified ${platConfig.name} original reference titles (offline metadata mode; region filter ${platRes.watchRegion} activates with live TMDB availability).`;
+
     pageTitle = `${platConfig.name} Hub — Movies & TV Series${pageSuffix} — T Stream`;
-    pageDesc = platConfig.description;
-    h1Heading = `${platConfig.name} Hub — Streaming Catalog`;
+    pageDesc = `${platConfig.description} ${scopeNote}`;
+    h1Heading = `${platConfig.name} Hub — Streaming Catalog (${platRes.watchRegion})`;
     breadcrumbTitle = platConfig.name;
     if (matchingItems.length === 0) {
-      emptyStateMessage = `Live ${platConfig.name} titles are loaded dynamically when streaming metadata is active. Browse Movies or TV Shows for instant playback.`;
+      emptyStateMessage = `No verified ${platConfig.name} titles are currently available for watch region ${platRes.watchRegion}. Browse Movies or TV Shows for instant playback.`;
     }
   } else if (route.type === 'az' && route.letter) {
     matchingItems = getMatchingCatalogForLetter(route.letter);

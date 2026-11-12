@@ -11,7 +11,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import serverApp from '../../server/app';
-import { createTmdbProxyRoute, clearTmdbProxyCache, isAllowedTmdbPath } from '../../server/api/tmdb';
+import {
+  createTmdbProxyRoute,
+  clearTmdbProxyCache,
+  clearTmdbRateLimits,
+  isAllowedTmdbPath
+} from '../../server/api/tmdb';
 import { handleLegacyStreamRequest } from '../../server/legacyStreamHandler';
 import { safeFetchStream, ProxySecurityError } from '../../server/utils/safeProxyFetch';
 import { getServerTmdbApiKey } from '../../../scripts/seoHtmlPlugin';
@@ -182,6 +187,83 @@ async function runTests() {
     ssrfThrew = err instanceof ProxySecurityError;
   }
   assert(ssrfThrew, 'safeFetchStream throws ProxySecurityError on RFC1918 private network');
+
+  // 7. Phase 4 Task 6: Top-Rated endpoint allowlist, TMDB Rate Limiting & Restricted CORS
+  assert(
+    isAllowedTmdbPath('/movie/top_rated') && isAllowedTmdbPath('/tv/top_rated'),
+    'TMDB proxy allowlist permits /movie/top_rated and /tv/top_rated'
+  );
+
+  clearTmdbProxyCache();
+  clearTmdbRateLimits();
+  let limitedUpstreamHits = 0;
+  const rateLimitedRoute = createTmdbProxyRoute({
+    getApiKey: () => 'rate-test-secret',
+    rateLimitMax: 2,
+    rateLimitWindowMs: 60_000,
+    allowedOrigins: ['https://tstream.online'],
+    trustProxy: false,
+    fetchImpl: (async () => {
+      limitedUpstreamHits++;
+      return new Response(JSON.stringify({ results: [{ id: 1, title: 'Rate OK' }] }), { status: 200 });
+    }) as typeof fetch
+  });
+
+  // 7A. Requests within limit succeed with X-RateLimit-* headers
+  const rl1 = await rateLimitedRoute.request('/discover/movie?page=1', {
+    headers: { 'x-tstream-verified-ip': '198.51.100.10', Origin: 'https://tstream.online' }
+  });
+  const rl2 = await rateLimitedRoute.request('/discover/movie?page=1', {
+    headers: { 'x-tstream-verified-ip': '198.51.100.10', Origin: 'https://tstream.online' }
+  });
+  // 7B. Requests exceeding limit receive HTTP 429 + Retry-After + zero leak
+  const rl3 = await rateLimitedRoute.request('/discover/movie?page=1', {
+    headers: { 'x-tstream-verified-ip': '198.51.100.10', Origin: 'https://tstream.online' }
+  });
+  assert(
+    rl1.status === 200 &&
+      rl1.headers.get('access-control-allow-origin') === 'https://tstream.online' &&
+      rl1.headers.get('x-ratelimit-limit') === '2' &&
+      rl2.status === 200 &&
+      limitedUpstreamHits === 1 && // cached response served on 2nd hit
+      rl3.status === 429 &&
+      Boolean(rl3.headers.get('retry-after')) &&
+      rl3.headers.get('x-ratelimit-remaining') === '0',
+    'Task 6: Rate limiter enforces per-client window (429 + Retry-After + rate-limit headers) even on cached responses'
+  );
+
+  // 7C. Spoofing X-Forwarded-For does NOT bypass rate limiter when trustProxy=false
+  const spoofedBypass = await rateLimitedRoute.request('/discover/movie?page=1', {
+    headers: {
+      'x-tstream-verified-ip': '198.51.100.10',
+      'x-forwarded-for': '203.0.113.250'
+    }
+  });
+  assert(
+    spoofedBypass.status === 429,
+    'Task 6: Spoofed X-Forwarded-For cannot bypass rate limiter when TRUST_PROXY is false'
+  );
+
+  // 7D. Different client IP remains independent
+  const otherIpRes = await rateLimitedRoute.request('/discover/movie?page=2', {
+    headers: { 'x-tstream-verified-ip': '198.51.100.99' }
+  });
+  assert(otherIpRes.status === 200, 'Task 6: Different verified client IP has separate rate-limit quota');
+
+  // 7E. Restricted CORS policy blocks untrusted origin (403) and drops wildcard *
+  const badOriginGet = await rateLimitedRoute.request('/discover/movie?page=1', {
+    headers: { 'x-tstream-verified-ip': '198.51.100.99', Origin: 'https://evil-attacker.example.com' }
+  });
+  const badOriginOptions = await rateLimitedRoute.request('/discover/movie?page=1', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://evil-attacker.example.com' }
+  });
+  assert(
+    badOriginGet.status === 403 &&
+      badOriginOptions.status === 403 &&
+      badOriginGet.headers.get('access-control-allow-origin') !== '*',
+    'Task 6: CORS rejects untrusted Origin with HTTP 403 and never emits wildcard Access-Control-Allow-Origin: *'
+  );
 
   console.log('\n--- ALL SERVER, SECURITY & STREAMING REGRESSION TESTS PASSED ---');
 }

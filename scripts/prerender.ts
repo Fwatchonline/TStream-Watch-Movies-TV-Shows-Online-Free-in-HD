@@ -14,6 +14,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { loadBuildEnv } from './loadEnv.mjs';
 import {
   renderSeoResult,
   render404Html,
@@ -22,6 +23,8 @@ import {
   getAllCatalogMedia,
   type RenderSeoOptions
 } from './seoHtmlPlugin.ts';
+
+loadBuildEnv();
 import {
   DETAILED_MOVIES,
   DETAILED_TV_SHOWS,

@@ -28,6 +28,7 @@ function streamApiPlugin(): Plugin {
       url.startsWith('/api/subtitle-proxy') ||
       url.startsWith('/api/tmdb')
     ) {
+      req.headers['x-tstream-verified-ip'] = req.socket?.remoteAddress || '';
       return honoListener(req, res);
     }
 

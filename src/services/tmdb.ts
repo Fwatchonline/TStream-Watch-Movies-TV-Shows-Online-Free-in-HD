@@ -20,7 +20,15 @@ import {
   PIRATES_COLLECTION,
   ALL_GENRES
 } from './catalogData';
-import { getPlatformConfigById } from './platformConfig';
+import { getPlatformConfigById, getConfiguredWatchRegion, normalizeWatchRegion } from './platformConfig';
+import {
+  buildPlatformDiscoverPlan,
+  computeBalancedTopRatedPlan,
+  mergeBalancedTopRatedSlices,
+  sortNormalizedMedia,
+  CATALOG_PAGE_SIZE
+} from './platformDiscovery';
+import { getUserSettings } from './storage';
 
 export const TMDB_BASE_URL =
   typeof window !== 'undefined' ? '/api/tmdb' : 'https://api.themoviedb.org/3';
@@ -174,129 +182,102 @@ export function queryLocalCatalog(options: FilterOptions = {}): PaginatedRespons
   };
 }
 
-/**
- * Live TMDB Catalog Fetcher with guaranteed page pagination
- */
 export async function fetchCatalog(
-  category: 'trending' | 'movies' | 'tv' | 'popular-movies' | 'top-movies' | 'popular-tv' | 'top-tv' | 'airing-today' | 'upcoming' | 'search' | 'platform' | 'az',
+  category: 'trending' | 'movies' | 'tv' | 'popular-movies' | 'top-movies' | 'popular-tv' | 'top-tv' | 'top-rated' | 'airing-today' | 'upcoming' | 'search' | 'platform' | 'az',
   page = 1,
-  extraFilters: Partial<FilterOptions> = {}
+  extraFilters: Partial<FilterOptions> = {},
+  requestOpts: { throwOnError?: boolean; fetchImpl?: typeof fetch } = {}
 ): Promise<PaginatedResponse<MediaItem>> {
   const safePage = Math.max(1, Math.floor(Number(page) || 1));
+  const fetchFn = requestOpts.fetchImpl || fetch;
+  const resolveRegion = () => {
+    if (extraFilters.watchRegion) return normalizeWatchRegion(extraFilters.watchRegion);
+    if (typeof window !== 'undefined') {
+      return normalizeWatchRegion(getUserSettings()?.preferredWatchRegion);
+    }
+    return getConfiguredWatchRegion();
+  };
 
-  if (!canUseClientTmdbProxy()) {
+  if (!canUseClientTmdbProxy() && !requestOpts.fetchImpl) {
     return queryLocalCatalog({
       ...extraFilters,
       page: safePage,
-      mediaType: extraFilters.mediaType || (category.includes('tv') ? 'tv' : category.includes('movie') ? 'movie' : 'all')
+      sortBy: extraFilters.sortBy || (category === 'top-rated' ? 'vote_average.desc' : undefined),
+      mediaType:
+        extraFilters.mediaType ||
+        (category.includes('tv') ? 'tv' : category.includes('movie') ? 'movie' : 'all')
     });
   }
 
   try {
-    // 1. Platform / Studio Specific Search (e.g. Netflix, Apple TV+, HBO Max, Disney+, etc.)
+    // 1. Unified Watch-Provider Platform Discovery (matching server SSR/prerender criteria 1:1)
     const platformId = extraFilters.platform || (category === 'platform' ? 'netflix' : undefined);
     if (platformId) {
       const platform = getPlatformConfigById(platformId);
       if (platform) {
         const sortBy = extraFilters.sortBy || 'popularity.desc';
         const targetType = extraFilters.mediaType || 'all';
+        const watchRegion = resolveRegion();
+        const plan = buildPlatformDiscoverPlan(platform, {
+          page: safePage,
+          mediaType: targetType,
+          sortBy,
+          watchRegion,
+          genreId: extraFilters.genreId,
+          year: extraFilters.year,
+          minRating: extraFilters.minRating
+        });
 
-        // Additional filter parameters
-        let genreQuery = extraFilters.genreId ? `&with_genres=${extraFilters.genreId}` : '';
-        let minRatingQuery = extraFilters.minRating ? `&vote_average.gte=${extraFilters.minRating}` : '';
-        let yearQueryMovie = extraFilters.year ? `&primary_release_year=${extraFilters.year}` : '';
-        let yearQueryTv = extraFilters.year ? `&first_air_date_year=${extraFilters.year}` : '';
+        const movPromise = plan.moviePathAndQuery
+          ? fetchFn(`${TMDB_BASE_URL}${plan.moviePathAndQuery}`)
+          : Promise.resolve(null);
+        const tvPromise = plan.tvPathAndQuery
+          ? fetchFn(`${TMDB_BASE_URL}${plan.tvPathAndQuery}`)
+          : Promise.resolve(null);
 
-        // If only Movies requested for this platform
-        if (targetType === 'movie') {
-          const providerParam = platform.id === 'paramount'
-            ? `with_companies=${platform.companyId}&with_watch_providers=${platform.watchProviderId}&watch_region=${platform.watchRegion}`
-            : `with_watch_providers=${platform.watchProviderId}&watch_region=${platform.watchRegion}`;
+        const [movRes, tvRes] = await Promise.all([movPromise, tvPromise]);
 
-          const movUrl = `${TMDB_BASE_URL}/discover/movie?${providerParam}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryMovie}`;
-          const res = await fetch(movUrl);
-          if (res.ok) {
-            const data = await res.json();
-            const results = (data.results || [])
-              .filter((r: any) => r.poster_path || r.backdrop_path)
-              .map((r: any) => normalizeTMDBItem(r, 'movies'));
-            return {
-              page: data.page || safePage,
-              totalPages: Math.min(data.total_pages || 1, 500),
-              totalResults: data.total_results || results.length,
-              results
-            };
+        const movTransientErr = movRes && (movRes.status === 429 || movRes.status >= 500);
+        const tvTransientErr = tvRes && (tvRes.status === 429 || tvRes.status >= 500);
+        const hasOk = Boolean((movRes && movRes.ok) || (tvRes && tvRes.ok));
+
+        if (!hasOk) {
+          if (requestOpts.throwOnError && (movTransientErr || tvTransientErr || movRes?.status === 503 || tvRes?.status === 503)) {
+            const err: any = new Error(`TMDB platform request failed (${movRes?.status || tvRes?.status})`);
+            err.status = movRes?.status || tvRes?.status || 503;
+            throw err;
           }
-          return queryLocalCatalog({ ...extraFilters, platform: platform.id, mediaType: 'movie', page: safePage });
-        }
-
-        // If only TV Series requested for this platform
-        if (targetType === 'tv') {
-          const tvUrl = `${TMDB_BASE_URL}/discover/tv?with_networks=${platform.networkId}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryTv}`;
-          const res = await fetch(tvUrl);
-          if (res.ok) {
-            const data = await res.json();
-            const results = (data.results || [])
-              .filter((r: any) => r.poster_path || r.backdrop_path)
-              .map((r: any) => normalizeTMDBItem(r, 'tv'));
-            return {
-              page: data.page || safePage,
-              totalPages: Math.min(data.total_pages || 1, 500),
-              totalResults: data.total_results || results.length,
-              results
-            };
+          // When server explicitly returned 503 (TMDB key not configured) vs HTTP 200 empty:
+          // fall back ONLY if unconfigured local catalog has verified originals; do not fabricate on empty 200.
+          if ((movRes && movRes.ok === false && !movTransientErr) && (tvRes && tvRes.ok === false && !tvTransientErr)) {
+            return { page: safePage, totalPages: 1, totalResults: 0, results: [] };
           }
-          return queryLocalCatalog({ ...extraFilters, platform: platform.id, mediaType: 'tv', page: safePage });
+          return queryLocalCatalog({ ...extraFilters, platform: platform.id, mediaType: targetType, page: safePage });
         }
 
-        // Default 'all': Fetch BOTH movies and TV series produced by this studio/platform in parallel!
-        const providerParam = platform.id === 'paramount'
-          ? `with_companies=${platform.companyId}&with_watch_providers=${platform.watchProviderId}&watch_region=${platform.watchRegion}`
-          : `with_watch_providers=${platform.watchProviderId}&watch_region=${platform.watchRegion}`;
-
-        const tvUrl = `${TMDB_BASE_URL}/discover/tv?with_networks=${platform.networkId}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryTv}`;
-        const movUrl = `${TMDB_BASE_URL}/discover/movie?${providerParam}&sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryMovie}`;
-
-        const [tvRes, movRes] = await Promise.all([
-          fetch(tvUrl).catch(() => null),
-          fetch(movUrl).catch(() => null)
+        const [movData, tvData] = await Promise.all([
+          movRes && movRes.ok ? movRes.json() : { results: [], total_pages: 1, total_results: 0 },
+          tvRes && tvRes.ok ? tvRes.json() : { results: [], total_pages: 1, total_results: 0 }
         ]);
-
-        if (!(tvRes && tvRes.ok) && !(movRes && movRes.ok)) {
-          return queryLocalCatalog({ ...extraFilters, platform: platform.id, mediaType: 'all', page: safePage });
-        }
-
-        const [tvData, movData] = await Promise.all([
-          tvRes && tvRes.ok ? tvRes.json() : { results: [], total_pages: 1, total_results: 0 },
-          movRes && movRes.ok ? movRes.json() : { results: [], total_pages: 1, total_results: 0 }
-        ]);
-
-        const tvItems: MediaItem[] = (tvData.results || [])
-          .filter((r: any) => r.poster_path || r.backdrop_path)
-          .map((r: any) => normalizeTMDBItem({ ...r, media_type: 'tv' }, 'tv'));
 
         const movieItems: MediaItem[] = (movData.results || [])
           .filter((r: any) => r.poster_path || r.backdrop_path)
           .map((r: any) => normalizeTMDBItem({ ...r, media_type: 'movie' }, 'movies'));
+        const tvItems: MediaItem[] = (tvData.results || [])
+          .filter((r: any) => r.poster_path || r.backdrop_path)
+          .map((r: any) => normalizeTMDBItem({ ...r, media_type: 'tv' }, 'tv'));
 
-        // Interleave / sort both lists according to active sort option
-        const combined = [...tvItems, ...movieItems];
-        if (sortBy === 'vote_average.desc') {
-          combined.sort((a, b) => b.voteAverage - a.voteAverage);
-        } else if (sortBy === 'primary_release_date.desc') {
-          combined.sort((a, b) => new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime());
-        } else if (sortBy === 'title.asc') {
-          combined.sort((a, b) => a.title.localeCompare(b.title));
-        } else {
-          // popularity.desc
-          combined.sort((a, b) => b.popularity - a.popularity);
+        const merged = new Map<string, MediaItem>();
+        for (const item of [...tvItems, ...movieItems]) {
+          merged.set(`${item.mediaType}:${item.id}`, item);
         }
+        const combined = sortNormalizedMedia(Array.from(merged.values()), sortBy);
 
         return {
           page: safePage,
           totalPages: Math.min(Math.max(tvData.total_pages || 1, movData.total_pages || 1), 500),
           totalResults: (tvData.total_results || 0) + (movData.total_results || 0),
-          results: combined
+          results: combined.slice(0, CATALOG_PAGE_SIZE)
         };
       }
     }
@@ -464,7 +445,7 @@ export async function fetchCatalog(
       }
     }
 
-    // 4. Discovery / Filter Mode (Movies, TV Shows, Trending, Genres, Ratings, Years)
+    // 4. Discovery / Filter Mode (Movies, TV Shows, Trending, Top Rated Balanced, Genres, Ratings, Years)
     let targetType: 'all' | 'movie' | 'tv' = extraFilters.mediaType || 'all';
     if (!extraFilters.mediaType || extraFilters.mediaType === 'all') {
       if (category === 'movies' || category === 'popular-movies' || category === 'top-movies' || category === 'upcoming') {
@@ -474,7 +455,65 @@ export async function fetchCatalog(
       }
     }
 
-    const defaultSort = (category === 'top-movies' || category === 'top-tv') ? 'vote_average.desc' : 'popularity.desc';
+    const isDefaultTopRatedMixed =
+      category === 'top-rated' &&
+      targetType === 'all' &&
+      !extraFilters.genreId &&
+      !extraFilters.year &&
+      !extraFilters.minRating &&
+      !extraFilters.country &&
+      (!extraFilters.sortBy || extraFilters.sortBy === 'vote_average.desc');
+
+    if (isDefaultTopRatedMixed) {
+      const plan = computeBalancedTopRatedPlan(safePage, CATALOG_PAGE_SIZE / 2);
+      const [movPagesData, tvPagesData] = await Promise.all([
+        Promise.all(
+          plan.tmdbPages.map(p =>
+            fetchFn(`${TMDB_BASE_URL}/movie/top_rated?page=${p}`)
+              .then(r => (r.ok ? r.json() : null))
+              .catch(() => null)
+          )
+        ),
+        Promise.all(
+          plan.tmdbPages.map(p =>
+            fetchFn(`${TMDB_BASE_URL}/tv/top_rated?page=${p}`)
+              .then(r => (r.ok ? r.json() : null))
+              .catch(() => null)
+          )
+        )
+      ]);
+
+      const validMov = movPagesData.filter(Boolean);
+      const validTv = tvPagesData.filter(Boolean);
+      if (validMov.length > 0 || validTv.length > 0) {
+        const movPool = validMov
+          .flatMap((d: any) => d.results || [])
+          .filter((r: any) => r.poster_path || r.backdrop_path)
+          .map((r: any) => normalizeTMDBItem({ ...r, media_type: 'movie' }, 'movies'));
+        const tvPool = validTv
+          .flatMap((d: any) => d.results || [])
+          .filter((r: any) => r.poster_path || r.backdrop_path)
+          .map((r: any) => normalizeTMDBItem({ ...r, media_type: 'tv' }, 'tv'));
+
+        const movieSlice = movPool.slice(plan.sliceStartInBuffer, plan.sliceEndInBuffer);
+        const tvSlice = tvPool.slice(plan.sliceStartInBuffer, plan.sliceEndInBuffer);
+        const results = mergeBalancedTopRatedSlices(movieSlice, tvSlice, CATALOG_PAGE_SIZE);
+
+        const maxMovTotal = validMov[0]?.total_results || movPool.length;
+        const maxTvTotal = validTv[0]?.total_results || tvPool.length;
+        const maxPairsAvailable = Math.min(Math.floor(maxMovTotal / plan.perTypeCount), Math.floor(maxTvTotal / plan.perTypeCount));
+        const totalPages = Math.max(1, Math.min(Math.max(maxPairsAvailable, validMov.length || validTv.length ? 1 : 0), 500));
+
+        return {
+          page: safePage,
+          totalPages,
+          totalResults: maxMovTotal + maxTvTotal,
+          results
+        };
+      }
+    }
+
+    const defaultSort = (category === 'top-movies' || category === 'top-tv' || category === 'top-rated') ? 'vote_average.desc' : 'popularity.desc';
     const sortBy = extraFilters.sortBy || defaultSort;
     const genreQuery = extraFilters.genreId ? `&with_genres=${extraFilters.genreId}` : '';
     const minRatingQuery = extraFilters.minRating
@@ -557,6 +596,9 @@ export async function fetchCatalog(
       }
     }
   } catch (err) {
+    if (requestOpts.throwOnError) {
+      throw err;
+    }
     console.warn('Real TMDB API fetch failed, falling back to local dataset:', err);
   }
 
@@ -564,6 +606,7 @@ export async function fetchCatalog(
   return queryLocalCatalog({
     ...extraFilters,
     page: safePage,
+    sortBy: extraFilters.sortBy || (category === 'top-rated' ? 'vote_average.desc' : undefined),
     mediaType: extraFilters.mediaType || (category.includes('tv') ? 'tv' : category.includes('movie') ? 'movie' : 'all')
   });
 }
@@ -764,36 +807,40 @@ export async function fetchByTag(tagName: string, page = 1): Promise<PaginatedRe
 }
 
 /**
- * Fetch detailed episodes for a specific TV show season from TMDB API
+ * Strict season episode fetcher that distinguishes genuine 404/empty from transient HTTP/network failures.
  */
-export async function fetchSeasonEpisodes(tvId: number, seasonNumber: number): Promise<Episode[]> {
-  if (canUseClientTmdbProxy()) {
-    try {
-      const res = await fetch(`${TMDB_BASE_URL}/tv/${tvId}/season/${seasonNumber}`);
-      if (res.status === 404) {
-        return [];
-      }
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.episodes) && data.episodes.length > 0) {
-          return data.episodes.map((ep: any) => ({
-            id: ep.id,
-            episodeNumber: ep.episode_number,
-            seasonNumber: ep.season_number ?? seasonNumber,
-            name: ep.name || `Episode ${ep.episode_number}`,
-            overview: ep.overview || 'No synopsis available for this episode.',
-            stillPath: ep.still_path
-              ? `https://image.tmdb.org/t/p/w500${ep.still_path}`
-              : null,
-            airDate: ep.air_date || '',
-            voteAverage: ep.vote_average ? Number(ep.vote_average.toFixed(1)) : 0,
-            runtime: ep.runtime || undefined
-          }));
-        }
-      }
-    } catch (err) {
-      console.warn(`Failed to fetch season ${seasonNumber} episodes for tv ${tvId}:`, err);
+export async function fetchSeasonEpisodesStrict(
+  tvId: number,
+  seasonNumber: number,
+  fetchImpl: typeof fetch = fetch
+): Promise<Episode[]> {
+  if (canUseClientTmdbProxy() || fetchImpl !== fetch) {
+    const res = await fetchImpl(`${TMDB_BASE_URL}/tv/${tvId}/season/${seasonNumber}`);
+    if (res.status === 404) {
+      const foundTV = DETAILED_TV_SHOWS.find(t => t.id === tvId || t.tmdbId === tvId);
+      const foundSeason = foundTV?.seasons?.find(s => s.seasonNumber === seasonNumber);
+      return foundSeason?.episodes || [];
     }
+    if (!res.ok) {
+      const err: any = new Error(`Failed loading season ${seasonNumber} episodes (HTTP ${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    const data = await res.json();
+    if (Array.isArray(data.episodes)) {
+      return data.episodes.map((ep: any) => ({
+        id: ep.id,
+        episodeNumber: ep.episode_number,
+        seasonNumber: ep.season_number ?? seasonNumber,
+        name: ep.name || `Episode ${ep.episode_number}`,
+        overview: ep.overview || '',
+        stillPath: ep.still_path ? `https://image.tmdb.org/t/p/w500${ep.still_path}` : null,
+        airDate: ep.air_date || '',
+        voteAverage: typeof ep.vote_average === 'number' && ep.vote_average > 0 ? Number(ep.vote_average.toFixed(1)) : 0,
+        runtime: ep.runtime || undefined
+      }));
+    }
+    return [];
   }
 
   const foundTV = DETAILED_TV_SHOWS.find(t => t.id === tvId || t.tmdbId === tvId);
@@ -801,8 +848,24 @@ export async function fetchSeasonEpisodes(tvId: number, seasonNumber: number): P
   if (foundSeason?.episodes && foundSeason.episodes.length > 0) {
     return foundSeason.episodes;
   }
-
   return [];
+}
+
+/**
+ * Fetch detailed episodes for a specific TV show season from TMDB API
+ */
+export async function fetchSeasonEpisodes(tvId: number, seasonNumber: number): Promise<Episode[]> {
+  try {
+    return await fetchSeasonEpisodesStrict(tvId, seasonNumber);
+  } catch (err) {
+    console.warn(`Failed to fetch season ${seasonNumber} episodes for tv ${tvId}:`, err);
+    const foundTV = DETAILED_TV_SHOWS.find(t => t.id === tvId || t.tmdbId === tvId);
+    const foundSeason = foundTV?.seasons?.find(s => s.seasonNumber === seasonNumber);
+    if (foundSeason?.episodes && foundSeason.episodes.length > 0) {
+      return foundSeason.episodes;
+    }
+    return [];
+  }
 }
 
 function normalizeTMDBDetail(raw: any, type: MediaType): MediaDetail {

@@ -23,6 +23,11 @@ function getBaseUrl(): string {
   return raw.replace(/\/+$/, '');
 }
 
+function getExpectedCommit(): string {
+  const arg = process.argv.find(a => a.startsWith('--expected-commit='));
+  return (arg ? arg.split('=')[1] : process.env.APP_COMMIT_SHA || '').trim();
+}
+
 function extractCanonical(html: string): { count: number; href: string | null } {
   const tags = html.match(/<link\s+[^>]*rel=["']canonical["'][^>]*>/gi) || [];
   if (tags.length === 0) return { count: 0, href: null };
@@ -86,32 +91,47 @@ async function run() {
   };
 
   // 1. Health & Runtime identity
+  const expectedCommit = getExpectedCommit();
   try {
     const hRes = await fetch(`${baseUrl}/api/health`);
     const hJson: any = await hRes.json().catch(() => null);
+    const hasCommitFields = Boolean(hJson?.version && hJson?.commitSha);
+    const commitMatches = !expectedCommit || hJson?.commitSha === expectedCommit;
     record(
       'GET /api/health',
-      hRes.status === 200 && hJson?.status === 'ok' && hJson?.service === 'tstream-production',
-      `HTTP ${hRes.status}, status=${hJson?.status}, service=${hJson?.service}`
+      hRes.status === 200 &&
+        hJson?.status === 'ok' &&
+        hJson?.service === 'tstream-production' &&
+        hasCommitFields &&
+        commitMatches,
+      `HTTP ${hRes.status}, status=${hJson?.status}, commitSha=${hJson?.commitSha || 'missing'}`
     );
   } catch (err: any) {
     record('GET /api/health', false, err.message);
   }
 
-  // 2. API Input Validation & SSRF Security Checks (must NOT return 200!)
-  const apiChecks: Array<{ path: string; expectedStatus: number; label: string }> = [
+  // 2. API Input Validation, CORS & SSRF Security Checks (must NOT return 200!)
+  const apiChecks: Array<{ path: string; expectedStatus: number; label: string; headers?: Record<string, string> }> = [
     { path: '/api/stream-resolve', expectedStatus: 400, label: 'Missing tmdbId on /api/stream-resolve' },
     { path: '/api/stream/movie/invalid-id', expectedStatus: 400, label: 'Invalid numeric ID on /api/stream' },
     { path: '/api/proxy', expectedStatus: 400, label: 'Missing url on /api/proxy' },
     { path: '/api/proxy?url=http://127.0.0.1/secret', expectedStatus: 403, label: 'SSRF loopback blocked on /api/proxy' },
     { path: '/api/subtitle-proxy', expectedStatus: 400, label: 'Missing url on /api/subtitle-proxy' },
     { path: '/api/tmdb/unknown/route', expectedStatus: 400, label: 'Disallowed path on /api/tmdb' },
+    {
+      path: '/api/tmdb/discover/movie?page=1',
+      expectedStatus: 403,
+      label: 'Untrusted CORS Origin blocked on /api/tmdb',
+      headers: { Origin: 'https://untrusted.example.com' }
+    },
     { path: '/api/nonexistent-endpoint', expectedStatus: 404, label: 'Unknown /api/* returns 404 JSON' }
   ];
 
   for (const check of apiChecks) {
     try {
-      const apiRes = await fetch(`${baseUrl}${check.path}`);
+      const apiRes = await fetch(`${baseUrl}${check.path}`, {
+        headers: check.headers
+      });
       record(check.label, apiRes.status === check.expectedStatus, `HTTP ${apiRes.status}`);
     } catch (err: any) {
       record(check.label, false, err.message);
@@ -234,6 +254,19 @@ async function run() {
 
       if (item.path === '/movies') moviesP1Cards = extractCardTitles(bot.body);
       if (item.path === '/movies?page=2') moviesP2Cards = extractCardTitles(bot.body);
+      if (item.path === '/top-rated') {
+        const hasMovieLink = /href="\/movie\//i.test(bot.body);
+        const hasTvLink = /href="\/tv\//i.test(bot.body);
+        record(
+          'Balanced /top-rated includes both movies & TV shows',
+          hasMovieLink && hasTvLink,
+          `hasMovieLink=${hasMovieLink}, hasTvLink=${hasTvLink}`
+        );
+      }
+      if (item.path === '/platform/netflix') {
+        const hasRegionScope = bot.body.includes('(US)') || bot.body.includes('region US');
+        record('Platform /platform/netflix declares default watch region US', hasRegionScope, `hasRegionScope=${hasRegionScope}`);
+      }
 
       const ok =
         bot.status === 200 &&

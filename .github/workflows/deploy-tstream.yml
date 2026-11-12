@@ -44,6 +44,7 @@ jobs:
       - name: Build production bundle & prerendered HTML into dist/
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          APP_COMMIT_SHA: ${{ github.sha }}
         run: npm run build
 
       - name: Verify zero private credential leakage in frontend bundle
@@ -66,6 +67,8 @@ jobs:
 
       - name: Verify built dist/server.mjs HTTP & SEO endpoints on isolated port
         shell: bash
+        env:
+          APP_COMMIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           PORT=3099 node dist/server.mjs > /tmp/tstream-ci-server.log 2>&1 &
@@ -79,7 +82,7 @@ jobs:
             sleep 0.5
           done
 
-          npx --no-install tsx scripts/verify-production.ts --base-url=http://127.0.0.1:3099
+          npx --no-install tsx scripts/verify-production.ts --base-url=http://127.0.0.1:3099 --expected-commit="${APP_COMMIT_SHA}"
 
   deploy:
     name: Manual Production Deploy (Approval Gated)
@@ -102,15 +105,14 @@ jobs:
           TSTREAM_PM2_APP_NAME: ${{ vars.TSTREAM_PM2_APP_NAME }}
         run: |
           set -euo pipefail
-          test -n "$VPS_SSH_KEY_B64"
-          test -n "$VPS_SSH_HOST_KEY"
-          test -n "$VPS_HOST"
-          test -n "$VPS_USER"
-          test -n "$VPS_PORT"
-          test -n "$TSTREAM_APP_DIR"
-          test -n "$TSTREAM_PM2_APP_NAME"
+          for var_name in VPS_SSH_KEY_B64 VPS_SSH_HOST_KEY VPS_HOST VPS_USER VPS_PORT TSTREAM_APP_DIR TSTREAM_PM2_APP_NAME; do
+            if [ -z "${!var_name:-}" ]; then
+              echo "ERROR: Missing required GitHub Secret/Variable '$var_name' for production deploy." >&2
+              exit 1
+            fi
+          done
           if ! [[ "$VPS_SSH_HOST_KEY" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))[[:space:]]+[A-Za-z0-9+/=]+ ]]; then
-            echo "ERROR: VPS_SSH_HOST_KEY does not appear to be a valid SSH public host key."
+            echo "ERROR: VPS_SSH_HOST_KEY does not appear to be a valid SSH public host key." >&2
             exit 1
           fi
 
@@ -150,6 +152,7 @@ jobs:
           TSTREAM_PM2_APP_NAME: ${{ vars.TSTREAM_PM2_APP_NAME }}
           TSTREAM_PORT: ${{ vars.TSTREAM_PORT || '3000' }}
           TSTREAM_NODE_BIN: ${{ vars.TSTREAM_NODE_BIN || 'node' }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           ssh \
@@ -161,4 +164,4 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o ConnectTimeout=15 \
             "$VPS_USER@$VPS_HOST" \
-            "APP_DIR='$TSTREAM_APP_DIR' PM2_APP_NAME='$TSTREAM_PM2_APP_NAME' PORT='$TSTREAM_PORT' NODE_BIN='$TSTREAM_NODE_BIN' bash '$TSTREAM_APP_DIR/repo/scripts/update-vps.sh'"
+            "APP_DIR='$TSTREAM_APP_DIR' PM2_APP_NAME='$TSTREAM_PM2_APP_NAME' PORT='$TSTREAM_PORT' NODE_BIN='$TSTREAM_NODE_BIN' DEPLOY_REF='$GITHUB_SHA' bash '$TSTREAM_APP_DIR/repo/scripts/update-vps.sh'"

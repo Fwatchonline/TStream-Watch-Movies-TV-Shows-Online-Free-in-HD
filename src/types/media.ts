@@ -187,6 +187,7 @@ export interface FilterOptions {
   year?: number;
   tagId?: number;
   platform?: string;
+  watchRegion?: string;
   letter?: string;
   country?: string;
   page?: number;

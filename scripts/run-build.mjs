@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { loadBuildEnv } from './loadEnv.mjs';
 
 export function validateBuildArgs(args = process.argv.slice(2)) {
   const joined = args.join(' ');
@@ -22,6 +23,64 @@ export function validateBuildArgs(args = process.argv.slice(2)) {
       `Forbidden extra build argument detected (${joined}). TStream requires a single authoritative dist/ output directory.`
     );
   }
+}
+
+export function verifyNoLeakedSecretsInDist(rootDir = process.cwd(), secretValue = process.env.TMDB_API_KEY || '') {
+  const distDir = path.resolve(rootDir, 'dist');
+  const assetsDir = path.join(distDir, 'assets');
+  const trimmedSecret = String(secretValue || '').trim();
+
+  const scanFile = (filePath) => {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const rel = path.relative(distDir, filePath).replace(/\\/g, '/');
+    if (filePath.endsWith('.js') || filePath.endsWith('.css') || filePath.endsWith('.map')) {
+      if (content.includes('VITE_TMDB_API_KEY')) {
+        throw new Error(`Security violation: VITE_TMDB_API_KEY identifier found in frontend asset dist/${rel}`);
+      }
+    }
+    if (trimmedSecret.length >= 8 && content.includes(trimmedSecret)) {
+      throw new Error(`Security violation: Server credential leaked into generated artifact dist/${rel}`);
+    }
+  };
+
+  if (fs.existsSync(assetsDir)) {
+    for (const name of fs.readdirSync(assetsDir)) {
+      const full = path.join(assetsDir, name);
+      if (fs.statSync(full).isFile()) {
+        scanFile(full);
+      }
+    }
+  }
+
+  for (const rel of [
+    'index.html',
+    '404.html',
+    'prerender-report.json',
+    'sitemap.xml',
+    'sitemap-main.xml',
+    'sitemap-movies.xml',
+    'sitemap-tv.xml'
+  ]) {
+    const full = path.join(distDir, rel);
+    if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+      scanFile(full);
+    }
+  }
+
+  // Spot-check generated prerendered route HTML files recursively (skip dist/assets/aistudio scratch uploads)
+  const walkHtml = dir => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'assets' || entry.name === 'aistudio') continue;
+        walkHtml(full);
+      } else if (entry.isFile() && entry.name.endsWith('.html')) {
+        scanFile(full);
+      }
+    }
+  };
+  walkHtml(distDir);
 }
 
 export function verifyDistArtifacts(rootDir = process.cwd()) {
@@ -74,6 +133,7 @@ function runCommand(bin, args, cwd) {
 
 export function runProductionBuild(rootDir = process.cwd(), extraArgs = process.argv.slice(2)) {
   validateBuildArgs(extraArgs);
+  loadBuildEnv(rootDir);
 
   const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const esbuildLocal = path.resolve(rootDir, 'node_modules/.bin/esbuild');
@@ -108,6 +168,7 @@ export function runProductionBuild(rootDir = process.cwd(), extraArgs = process.
   ]);
 
   const summary = verifyDistArtifacts(rootDir);
+  verifyNoLeakedSecretsInDist(rootDir);
   console.log(
     `[Build Complete] Authoritative dist/ verified (${summary.files.length} root artifacts, ${summary.assetCount} asset files).`
   );

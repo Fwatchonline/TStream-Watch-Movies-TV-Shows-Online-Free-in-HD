@@ -11,10 +11,11 @@ import {
   Sparkles,
   Maximize2
 } from 'lucide-react';
-import { MediaDetail, SubtitleTrack, Episode } from '../types/media';
+import { Episode, MediaDetail, SubtitleTrack } from '../types/media';
 import { searchSubtitles } from '../services/subtitles';
 import { getUserSettings } from '../services/storage';
-import { fetchSeasonEpisodes } from '../services/tmdb';
+import { fetchSeasonEpisodesStrict } from '../services/tmdb';
+import { KeyedFetchCoordinator } from '../utils/retryState';
 import { DirectVideoPlayer } from './DirectVideoPlayer';
 import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
 import { fetchDirectStreams, DirectProviderResult } from '../services/directStreamClient';
@@ -101,9 +102,15 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   const [activeCluster, setActiveCluster] = useState<string>(settings.preferredServer || 'all');
   const [isScanningAlternative, setIsScanningAlternative] = useState<boolean>(false);
 
-  // TV Episodes cache
+  // TV Episodes cache & retryable loader
   const [episodesMap, setEpisodesMap] = useState<Record<number, Episode[]>>({});
-  const [, setLoadingEpisodes] = useState(false);
+  const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const [episodeLoadError, setEpisodeLoadError] = useState<string | null>(null);
+  const [episodeRetryTick, setEpisodeRetryTick] = useState(0);
+  const seasonCoordinatorRef = useRef<KeyedFetchCoordinator<Episode[]> | null>(null);
+  if (!seasonCoordinatorRef.current) {
+    seasonCoordinatorRef.current = new KeyedFetchCoordinator<Episode[]>();
+  }
 
   const isMovie = media.mediaType === 'movie';
   const tvDetail = !isMovie ? (media as any) : null;
@@ -117,36 +124,77 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     setCurrentEpisode(initialEpisode);
   }, [initialSeason, initialEpisode]);
 
-  // Load TV episodes for current season
-  const attemptedSeasonsRef = useRef<Set<string>>(new Set());
+  // Reset coordinator cleanly across media ID transitions or unmount
+  useEffect(() => {
+    const coord = new KeyedFetchCoordinator<Episode[]>();
+    seasonCoordinatorRef.current = coord;
+    setEpisodesMap({});
+    setEpisodeLoadError(null);
+    return () => {
+      coord.destroy();
+    };
+  }, [media.id, media.tmdbId]);
+
+  const handleRetrySeasonEpisodes = useCallback(() => {
+    const coord = seasonCoordinatorRef.current;
+    if (!coord || isMovie) return;
+    const key = `${media.tmdbId || media.id}_${currentSeason}`;
+    coord.clearError(key);
+    setEpisodeLoadError(null);
+    setEpisodeRetryTick(t => t + 1);
+  }, [isMovie, media.id, media.tmdbId, currentSeason]);
+
+  // Load TV episodes for current season with retry safety and stale-response protection
   useEffect(() => {
     if (isMovie) return;
+    const coord = seasonCoordinatorRef.current;
+    if (!coord) return;
+
     let isMounted = true;
-    const cacheKey = `${media.tmdbId || media.id}_${currentSeason}`;
+    const tmdbIdValue = media.tmdbId || media.id;
+    const cacheKey = `${tmdbIdValue}_${currentSeason}`;
+    coord.setActiveKey(cacheKey);
+
+    if (currentSeasonData?.episodes && currentSeasonData.episodes.length > 0) {
+      coord.seed(cacheKey, currentSeasonData.episodes);
+      setEpisodesMap(prev =>
+        prev[currentSeason]?.length ? prev : { ...prev, [currentSeason]: currentSeasonData.episodes! }
+      );
+      setEpisodeLoadError(null);
+      return;
+    }
+
+    if (coord.hasLoaded(cacheKey)) {
+      const cached = coord.getCached(cacheKey) || [];
+      setEpisodesMap(prev => (prev[currentSeason] ? prev : { ...prev, [currentSeason]: cached }));
+      setEpisodeLoadError(null);
+      return;
+    }
+
     async function loadSeason() {
-      if (currentSeasonData?.episodes && currentSeasonData.episodes.length > 0) {
-        setEpisodesMap(prev => (prev[currentSeason]?.length ? prev : { ...prev, [currentSeason]: currentSeasonData.episodes! }));
-        return;
-      }
-      if (attemptedSeasonsRef.current.has(cacheKey)) return;
-      attemptedSeasonsRef.current.add(cacheKey);
       setLoadingEpisodes(true);
-      try {
-        const eps = await fetchSeasonEpisodes(media.tmdbId || media.id, currentSeason);
-        if (isMounted) {
-          setEpisodesMap(prev => ({ ...prev, [currentSeason]: eps }));
+      setEpisodeLoadError(null);
+      const outcome = await coord!.load(cacheKey, () => fetchSeasonEpisodesStrict(tmdbIdValue, currentSeason));
+      if (!isMounted || outcome.aborted) return;
+
+      if (outcome.ok && outcome.data) {
+        setEpisodesMap(prev => ({ ...prev, [currentSeason]: outcome.data! }));
+        if (!outcome.stale) {
+          setEpisodeLoadError(null);
         }
-      } catch (err) {
-        console.warn('Failed to load season episodes:', err);
-      } finally {
-        if (isMounted) setLoadingEpisodes(false);
+      } else if (!outcome.stale) {
+        setEpisodeLoadError(outcome.error || `Failed to load Season ${currentSeason} episodes.`);
+      }
+      if (!outcome.stale) {
+        setLoadingEpisodes(false);
       }
     }
+
     loadSeason();
     return () => {
       isMounted = false;
     };
-  }, [media.id, media.tmdbId, currentSeason, isMovie, currentSeasonData]);
+  }, [media.id, media.tmdbId, currentSeason, isMovie, currentSeasonData, episodeRetryTick]);
 
   const rawEpisodes = episodesMap[currentSeason] || currentSeasonData?.episodes;
   const episodesList: Episode[] =
@@ -160,8 +208,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
           overview: '',
           stillPath: null,
           airDate: '',
-          voteAverage: 8.0,
-          runtime: 45
+          voteAverage: 0,
+          runtime: undefined
         }));
 
   const currentEpisodeData = episodesList.find((e: any) => e.episodeNumber === currentEpisode);
@@ -587,6 +635,19 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {!isMovie && episodeLoadError && (
+              <button
+                type="button"
+                onClick={handleRetrySeasonEpisodes}
+                disabled={loadingEpisodes}
+                className="px-2 py-1 rounded-md text-[10px] font-bold flex items-center gap-1 bg-rose-500/15 border border-rose-500/40 text-rose-300 hover:bg-rose-500/25 transition-colors cursor-pointer disabled:opacity-50"
+                title={episodeLoadError}
+              >
+                <RefreshCw className={`w-3 h-3 ${loadingEpisodes ? 'animate-spin' : ''}`} />
+                <span>{loadingEpisodes ? 'Retrying Episodes...' : 'Retry Episodes'}</span>
+              </button>
+            )}
+
             {/* Ambient Backlight Toggle */}
             <button
               type="button"

@@ -9,6 +9,7 @@ const SETTINGS_KEY = 'tstream_user_settings';
 export interface UserSettings {
   preferredServer: string;
   preferredSubtitleLang: string;
+  preferredWatchRegion: string;
   autoplayNext: boolean;
   theme: 'dark' | 'cinema';
 }
@@ -16,6 +17,7 @@ export interface UserSettings {
 const DEFAULT_SETTINGS: UserSettings = {
   preferredServer: 'vidapi',
   preferredSubtitleLang: 'en',
+  preferredWatchRegion: 'US',
   autoplayNext: true,
   theme: 'dark'
 };

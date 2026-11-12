@@ -6,6 +6,12 @@ import { MediaCard } from '../components/MediaCard';
 import { FilterBar } from '../components/FilterBar';
 import { Pagination } from '../components/Pagination';
 import { PLATFORMS_LIST, getPlatformById } from '../services/platformData';
+import {
+  SUPPORTED_WATCH_REGIONS,
+  DEFAULT_WATCH_REGION,
+  normalizeWatchRegion
+} from '../services/platformConfig';
+import { getUserSettings, updateUserSettings } from '../services/storage';
 import { updateSEO } from '../utils/seo';
 
 interface CatalogPageProps {
@@ -44,6 +50,11 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     const parsedPlatform = params.get('platform') || initialPlatform || (category === 'platform' ? 'netflix' : undefined);
     const parsedLetter = params.get('letter') || initialLetter || (category === 'az' ? 'A' : undefined);
     const parsedCountry = params.get('country') || undefined;
+    const rawRegion =
+      params.get('watchRegion') ||
+      params.get('region') ||
+      (category === 'platform' || parsedPlatform ? getUserSettings()?.preferredWatchRegion : undefined);
+    const parsedWatchRegion = rawRegion ? normalizeWatchRegion(rawRegion) : undefined;
 
     let mediaType: MediaType | 'all' = 'all';
     if (params.get('mediaType')) {
@@ -64,6 +75,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
       platform: parsedPlatform,
       letter: parsedLetter,
       country: parsedCountry,
+      watchRegion: parsedWatchRegion,
       mediaType
     };
   };
@@ -110,12 +122,18 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     if (newFilters.country) {
       params.set('country', newFilters.country);
     }
+    if ((category === 'platform' || newFilters.platform) && newFilters.watchRegion) {
+      const normRegion = normalizeWatchRegion(newFilters.watchRegion);
+      if (normRegion !== DEFAULT_WATCH_REGION) {
+        params.set('watchRegion', normRegion);
+      }
+    }
 
     const queryStr = params.toString();
     const newUrl = queryStr ? `${window.location.pathname}?${queryStr}` : window.location.pathname;
     window.history.replaceState({}, '', newUrl);
     return newUrl;
-  }, []);
+  }, [category]);
 
   // Sync initialGenreId prop if passed
   useEffect(() => {
@@ -134,7 +152,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
       : (category === 'az' || (filters.letter && filters.letter !== 'All'))
       ? 'az'
       : category === 'top-rated'
-      ? 'top-movies'
+      ? 'top-rated'
       : targetType === 'tv'
       ? 'popular-tv'
       : targetType === 'movie'
@@ -143,13 +161,23 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
       ? 'trending'
       : 'movies';
 
-    const result = await fetchCatalog(catParam, filters.page || 1, {
-      ...filters,
-      mediaType: targetType
-    });
+    try {
+      const result = await fetchCatalog(catParam, filters.page || 1, {
+        ...filters,
+        mediaType: targetType,
+        watchRegion:
+          filters.watchRegion ||
+          (category === 'platform' || filters.platform
+            ? normalizeWatchRegion(getUserSettings()?.preferredWatchRegion)
+            : undefined)
+      });
 
-    setData(result);
-    setLoading(false);
+      setData(result);
+    } catch {
+      setData({ page: filters.page || 1, totalPages: 1, totalResults: 0, results: [] });
+    } finally {
+      setLoading(false);
+    }
   }, [category, filters]);
 
   useEffect(() => {
@@ -266,16 +294,30 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     ? getPlatformById(filters.platform || 'netflix')
     : undefined;
 
+  const activeWatchRegion = normalizeWatchRegion(
+    filters.watchRegion || getUserSettings()?.preferredWatchRegion
+  );
+
+  const handleWatchRegionChange = (regionCode: string) => {
+    const normalized = normalizeWatchRegion(regionCode);
+    updateUserSettings({ preferredWatchRegion: normalized });
+    setFilters(prev => ({
+      ...prev,
+      watchRegion: normalized,
+      page: 1
+    }));
+  };
+
   const isAzMode = category === 'az' || Boolean(filters.letter && filters.letter !== 'All');
 
   const getPageTitle = () => {
     if (category === 'platform' || currentPlatform) {
       return {
-        title: currentPlatform ? `${currentPlatform.name} Productions` : 'Studio Catalog',
+        title: currentPlatform ? `${currentPlatform.name} Catalog (${activeWatchRegion})` : 'Streaming Platform Catalog',
         icon: Clapperboard,
         subtitle: currentPlatform
-          ? `Movies and series produced and distributed by ${currentPlatform.name}`
-          : 'Official studio productions and original releases'
+          ? `Movies and series available on ${currentPlatform.name} in ${activeWatchRegion}`
+          : 'Streaming provider availability by region'
       };
     }
 
@@ -339,7 +381,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
                       color: currentPlatform.color === '#151516' ? '#FFFFFF' : currentPlatform.color
                     }}
                   >
-                    Official Studio
+                    Streaming ({activeWatchRegion})
                   </span>
                   <span className="text-xs text-[#A6A6AC] font-medium hidden sm:inline">
                     {currentPlatform.tagline}
@@ -349,24 +391,41 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
                   {currentPlatform.name} Movies & Series
                 </h1>
                 <p className="text-xs sm:text-sm text-[#A6A6AC] mt-1 max-w-2xl">
-                  {currentPlatform.description}
+                  {currentPlatform.description} Watch availability shown for region {activeWatchRegion}.
                 </p>
               </div>
             </div>
 
-            {/* Quick Stats Pill */}
-            <div className="flex items-center gap-2 self-start md:self-center bg-[#232326] px-3.5 py-2 rounded-xl border border-[#3A3A40] text-xs">
-              <Sparkles className="w-4 h-4 text-[#F5C400]" />
-              <span className="text-[#A6A6AC]">Available Titles:</span>
-              <span className="text-white font-bold">{data.totalResults}</span>
+            {/* Watch Region Selector & Quick Stats */}
+            <div className="flex flex-wrap items-center gap-2 self-start md:self-center">
+              <label className="flex items-center gap-2 bg-[#232326] px-3 py-2 rounded-xl border border-[#3A3A40] text-xs">
+                <span className="text-[#A6A6AC]">Region:</span>
+                <select
+                  aria-label="Watch Region"
+                  value={activeWatchRegion}
+                  onChange={(e) => handleWatchRegionChange(e.target.value)}
+                  className="bg-transparent text-white font-bold focus:outline-none cursor-pointer"
+                >
+                  {SUPPORTED_WATCH_REGIONS.map(r => (
+                    <option key={r.code} value={r.code} className="bg-[#232326] text-white">
+                      {r.code} — {r.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex items-center gap-2 bg-[#232326] px-3.5 py-2 rounded-xl border border-[#3A3A40] text-xs">
+                <Sparkles className="w-4 h-4 text-[#F5C400]" />
+                <span className="text-[#A6A6AC]">Available Titles:</span>
+                <span className="text-white font-bold">{data.totalResults}</span>
+              </div>
             </div>
           </div>
 
           {/* Quick Platform Switcher Row */}
           <div className="mt-5 pt-4 border-t border-[#3A3A40]">
             <div className="text-[11px] font-bold uppercase tracking-wider text-[#A6A6AC] mb-2.5 flex items-center justify-between">
-              <span>Switch Streaming Studio:</span>
-              <span className="text-[10px] text-[#888890]">Click to view productions</span>
+              <span>Switch Streaming Platform:</span>
+              <span className="text-[10px] text-[#888890]">Showing {activeWatchRegion} availability</span>
             </div>
             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
               {PLATFORMS_LIST.map(p => {

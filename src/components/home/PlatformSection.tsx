@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ChevronRight, Tv } from 'lucide-react';
-import { PLATFORMS_LIST, PlatformInfo } from '../../services/platformData';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ChevronRight, RefreshCw, Tv } from 'lucide-react';
+import { PLATFORMS_LIST } from '../../services/platformData';
 import { fetchCatalog } from '../../services/tmdb';
+import { DEFAULT_WATCH_REGION, normalizeWatchRegion } from '../../services/platformConfig';
+import { getUserSettings } from '../../services/storage';
+import { KeyedFetchCoordinator } from '../../utils/retryState';
 import { MediaItem } from '../../types/media';
 import { MediaCard } from '../MediaCard';
 import { HomeCarousel } from './HomeCarousel';
@@ -17,60 +20,105 @@ export const PlatformSection: React.FC<PlatformSectionProps> = ({
   onWatchMedia,
   onNavigate
 }) => {
-  // We feature the top global streaming platforms
+  // Feature the top global streaming platforms
   const featuredPlatforms = PLATFORMS_LIST.filter(p =>
     ['netflix', 'disney', 'max', 'hbo', 'apple', 'prime', 'amazon', 'paramount', 'hulu'].includes(p.id)
   );
 
   const [activePlatformId, setActivePlatformId] = useState<string>('netflix');
   const [platformItems, setPlatformItems] = useState<Record<string, MediaItem[]>>({});
+  const [platformErrors, setPlatformErrors] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState<boolean>(false);
-  const attemptedPlatformsRef = useRef<Set<string>>(new Set());
+  const [retryTick, setRetryTick] = useState<number>(0);
 
+  const coordinatorRef = useRef<KeyedFetchCoordinator<MediaItem[]> | null>(null);
+  if (!coordinatorRef.current) {
+    coordinatorRef.current = new KeyedFetchCoordinator<MediaItem[]>();
+  }
+
+  const activeWatchRegion = normalizeWatchRegion(
+    typeof window !== 'undefined' ? getUserSettings()?.preferredWatchRegion : DEFAULT_WATCH_REGION
+  );
+  const activeKey = `${activePlatformId}:${activeWatchRegion}`;
   const currentPlatform = featuredPlatforms.find(p => p.id === activePlatformId) || featuredPlatforms[0];
 
   useEffect(() => {
-    let isMounted = true;
+    const coord = new KeyedFetchCoordinator<MediaItem[]>();
+    coordinatorRef.current = coord;
+    return () => {
+      coord.destroy();
+    };
+  }, []);
 
-    // Avoid refetching platforms already loaded or attempted in this session
-    if (attemptedPlatformsRef.current.has(activePlatformId)) {
+  useEffect(() => {
+    const coord = coordinatorRef.current;
+    if (!coord) return;
+    let isMounted = true;
+    const key = `${activePlatformId}:${activeWatchRegion}`;
+    coord.setActiveKey(key);
+
+    if (coord.hasLoaded(key)) {
+      const cached = coord.getCached(key) || [];
+      setPlatformItems(prev => (prev[key] ? prev : { ...prev, [key]: cached }));
+      setPlatformErrors(prev => ({ ...prev, [key]: null }));
+      setLoading(false);
       return;
     }
 
-    attemptedPlatformsRef.current.add(activePlatformId);
-
     async function loadPlatformItems() {
       setLoading(true);
-      try {
-        const res = await fetchCatalog('platform', 1, {
-          platform: activePlatformId,
-          sortBy: 'popularity.desc'
-        });
+      setPlatformErrors(prev => ({ ...prev, [key]: null }));
 
-        if (isMounted) {
-          setPlatformItems(prev => ({
-            ...prev,
-            [activePlatformId]: (res.results || []).slice(0, 16)
-          }));
+      const outcome = await coord!.load(key, async () => {
+        const res = await fetchCatalog(
+          'platform',
+          1,
+          {
+            platform: activePlatformId,
+            sortBy: 'popularity.desc',
+            watchRegion: activeWatchRegion
+          },
+          { throwOnError: true }
+        );
+        return (res.results || []).slice(0, 16);
+      });
+
+      if (!isMounted || outcome.aborted) return;
+
+      if (outcome.ok && outcome.data) {
+        setPlatformItems(prev => ({
+          ...prev,
+          [key]: outcome.data!
+        }));
+        if (!outcome.stale) {
+          setPlatformErrors(prev => ({ ...prev, [key]: null }));
+          setLoading(false);
         }
-      } catch (err) {
-        console.warn(`Failed loading items for platform ${activePlatformId}:`, err);
-        if (isMounted) {
-          setPlatformItems(prev => ({
-            ...prev,
-            [activePlatformId]: prev[activePlatformId] || []
-          }));
-        }
-      } finally {
-        if (isMounted) setLoading(false);
+      } else if (!outcome.stale) {
+        setPlatformErrors(prev => ({
+          ...prev,
+          [key]: outcome.error || `Unable to load ${currentPlatform.name} catalog right now.`
+        }));
+        setLoading(false);
       }
     }
 
     loadPlatformItems();
-    return () => { isMounted = false; };
-  }, [activePlatformId]);
+    return () => {
+      isMounted = false;
+    };
+  }, [activePlatformId, activeWatchRegion, retryTick, currentPlatform.name]);
 
-  const items = platformItems[activePlatformId] || [];
+  const handleRetryPlatform = useCallback(() => {
+    const coord = coordinatorRef.current;
+    if (!coord || coord.isLoading(activeKey)) return;
+    coord.clearError(activeKey);
+    setPlatformErrors(prev => ({ ...prev, [activeKey]: null }));
+    setRetryTick(t => t + 1);
+  }, [activeKey]);
+
+  const items = platformItems[activeKey] || [];
+  const activeError = platformErrors[activeKey] || null;
 
   return (
     <div className="space-y-4">
@@ -82,7 +130,7 @@ export const PlatformSection: React.FC<PlatformSectionProps> = ({
             Streaming Platforms
           </h2>
           <span className="text-xs text-[#A6A6AC] font-normal hidden sm:inline">
-            · Originals & Exclusives
+            · {activeWatchRegion} Availability
           </span>
         </div>
 
@@ -130,7 +178,7 @@ export const PlatformSection: React.FC<PlatformSectionProps> = ({
 
       {/* Carousel of Titles for Active Platform */}
       <HomeCarousel
-        title={`Top on ${currentPlatform.name}`}
+        title={`Top on ${currentPlatform.name} (${activeWatchRegion})`}
         subtitle={currentPlatform.tagline}
         viewAllLink={{
           label: `All ${currentPlatform.name}`,
@@ -138,16 +186,36 @@ export const PlatformSection: React.FC<PlatformSectionProps> = ({
         }}
       >
         {loading && items.length === 0 ? (
-          // Skeleton Cards
           Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
               className="shrink-0 snap-start w-[135px] sm:w-[165px] aspect-[2/3] rounded-xl bg-[#29292D] animate-pulse border border-[#3A3A40]"
             />
           ))
+        ) : activeError && items.length === 0 ? (
+          <div className="w-full min-h-[180px] rounded-xl bg-[#29292D] border border-[#3A3A40] p-6 flex flex-col items-center justify-center text-center gap-3">
+            <p className="text-xs sm:text-sm text-[#A6A6AC] max-w-md">
+              Unable to load {currentPlatform.name} titles right now.
+            </p>
+            <button
+              type="button"
+              onClick={handleRetryPlatform}
+              disabled={loading}
+              className="px-4 py-2 rounded-lg bg-[#F5C400] hover:bg-[#e0b400] text-black text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              <span>Retry</span>
+            </button>
+          </div>
+        ) : items.length === 0 ? (
+          <div className="w-full min-h-[160px] rounded-xl bg-[#29292D] border border-[#3A3A40] p-6 flex flex-col items-center justify-center text-center">
+            <p className="text-xs sm:text-sm text-[#A6A6AC]">
+              No titles currently listed for {currentPlatform.name} in region {activeWatchRegion}.
+            </p>
+          </div>
         ) : (
           items.map(item => (
-            <div key={item.id || item.tmdbId} className="shrink-0 snap-start w-[135px] sm:w-[165px]">
+            <div key={`${item.mediaType}-${item.id || item.tmdbId}`} className="shrink-0 snap-start w-[135px] sm:w-[165px]">
               <MediaCard
                 item={item}
                 onSelect={onSelectMedia}

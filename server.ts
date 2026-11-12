@@ -142,6 +142,26 @@ function getStaticCacheControl(pathname: string): string {
   return 'no-cache';
 }
 
+function resolveCommitSha(): string {
+  const fromEnv = (process.env.APP_COMMIT_SHA || '').trim();
+  if (fromEnv) return fromEnv;
+
+  for (const relFile of ['.release-commit', 'dist/.release-commit']) {
+    try {
+      const fullPath = path.resolve(process.cwd(), relFile);
+      if (fs.existsSync(fullPath)) {
+        const content = fs.readFileSync(fullPath, 'utf8').trim();
+        if (content) return content;
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
+  return 'local';
+}
+
+const RELEASE_COMMIT_SHA = resolveCommitSha();
+
 const server = http.createServer(async (req, res) => {
   const reqUrl = req.url || '/';
   const parsedUrl = new URL(reqUrl, `http://127.0.0.1:${PORT}`);
@@ -160,6 +180,8 @@ const server = http.createServer(async (req, res) => {
       JSON.stringify({
         status: 'ok',
         service: 'tstream-production',
+        version: RELEASE_COMMIT_SHA,
+        commitSha: RELEASE_COMMIT_SHA,
         uptime: Math.floor(process.uptime()),
         timestamp: new Date().toISOString()
       })
@@ -181,6 +203,8 @@ const server = http.createServer(async (req, res) => {
     pathname === '/api/tmdb' ||
     pathname.startsWith('/api/tmdb/')
   ) {
+    // Strip/overwrite internal verified socket IP header so client spoofing cannot bypass rate limits
+    req.headers['x-tstream-verified-ip'] = req.socket?.remoteAddress || '';
     return honoListener(req, res);
   }
 

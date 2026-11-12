@@ -20,6 +20,8 @@ import {
   parseSeoRoute,
   renderSeoResult,
   fetchServerTagMedia,
+  fetchServerPlatformMedia,
+  fetchServerCatalogPage,
   clearSeoPluginCaches,
   LruTtlCache
 } from '../../../scripts/seoHtmlPlugin';
@@ -27,7 +29,15 @@ import {
   prerenderAndValidateRoute,
   loadDistTemplateOrFail
 } from '../../../scripts/prerender';
-import { validateBuildArgs } from '../../../scripts/run-build.mjs';
+import { validateBuildArgs, verifyNoLeakedSecretsInDist } from '../../../scripts/run-build.mjs';
+import { loadBuildEnv } from '../../../scripts/loadEnv.mjs';
+import { getPlatformConfigById } from '../platformConfig';
+import {
+  buildPlatformDiscoverPlan,
+  computeBalancedTopRatedPlan,
+  mergeBalancedTopRatedSlices
+} from '../platformDiscovery';
+import { fetchCatalog } from '../tmdb';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -310,7 +320,212 @@ async function runTests() {
     'Re-rendering on top of pre-rendered homepage HTML completely replaces nested #root without leaking prior cards'
   );
 
-  console.log('\n--- ALL PHASE 3 SEO & PRERENDER TESTS PASSED SUCCESSFULLY ---');
+  // =======================================================================
+  // PHASE 4 REGRESSIONS: ENV LOADING, BALANCED TOP-RATED & PLATFORM REGION
+  // =======================================================================
+
+  // P4 Task 1A: loadBuildEnv loads symlinked shared/.env before scripts run & preserves CI env vars
+  const envSandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'tstream-env-sandbox-'));
+  const sharedEnvDir = path.join(envSandbox, 'shared');
+  const releaseDir = path.join(envSandbox, 'release');
+  fs.mkdirSync(sharedEnvDir, { recursive: true });
+  fs.mkdirSync(path.join(releaseDir, 'dist', 'assets'), { recursive: true });
+  const fakeSecret = 'FAKE_TMDB_TEST_KEY_7391042';
+  fs.writeFileSync(
+    path.join(sharedEnvDir, '.env'),
+    `TMDB_API_KEY=${fakeSecret}\nAPP_URL=https://tstream.online\n`,
+    'utf8'
+  );
+  fs.symlinkSync(path.join(sharedEnvDir, '.env'), path.join(releaseDir, '.env'));
+
+  const origTmdbEnv = process.env.TMDB_API_KEY;
+  delete process.env.TMDB_API_KEY;
+  const loadedEnvInfo = loadBuildEnv(releaseDir);
+  assert(
+    loadedEnvInfo.loaded && process.env.TMDB_API_KEY === fakeSecret,
+    'Task 1: loadBuildEnv loads symlinked shared/.env before build/prerender'
+  );
+
+  // Preserve pre-existing CI environment variable when override is false
+  process.env.TMDB_API_KEY = 'CI_PRESERVED_VALUE_999';
+  loadBuildEnv(releaseDir);
+  assert(
+    process.env.TMDB_API_KEY === 'CI_PRESERVED_VALUE_999',
+    'Task 1: loadBuildEnv preserves CI-provided env variables without overwriting'
+  );
+  if (origTmdbEnv !== undefined) process.env.TMDB_API_KEY = origTmdbEnv;
+  else delete process.env.TMDB_API_KEY;
+
+  // P4 Task 1B: Direct prerender execution in isolated release loads .env and does NOT leak secret into dist/
+  fs.writeFileSync(path.join(releaseDir, 'dist', 'index.html'), sampleHtmlWithPreExistingCanonical, 'utf8');
+  fs.writeFileSync(path.join(releaseDir, 'dist', 'assets', 'index-mock.js'), 'console.log("TStream bundle");', 'utf8');
+  execFileSync(
+    process.execPath,
+    [path.resolve(process.cwd(), 'node_modules/.bin/tsx'), path.resolve(process.cwd(), 'scripts/prerender.ts')],
+    {
+      cwd: releaseDir,
+      env: { ...process.env, TMDB_API_KEY: undefined },
+      stdio: 'pipe'
+    }
+  );
+  verifyNoLeakedSecretsInDist(releaseDir, fakeSecret);
+  assert(
+    fs.existsSync(path.join(releaseDir, 'dist', 'prerender-report.json')),
+    'Task 1: Direct prerender succeeds using release/.env with zero secret leakage into dist/'
+  );
+
+  // Verify secret-leak guard fails cleanly if fake secret ever enters dist/assets/ or prerender-report.json
+  fs.writeFileSync(path.join(releaseDir, 'dist', 'assets', 'leaked-check.js'), `const k = "${fakeSecret}";`, 'utf8');
+  let caughtAssetLeak = false;
+  try {
+    verifyNoLeakedSecretsInDist(releaseDir, fakeSecret);
+  } catch {
+    caughtAssetLeak = true;
+  }
+  assert(caughtAssetLeak, 'Task 1: verifyNoLeakedSecretsInDist catches leaked secret inside dist/assets/');
+  fs.rmSync(envSandbox, { recursive: true, force: true });
+
+  // P4 Task 4: Balanced Top-Rated (Movie + TV merge + zero-skip deterministic pagination across TMDB page boundary)
+  const planPage4 = computeBalancedTopRatedPlan(4, 6);
+  // Page 4 slice is global indices [18, 24) -> spans TMDB page 1 (items 18..19) and TMDB page 2 (items 0..3)
+  assert(
+    planPage4.tmdbPages.length === 2 &&
+      planPage4.tmdbPages[0] === 1 &&
+      planPage4.tmdbPages[1] === 2 &&
+      planPage4.sliceStartInBuffer === 18 &&
+      planPage4.sliceEndInBuffer === 24,
+    'Task 4: Balanced Top-Rated page 4 bridges TMDB pages 1 & 2 seamlessly with zero skipped items'
+  );
+
+  const mockMoviesPage1 = Array.from({ length: 20 }, (_, i) => ({
+    id: 1000 + i,
+    title: `Top Movie ${i + 1}`,
+    vote_average: Number((9.5 - i * 0.05).toFixed(2)),
+    vote_count: 5000 - i * 10,
+    poster_path: `/m${i}.jpg`,
+    release_date: '2020-01-01'
+  }));
+  const mockMoviesPage2 = Array.from({ length: 20 }, (_, i) => ({
+    id: 2000 + i,
+    title: `Top Movie ${21 + i}`,
+    vote_average: Number((8.5 - i * 0.05).toFixed(2)),
+    vote_count: 3000 - i * 10,
+    poster_path: `/m2_${i}.jpg`,
+    release_date: '2021-01-01'
+  }));
+  const mockTvPage1 = Array.from({ length: 20 }, (_, i) => ({
+    id: 3000 + i,
+    name: `Top Series ${i + 1}`,
+    vote_average: Number((9.6 - i * 0.05).toFixed(2)),
+    vote_count: 4500 - i * 10,
+    poster_path: `/t${i}.jpg`,
+    first_air_date: '2020-02-01'
+  }));
+  const mockTvPage2 = Array.from({ length: 20 }, (_, i) => ({
+    id: 4000 + i,
+    name: `Top Series ${21 + i}`,
+    vote_average: Number((8.6 - i * 0.05).toFixed(2)),
+    vote_count: 2500 - i * 10,
+    poster_path: `/t2_${i}.jpg`,
+    first_air_date: '2021-02-01'
+  }));
+
+  const mockTopRatedFetch = (async (input: string | URL | Request) => {
+    const u = String(input);
+    const pageNum = new URL(u.startsWith('http') ? u : `https://tstream.online${u}`).searchParams.get('page') || '1';
+    if (u.includes('/movie/top_rated')) {
+      return new Response(
+        JSON.stringify({ results: pageNum === '2' ? mockMoviesPage2 : mockMoviesPage1, total_pages: 10, total_results: 200 }),
+        { status: 200 }
+      );
+    }
+    if (u.includes('/tv/top_rated')) {
+      return new Response(
+        JSON.stringify({ results: pageNum === '2' ? mockTvPage2 : mockTvPage1, total_pages: 10, total_results: 200 }),
+        { status: 200 }
+      );
+    }
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+
+  const [srvTopP1, srvTopP2, srvTopP4, cliTopP1, cliTopP4] = await Promise.all([
+    fetchServerCatalogPage('top-rated', 1, mockTopRatedFetch, 'test-key'),
+    fetchServerCatalogPage('top-rated', 2, mockTopRatedFetch, 'test-key'),
+    fetchServerCatalogPage('top-rated', 4, mockTopRatedFetch, 'test-key'),
+    fetchCatalog('top-rated', 1, { mediaType: 'all' }, { fetchImpl: mockTopRatedFetch }),
+    fetchCatalog('top-rated', 4, { mediaType: 'all' }, { fetchImpl: mockTopRatedFetch })
+  ]);
+
+  const p1Ids = new Set(srvTopP1.items.map(i => `${i.mediaType}:${i.id}`));
+  const p2Ids = new Set(srvTopP2.items.map(i => `${i.mediaType}:${i.id}`));
+  const overlapP1P2 = [...p1Ids].filter(id => p2Ids.has(id));
+  const p4Ids = srvTopP4.items.map(i => `${i.mediaType}:${i.id}`);
+
+  assert(
+    srvTopP1.items.some(i => i.mediaType === 'movie') &&
+      srvTopP1.items.some(i => i.mediaType === 'tv') &&
+      srvTopP1.items.length === 12 &&
+      srvTopP2.items.length === 12 &&
+      overlapP1P2.length === 0,
+    'Task 4: Server /top-rated merges genuine Movies + TV Shows with disjoint pages 1 & 2'
+  );
+  assert(
+    p4Ids.includes('movie:1018') &&
+      p4Ids.includes('movie:2000') &&
+      p4Ids.includes('tv:3018') &&
+      p4Ids.includes('tv:4000'),
+    'Task 4: Server /top-rated page 4 includes both end of TMDB p1 (#19) and start of TMDB p2 (#21) without skipping'
+  );
+  assert(
+    cliTopP1.results.length === 12 &&
+      cliTopP1.results[0].id === srvTopP1.items[0].id &&
+      cliTopP4.results.map(r => `${r.mediaType}:${r.id}`).join(',') === p4Ids.join(','),
+    'Task 4: Browser fetchCatalog(top-rated) produces identical balanced movie+tv output to server SSR'
+  );
+
+  // Merge check preserves zero rating instead of fabricating
+  const zeroRatedSlice = mergeBalancedTopRatedSlices(
+    [{ id: 901, mediaType: 'movie', voteAverage: 0, voteCount: 0 }],
+    [{ id: 902, mediaType: 'tv', voteAverage: 0, voteCount: 0 }]
+  );
+  assert(
+    zeroRatedSlice.length === 2 && zeroRatedSlice.every(i => i.voteAverage === 0),
+    'Task 4: Top-rated merge never fabricates missing ratings'
+  );
+
+  // P4 Task 3: Unified Platform Discovery, Watch Region Scoping & Empty vs 503 Separation
+  const netflixCfg = getPlatformConfigById('netflix')!;
+  const usPlan = buildPlatformDiscoverPlan(netflixCfg, { page: 1, watchRegion: 'US', sortBy: 'popularity.desc' });
+  const gbPlan = buildPlatformDiscoverPlan(netflixCfg, { page: 1, watchRegion: 'GB', sortBy: 'popularity.desc' });
+  assert(
+    usPlan.moviePathAndQuery!.includes('with_watch_providers=8') &&
+      usPlan.moviePathAndQuery!.includes('watch_region=US') &&
+      !usPlan.moviePathAndQuery!.includes('with_companies') &&
+      gbPlan.moviePathAndQuery!.includes('watch_region=GB') &&
+      usPlan.cacheKey !== gbPlan.cacheKey,
+    'Task 3: Shared platform discover plan separates watch-provider region scope & cache keys cleanly'
+  );
+
+  // Empty live platform response -> empty results (no fabrication!)
+  const emptyLiveFetch = (async () =>
+    new Response(JSON.stringify({ results: [], total_pages: 1, total_results: 0 }), { status: 200 })) as typeof fetch;
+  const emptyPlatRes = await fetchServerPlatformMedia(netflixCfg, 1, emptyLiveFetch, 'test-key', 'GB');
+  assert(
+    emptyPlatRes.source === 'live' && emptyPlatRes.items.length === 0 && emptyPlatRes.watchRegion === 'GB',
+    'Task 3: Empty live watch-provider response never fabricates unrelated titles and preserves region'
+  );
+
+  // Transient outage -> HTTP 503 error thrown (not confused with empty 200)
+  const fail503Fetch = (async () => new Response('Unavailable', { status: 503 })) as typeof fetch;
+  let platThrew503 = false;
+  try {
+    await fetchServerPlatformMedia(netflixCfg, 1, fail503Fetch, 'test-key', 'US');
+  } catch (err: any) {
+    platThrew503 = err?.status === 503;
+  }
+  assert(platThrew503, 'Task 3: Platform outage raises HTTP 503 instead of empty fabricated catalog');
+
+  console.log('\n--- ALL PHASE 3 & PHASE 4 SEO, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
 }
 
 runTests().catch(err => {

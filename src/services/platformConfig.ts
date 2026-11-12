@@ -1,3 +1,31 @@
+export const DEFAULT_WATCH_REGION = 'US';
+
+export const SUPPORTED_WATCH_REGIONS = [
+  { code: 'US', label: 'United States' },
+  { code: 'GB', label: 'United Kingdom' },
+  { code: 'CA', label: 'Canada' },
+  { code: 'DE', label: 'Germany' },
+  { code: 'FR', label: 'France' },
+  { code: 'AU', label: 'Australia' },
+  { code: 'HR', label: 'Croatia' },
+  { code: 'RS', label: 'Serbia' }
+] as const;
+
+export function normalizeWatchRegion(region?: string | null): string {
+  const clean = (region || '').trim().toUpperCase();
+  if (/^[A-Z]{2}$/.test(clean)) {
+    return clean;
+  }
+  return DEFAULT_WATCH_REGION;
+}
+
+export function getConfiguredWatchRegion(): string {
+  if (typeof process !== 'undefined' && process.env?.DEFAULT_WATCH_REGION) {
+    return normalizeWatchRegion(process.env.DEFAULT_WATCH_REGION);
+  }
+  return DEFAULT_WATCH_REGION;
+}
+
 export interface PlatformMeta {
   id: string;
   name: string;
@@ -6,14 +34,17 @@ export interface PlatformMeta {
   description: string;
   color: string;
   cardBg: string;
+  /** TMDB TV network ID(s), distinct from watch provider streaming availability */
   networkId: string;
+  /** TMDB Watch Provider ID(s) used for streaming availability in watchRegion */
   watchProviderId: string;
+  /** TMDB Production Company ID(s) representing studio ownership/origin */
   companyId: string;
   watchRegion: string;
   /**
-   * Verified local catalog TMDB IDs genuinely belonging to this platform/studio.
-   * Empty array means offline local fallback has no confirmed matches and will
-   * not fabricate unrelated movies/shows (live TMDB discover provides full results).
+   * Verified local flagship original/studio titles in offline catalog.
+   * Empty array ensures unpopulated offline platforms emit noindex instead of fabricating unrelated titles.
+   * These offline records reflect original/studio references rather than real-time streaming availability.
    */
   verifiedCatalogIds: number[];
 }
@@ -33,136 +64,136 @@ export const PLATFORM_CONFIGS: PlatformMeta[] = [
     id: 'netflix',
     name: 'Netflix',
     shortBadge: 'N',
-    tagline: 'Netflix Originals & Global Productions',
+    tagline: 'Netflix Originals & Streaming Catalog',
     description:
-      'Explore movies, binge-worthy series, and documentaries produced and distributed exclusively by Netflix.',
+      'Explore movies and television series streaming on Netflix alongside flagship Netflix Originals.',
     color: '#E50914',
     cardBg: 'bg-black',
     networkId: '213',
     watchProviderId: '8',
     companyId: '178464|19308',
-    watchRegion: 'US',
-    verifiedCatalogIds: [66732, 94605] // Stranger Things, Arcane
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [66732, 94605] // Stranger Things, Arcane (Netflix Originals)
   },
   {
     id: 'apple',
     name: 'Apple TV+',
     shortBadge: 'tv+',
-    tagline: 'Apple Original Films & Television',
+    tagline: 'Apple TV+ Streaming & Apple Originals',
     description:
-      'Award-winning series, captivating dramas, groundbreaking documentaries, and cinema productions by Apple Studios.',
+      'Award-winning series, dramas, and films streaming on Apple TV+ and produced by Apple Studios.',
     color: '#A2AAAD',
     cardBg: 'bg-[#151516]',
     networkId: '2552',
     watchProviderId: '350',
     companyId: '11073|194232',
-    watchRegion: 'US',
-    verifiedCatalogIds: [95396] // Severance
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [95396] // Severance (Apple TV+ Original)
   },
   {
     id: 'max',
     name: 'HBO Max',
     shortBadge: 'MAX',
-    tagline: 'HBO & Warner Bros. Productions',
+    tagline: 'HBO Originals & Max Streaming',
     description:
-      'The standard of television excellence: HBO originals, Warner Bros. Pictures blockbusters, and Max exclusive series.',
+      'Stream HBO original series and Max streaming catalog titles across cinema and television.',
     color: '#9933FF',
     cardBg: 'bg-[#0f0524]',
     networkId: '3186|49',
     watchProviderId: '1899|384',
     companyId: '3268|174',
-    watchRegion: 'US',
-    verifiedCatalogIds: [100088, 94997, 414906, 693134, 155, 671, 672, 673] // The Last of Us, House of the Dragon, The Batman, Dune 2, Dark Knight, Harry Potter
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [100088, 94997] // The Last of Us, House of the Dragon (HBO / Max Originals)
   },
   {
     id: 'prime',
     name: 'Prime Video',
     shortBadge: 'PRIME',
-    tagline: 'Amazon MGM Studios & Originals',
+    tagline: 'Prime Video Streaming & Amazon Originals',
     description:
-      'Epic dramas, superhero sagas, and Hollywood releases produced by Amazon Studios and MGM.',
+      'Stream movies and Amazon MGM Studios series currently available on Prime Video.',
     color: '#00A8E1',
     cardBg: 'bg-[#00050d]',
     networkId: '1024',
     watchProviderId: '9|119',
     companyId: '20580|21',
-    watchRegion: 'US',
-    verifiedCatalogIds: [] // Populated dynamically via live TMDB watch providers/networks
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [] // Populated dynamically via live TMDB watch providers
   },
   {
     id: 'disney',
     name: 'Disney+',
     shortBadge: 'D+',
-    tagline: 'Disney, Marvel Studios & Lucasfilm',
+    tagline: 'Disney+ Streaming, Marvel & Lucasfilm',
     description:
-      'Iconic franchises and new stories from Disney, Marvel Studios, Star Wars, Pixar, and National Geographic.',
+      'Stream Disney, Marvel Studios, Star Wars, Pixar, and National Geographic titles available on Disney+.',
     color: '#113CCF',
     cardBg: 'bg-[#040714]',
     networkId: '2739',
     watchProviderId: '337',
     companyId: '2|420',
-    watchRegion: 'US',
-    verifiedCatalogIds: [24428, 99861, 299536, 299534, 533535, 22, 58] // Avengers, Deadpool & Wolverine, Pirates of the Caribbean
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [24428, 99861, 299536, 299534, 533535, 22, 58] // Disney/Marvel/Pirates flagship catalog
   },
   {
     id: 'peacock',
     name: 'Peacock',
     shortBadge: 'PEA',
-    tagline: 'Peacock Originals & Universal Pictures',
+    tagline: 'Peacock Streaming & NBCUniversal',
     description:
-      'Hit originals, classic comedies, drama series, and blockbuster films produced by Universal Television & Peacock.',
+      'Hit series and films available on Peacock from NBCUniversal television and cinema.',
     color: '#008BE2',
     cardBg: 'bg-black',
     networkId: '3353|6',
     watchProviderId: '386|387',
     companyId: '33',
-    watchRegion: 'US',
-    verifiedCatalogIds: [872585] // Oppenheimer (Universal Pictures)
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [] // Populated dynamically via live TMDB watch providers (avoid claiming studio-only films without regional provider confirmation)
   },
   {
     id: 'paramount',
     name: 'Paramount+',
     shortBadge: 'P+',
-    tagline: 'Paramount Pictures & Showtime Originals',
+    tagline: 'Paramount+ Streaming & Showtime',
     description:
-      'A mountain of entertainment from Paramount Pictures, CBS Studios, Showtime, MTV, and Nickelodeon.',
+      'Stream movies and television series available on Paramount+, CBS, and Showtime.',
     color: '#0064FF',
     cardBg: 'bg-[#00173d]',
     networkId: '4330|16',
     watchProviderId: '531',
     companyId: '4',
-    watchRegion: 'US',
-    verifiedCatalogIds: [157336, 558449] // Interstellar, Gladiator II (Paramount Pictures)
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [] // Populated dynamically via live TMDB watch providers
   },
   {
     id: 'hulu',
     name: 'Hulu',
     shortBadge: 'hulu',
-    tagline: 'Hulu Originals & FX Productions',
+    tagline: 'Hulu Streaming & FX Originals',
     description:
-      'Critically celebrated dramas, comedy gems, and FX television series made exclusively for Hulu.',
+      'Critically celebrated dramas, comedy gems, and FX television series available on Hulu.',
     color: '#1CE783',
     cardBg: 'bg-[#0b1411]',
     networkId: '453|88',
     watchProviderId: '15',
     companyId: '25',
-    watchRegion: 'US',
-    verifiedCatalogIds: [126308] // Shogun (FX / Hulu)
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [126308] // Shogun (FX / Hulu Original)
   },
   {
     id: 'crunchyroll',
     name: 'Crunchyroll',
     shortBadge: 'CR',
-    tagline: 'Crunchyroll Anime & Cinema',
+    tagline: 'Crunchyroll Anime Streaming',
     description:
-      'The premier destination for Japanese animation studios, movies, and worldwide simulcast series.',
+      'Anime series, simulcasts, and animated films currently available on Crunchyroll.',
     color: '#F47521',
     cardBg: 'bg-[#141519]',
     networkId: '1112',
     watchProviderId: '283',
     companyId: '1112',
-    watchRegion: 'US',
-    verifiedCatalogIds: [] // Populated dynamically via live TMDB Crunchyroll provider/network
+    watchRegion: DEFAULT_WATCH_REGION,
+    verifiedCatalogIds: [] // Populated dynamically via live TMDB watch providers
   }
 ];
 

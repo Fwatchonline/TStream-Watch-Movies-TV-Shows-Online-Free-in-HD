@@ -65,7 +65,9 @@ const FILTER_PARAMS = new Set([
   'mediatype',
   'platform',
   'letter',
-  'tag'
+  'tag',
+  'watchregion',
+  'region'
 ]);
 
 const PAGINATED_INDEXABLE_PREFIXES = [
