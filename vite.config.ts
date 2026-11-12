@@ -21,8 +21,13 @@ function streamApiPlugin(): Plugin {
       return;
     }
 
-    // Route new Hono streaming proxy, orchestrator, and subtitle proxy
-    if (url.startsWith('/api/proxy') || url.startsWith('/api/stream/') || url.startsWith('/api/subtitle-proxy')) {
+    // Route Hono streaming proxy, orchestrator, subtitle proxy, and TMDB API proxy
+    if (
+      url.startsWith('/api/proxy') ||
+      url.startsWith('/api/stream/') ||
+      url.startsWith('/api/subtitle-proxy') ||
+      url.startsWith('/api/tmdb')
+    ) {
       return honoListener(req, res);
     }
 

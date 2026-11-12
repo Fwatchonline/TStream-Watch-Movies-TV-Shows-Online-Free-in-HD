@@ -36,54 +36,27 @@ import {
   PIRATES_COLLECTION
 } from '../src/services/catalogData.ts';
 
+import {
+  PLATFORM_CONFIGS,
+  PLATFORM_ALIASES,
+  getPlatformConfigById,
+  type PlatformMeta
+} from '../src/services/platformConfig.ts';
+
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+const PAGE_SIZE = 12;
 
 export function getServerTmdbApiKey(): string {
-  return (process.env.TMDB_API_KEY || process.env.VITE_TMDB_API_KEY || '').trim();
+  return (process.env.TMDB_API_KEY || '').trim();
 }
 
-export const SUPPORTED_PLATFORM_META: Record<string, { name: string; description: string }> = {
-  netflix: {
-    name: 'Netflix',
-    description: 'Explore movies, binge-worthy series, and documentaries produced and distributed by Netflix.'
-  },
-  apple: {
-    name: 'Apple TV+',
-    description: 'Award-winning series, captivating dramas, groundbreaking documentaries, and films by Apple Studios.'
-  },
-  max: {
-    name: 'HBO Max',
-    description: 'HBO originals, Warner Bros. Pictures blockbusters, and Max exclusive series.'
-  },
-  hbo: {
-    name: 'HBO Max',
-    description: 'HBO originals, Warner Bros. Pictures blockbusters, and Max exclusive series.'
-  },
-  prime: {
-    name: 'Prime Video',
-    description: 'Epic dramas, superhero sagas, and Hollywood releases produced by Amazon Studios and MGM.'
-  },
-  disney: {
-    name: 'Disney+',
-    description: 'Iconic franchises and new stories from Disney, Marvel Studios, Star Wars, Pixar, and National Geographic.'
-  },
-  peacock: {
-    name: 'Peacock',
-    description: 'Hit originals, classic comedies, drama series, and blockbuster films by Universal Television & Peacock.'
-  },
-  paramount: {
-    name: 'Paramount+',
-    description: 'Movies and series from Paramount Pictures, CBS Studios, Showtime, MTV, and Nickelodeon.'
-  },
-  hulu: {
-    name: 'Hulu',
-    description: 'Critically celebrated dramas, comedy gems, and FX television series on Hulu.'
-  },
-  crunchyroll: {
-    name: 'Crunchyroll',
-    description: 'Japanese animation studios, anime movies, and worldwide simulcast series.'
-  }
-};
+export const SUPPORTED_PLATFORM_META: Record<string, { name: string; description: string }> = Object.fromEntries([
+  ...PLATFORM_CONFIGS.map(p => [p.id, { name: p.name, description: p.description }]),
+  ...Object.entries(PLATFORM_ALIASES).map(([alias, target]) => {
+    const cfg = getPlatformConfigById(target);
+    return [alias, { name: cfg?.name || target.toUpperCase(), description: cfg?.description || '' }];
+  })
+]);
 
 const KNOWN_POPULAR_PEOPLE: Record<number, { name: string; knownForDepartment: string; bio: string }> = {
   1136406: { name: 'Tom Holland', knownForDepartment: 'Acting', bio: 'Tom Holland is an English actor widely known for starring as Spider-Man in the Marvel Cinematic Universe.' },
@@ -134,6 +107,7 @@ export interface ParsedSeoRoute {
   episode?: number;
   tag?: string;
   platform?: string;
+  isPlatformAlias?: boolean;
   letter?: string;
   personId?: number;
 }
@@ -389,9 +363,15 @@ export function parseSeoRoute(pathname: string): ParsedSeoRoute | null {
 
   // 8. /platform/:platform
   if (parts[0] === 'platform' && parts.length === 2 && parts[1]) {
-    const plat = parts[1].toLowerCase();
-    if (SUPPORTED_PLATFORM_META[plat]) {
-      return { type: 'platform', isMatched: true, platform: plat };
+    const rawPlat = parts[1].toLowerCase();
+    const cfg = getPlatformConfigById(rawPlat);
+    if (cfg && (cfg.id === rawPlat || PLATFORM_ALIASES[rawPlat])) {
+      return {
+        type: 'platform',
+        isMatched: true,
+        platform: cfg.id,
+        isPlatformAlias: Boolean(PLATFORM_ALIASES[rawPlat])
+      };
     }
     return { type: 'notfound', isMatched: false };
   }
@@ -469,11 +449,32 @@ function setJsonLd(html: string, schema: Record<string, any>): string {
 }
 
 function setRootContent(html: string, bodyContent: string): string {
-  const regex = /<div\s+id=["']root["'][^>]*>[\s\S]*?<\/div>/i;
+  const openRegex = /<div\s+id=["']root["'][^>]*>/i;
+  const openMatch = openRegex.exec(html);
+  if (!openMatch) return html;
+
   const replacement = `<div id="root">\n${bodyContent}\n    </div>`;
-  if (regex.test(html)) {
-    return html.replace(regex, replacement);
+  const startIdx = openMatch.index;
+  const contentStart = startIdx + openMatch[0].length;
+
+  const divTagRegex = /<\/?div\b[^>]*>/gi;
+  divTagRegex.lastIndex = contentStart;
+  let depth = 1;
+  let match: RegExpExecArray | null;
+
+  while ((match = divTagRegex.exec(html)) !== null) {
+    const tag = match[0].toLowerCase();
+    if (tag.startsWith('</div')) {
+      depth -= 1;
+      if (depth === 0) {
+        const endIdx = match.index + match[0].length;
+        return `${html.slice(0, startIdx)}${replacement}${html.slice(endIdx)}`;
+      }
+    } else if (!tag.endsWith('/>')) {
+      depth += 1;
+    }
   }
+
   return html;
 }
 
@@ -483,15 +484,110 @@ function make503Error(msg: string) {
   return err;
 }
 
-const serverMediaCache = new Map<string, { data: any; expiry: number }>();
-const serverEpisodeCache = new Map<string, { data: any; expiry: number }>();
-const serverTagCache = new Map<string, { data: { valid: boolean; items: any[] }; expiry: number }>();
-const serverPersonCache = new Map<string, { data: any; expiry: number }>();
+interface CacheRecord<T> {
+  data: T;
+  freshUntil: number;
+  staleUntil: number;
+}
+
+export class LruTtlCache<T> {
+  private map = new Map<string, CacheRecord<T>>();
+  private maxEntries: number;
+  private freshTtlMs: number;
+  private staleTtlMs: number;
+
+  constructor(maxEntries = 400, freshTtlMs = 5 * 60 * 1000, staleTtlMs = 60 * 60 * 1000) {
+    this.maxEntries = maxEntries;
+    this.freshTtlMs = freshTtlMs;
+    this.staleTtlMs = staleTtlMs;
+  }
+
+  getFresh(key: string, now = Date.now()): T | undefined {
+    const rec = this.map.get(key);
+    if (!rec) return undefined;
+    if (rec.freshUntil > now) {
+      // Promote for LRU
+      this.map.delete(key);
+      this.map.set(key, rec);
+      return rec.data;
+    }
+    if (rec.staleUntil <= now) {
+      this.map.delete(key);
+    }
+    return undefined;
+  }
+
+  getStale(key: string, now = Date.now()): T | undefined {
+    const rec = this.map.get(key);
+    if (!rec) return undefined;
+    if (rec.staleUntil > now) {
+      return rec.data;
+    }
+    this.map.delete(key);
+    return undefined;
+  }
+
+  set(key: string, data: T, now = Date.now()): void {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    }
+    this.map.set(key, {
+      data,
+      freshUntil: now + this.freshTtlMs,
+      staleUntil: now + this.staleTtlMs
+    });
+    while (this.map.size > this.maxEntries) {
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) {
+        this.map.delete(oldest);
+      } else {
+        break;
+      }
+    }
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+}
+
+const serverMediaCache = new LruTtlCache<any>(400, 15 * 60 * 1000, 6 * 60 * 60 * 1000);
+const serverEpisodeCache = new LruTtlCache<any>(400, 15 * 60 * 1000, 6 * 60 * 60 * 1000);
+const serverTagCache = new LruTtlCache<{ valid: boolean; items: any[] }>(250, 10 * 60 * 1000, 2 * 60 * 60 * 1000);
+const serverPersonCache = new LruTtlCache<any>(250, 15 * 60 * 1000, 6 * 60 * 60 * 1000);
+const serverCatalogCache = new LruTtlCache<{ items: any[]; totalPages: number }>(250, 5 * 60 * 1000, 60 * 60 * 1000);
+const serverPlatformCache = new LruTtlCache<{ items: any[]; totalPages: number }>(250, 5 * 60 * 1000, 60 * 60 * 1000);
+const inFlightLookups = new Map<string, Promise<any>>();
+
+export function clearSeoPluginCaches(): void {
+  serverMediaCache.clear();
+  serverEpisodeCache.clear();
+  serverTagCache.clear();
+  serverPersonCache.clear();
+  serverCatalogCache.clear();
+  serverPlatformCache.clear();
+  inFlightLookups.clear();
+}
+
+function coalesceLookup<T>(key: string, enabled: boolean, work: () => Promise<T>): Promise<T> {
+  if (!enabled) return work();
+  const existing = inFlightLookups.get(key);
+  if (existing) return existing as Promise<T>;
+  const promise = work().finally(() => {
+    inFlightLookups.delete(key);
+  });
+  inFlightLookups.set(key, promise);
+  return promise;
+}
 
 /**
  * Fetches media details: checks local catalog data first (with strict id + mediaType matching),
  * then queries live TMDB when configured.
- * Throws 503 error if TMDB returns 429/5xx/network timeout. Returns null if 404.
+ * Throws 503 error if TMDB returns 429/5xx/network timeout and no stale cache exists. Returns null if 404.
  */
 export async function fetchServerMedia(
   mediaType: 'movie' | 'tv',
@@ -504,12 +600,9 @@ export async function fetchServerMedia(
 
   const useCache = fetchImpl === fetch;
   const cacheKey = `${mediaType}:${id}`;
-  const now = Date.now();
   if (useCache) {
-    const cached = serverMediaCache.get(cacheKey);
-    if (cached && cached.expiry > now) {
-      return cached.data;
-    }
+    const fresh = serverMediaCache.getFresh(cacheKey);
+    if (fresh) return fresh;
   }
 
   // 1. Check local catalog first (strictly matching id AND mediaType)
@@ -529,7 +622,7 @@ export async function fetchServerMedia(
         posterPath: localMovie.posterPath || '',
         genres: (localMovie.genres || []).map((g: any) => (typeof g === 'string' ? g : g?.name || ''))
       };
-      if (useCache) serverMediaCache.set(cacheKey, { data, expiry: now + 3600000 });
+      if (useCache) serverMediaCache.set(cacheKey, data);
       return data;
     }
 
@@ -550,7 +643,7 @@ export async function fetchServerMedia(
           posterPath: part.posterPath || '',
           genres: (part.genres || []).map((g: any) => (typeof g === 'string' ? g : g?.name || ''))
         };
-        if (useCache) serverMediaCache.set(cacheKey, { data, expiry: now + 3600000 });
+        if (useCache) serverMediaCache.set(cacheKey, data);
         return data;
       }
     }
@@ -573,7 +666,7 @@ export async function fetchServerMedia(
         numberOfSeasons: localShow.numberOfSeasons || (localShow.seasons ? localShow.seasons.length : undefined),
         seasons: localShow.seasons || []
       };
-      if (useCache) serverMediaCache.set(cacheKey, { data, expiry: now + 3600000 });
+      if (useCache) serverMediaCache.set(cacheKey, data);
       return data;
     }
   }
@@ -596,7 +689,7 @@ export async function fetchServerMedia(
       genres: (catalogItem.genres || []).map((g: any) => (typeof g === 'string' ? g : g?.name || '')),
       numberOfSeasons: (catalogItem as any).numberOfSeasons
     };
-    if (useCache) serverMediaCache.set(cacheKey, { data, expiry: now + 3600000 });
+    if (useCache) serverMediaCache.set(cacheKey, data);
     return data;
   }
 
@@ -606,60 +699,70 @@ export async function fetchServerMedia(
     return null;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
-  try {
-    const res = await fetchImpl(`${TMDB_BASE_URL}/${mediaType}/${id}?api_key=${effectiveKey}`, {
-      signal: controller.signal
-    });
+  return coalesceLookup(`media:${cacheKey}`, useCache, async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+      const res = await fetchImpl(`${TMDB_BASE_URL}/${mediaType}/${id}?api_key=${effectiveKey}`, {
+        signal: controller.signal
+      });
 
-    if (res.status === 404) {
-      return null;
+      if (res.status === 404) {
+        return null;
+      }
+
+      if (res.status === 429 || res.status >= 500) {
+        if (useCache) {
+          const stale = serverMediaCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
+        throw make503Error(`TMDB upstream returned HTTP ${res.status}`);
+      }
+
+      if (!res.ok) {
+        return null;
+      }
+
+      const json = await res.json();
+      const rawTitle = json.title || json.name || '';
+      if (!rawTitle) return null;
+
+      const data = {
+        id: json.id || id,
+        mediaType,
+        title: rawTitle,
+        name: rawTitle,
+        overview: json.overview || '',
+        releaseDate: json.release_date || json.first_air_date || '',
+        firstAirDate: json.first_air_date || '',
+        voteAverage: Number(json.vote_average || 0),
+        voteCount: Number(json.vote_count || 0),
+        backdropPath: json.backdrop_path ? `https://image.tmdb.org/t/p/w1280${json.backdrop_path}` : '',
+        posterPath: json.poster_path ? `https://image.tmdb.org/t/p/w500${json.poster_path}` : '',
+        genres: (json.genres || []).map((g: any) => g.name || '').filter(Boolean),
+        numberOfSeasons: json.number_of_seasons,
+        seasons: Array.isArray(json.seasons)
+          ? json.seasons.map((s: any) => ({
+              seasonNumber: s.season_number,
+              episodeCount: s.episode_count,
+              name: s.name,
+              airDate: s.air_date
+            }))
+          : []
+      };
+      if (useCache) serverMediaCache.set(cacheKey, data);
+      return data;
+    } catch (err: any) {
+      if (useCache) {
+        const stale = serverMediaCache.getStale(cacheKey);
+        if (stale) return stale;
+      }
+      if (err?.status === 503) throw err;
+      throw make503Error(err?.name === 'AbortError' ? 'TMDB connection timed out' : 'TMDB upstream unavailable');
+    } finally {
+      clearTimeout(timeout);
     }
-
-    if (res.status === 429 || res.status >= 500) {
-      throw make503Error(`TMDB upstream returned HTTP ${res.status}`);
-    }
-
-    if (!res.ok) {
-      return null;
-    }
-
-    const json = await res.json();
-    const rawTitle = json.title || json.name || '';
-    if (!rawTitle) return null;
-
-    const data = {
-      id: json.id || id,
-      mediaType,
-      title: rawTitle,
-      name: rawTitle,
-      overview: json.overview || '',
-      releaseDate: json.release_date || json.first_air_date || '',
-      firstAirDate: json.first_air_date || '',
-      voteAverage: Number(json.vote_average || 0),
-      voteCount: Number(json.vote_count || 0),
-      backdropPath: json.backdrop_path ? `https://image.tmdb.org/t/p/w1280${json.backdrop_path}` : '',
-      posterPath: json.poster_path ? `https://image.tmdb.org/t/p/w500${json.poster_path}` : '',
-      genres: (json.genres || []).map((g: any) => g.name || '').filter(Boolean),
-      numberOfSeasons: json.number_of_seasons,
-      seasons: Array.isArray(json.seasons)
-        ? json.seasons.map((s: any) => ({
-            seasonNumber: s.season_number,
-            episodeCount: s.episode_count,
-            name: s.name,
-            airDate: s.air_date
-          }))
-        : []
-    };
-    if (useCache) serverMediaCache.set(cacheKey, { data, expiry: now + 3600000 });
-    return data;
-  } catch (err: any) {
-    if (err?.status === 503) throw err;
-    throw make503Error(err?.name === 'AbortError' ? 'TMDB connection timed out' : 'TMDB upstream unavailable');
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 }
 
 /**
@@ -703,27 +806,53 @@ export async function fetchServerEpisode(
 
   const useCache = fetchImpl === fetch;
   const cacheKey = `${show.id}:${season}:${episode}`;
-  const now = Date.now();
   if (useCache) {
-    const cached = serverEpisodeCache.get(cacheKey);
-    if (cached && cached.expiry > now) {
-      return cached.data;
-    }
+    const fresh = serverEpisodeCache.getFresh(cacheKey);
+    if (fresh) return fresh;
   }
 
   const effectiveKey = tmdbApiKey || (fetchImpl !== fetch ? 'test-key' : '');
   if (effectiveKey) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-    try {
-      const res = await fetchImpl(
-        `${TMDB_BASE_URL}/tv/${show.id}/season/${season}/episode/${episode}?api_key=${effectiveKey}`,
-        { signal: controller.signal }
-      );
-      if (res.status === 404) {
-        return null;
-      }
-      if (res.status === 429 || res.status >= 500) {
+    return coalesceLookup(`episode:${cacheKey}`, useCache, async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2500);
+      try {
+        const res = await fetchImpl(
+          `${TMDB_BASE_URL}/tv/${show.id}/season/${season}/episode/${episode}?api_key=${effectiveKey}`,
+          { signal: controller.signal }
+        );
+        if (res.status === 404) {
+          return null;
+        }
+        if (res.status === 429 || res.status >= 500) {
+          if (useCache) {
+            const stale = serverEpisodeCache.getStale(cacheKey);
+            if (stale) return stale;
+          }
+          if (seasonObj && episode <= (seasonObj.episodeCount || 1)) {
+            return {
+              name: `Episode ${episode}`,
+              overview: show.overview || '',
+              airDate: seasonObj.airDate || ''
+            };
+          }
+          throw make503Error(`TMDB episode lookup returned HTTP ${res.status}`);
+        }
+        if (res.ok) {
+          const epJson = await res.json();
+          const data = {
+            name: epJson.name || `Episode ${episode}`,
+            overview: epJson.overview || show.overview || '',
+            airDate: epJson.air_date || ''
+          };
+          if (useCache) serverEpisodeCache.set(cacheKey, data);
+          return data;
+        }
+      } catch (err: any) {
+        if (useCache) {
+          const stale = serverEpisodeCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
         if (seasonObj && episode <= (seasonObj.episodeCount || 1)) {
           return {
             name: `Episode ${episode}`,
@@ -731,31 +860,13 @@ export async function fetchServerEpisode(
             airDate: seasonObj.airDate || ''
           };
         }
-        throw make503Error(`TMDB episode lookup returned HTTP ${res.status}`);
+        if (err?.status === 503) throw err;
+        throw make503Error('TMDB episode lookup failed');
+      } finally {
+        clearTimeout(timeout);
       }
-      if (res.ok) {
-        const epJson = await res.json();
-        const data = {
-          name: epJson.name || `Episode ${episode}`,
-          overview: epJson.overview || show.overview || '',
-          airDate: epJson.air_date || ''
-        };
-        if (useCache) serverEpisodeCache.set(cacheKey, { data, expiry: now + 3600000 });
-        return data;
-      }
-    } catch (err: any) {
-      if (seasonObj && episode <= (seasonObj.episodeCount || 1)) {
-        return {
-          name: `Episode ${episode}`,
-          overview: show.overview || '',
-          airDate: seasonObj.airDate || ''
-        };
-      }
-      if (err?.status === 503) throw err;
-      throw make503Error('TMDB episode lookup failed');
-    } finally {
-      clearTimeout(timeout);
-    }
+      return null;
+    });
   }
 
   // Offline local validation when TMDB key is not configured
@@ -791,12 +902,9 @@ export async function fetchServerTagMedia(
   }
 
   const useCache = fetchImpl === fetch;
-  const now = Date.now();
   if (useCache) {
-    const cached = serverTagCache.get(cleanTag);
-    if (cached && cached.expiry > now) {
-      return cached.data;
-    }
+    const fresh = serverTagCache.getFresh(cleanTag);
+    if (fresh) return fresh;
   }
 
   const localMatches = getMatchingCatalogForTag(cleanTag);
@@ -808,101 +916,349 @@ export async function fetchServerTagMedia(
       valid: isKnownPopularTag || localMatches.length > 0,
       items: localMatches
     };
-    if (useCache) serverTagCache.set(cleanTag, { data: result, expiry: now + 3600000 });
+    if (useCache) serverTagCache.set(cleanTag, result);
     return result;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2000);
-  try {
-    const kwRes = await fetchImpl(
-      `${TMDB_BASE_URL}/search/keyword?api_key=${effectiveKey}&query=${encodeURIComponent(cleanTag)}&page=1`,
-      { signal: controller.signal }
-    );
+  return coalesceLookup(`tag:${cleanTag}`, useCache, async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    try {
+      const kwRes = await fetchImpl(
+        `${TMDB_BASE_URL}/search/keyword?api_key=${effectiveKey}&query=${encodeURIComponent(cleanTag)}&page=1`,
+        { signal: controller.signal }
+      );
 
-    if (kwRes.status === 429 || kwRes.status >= 500) {
+      if (kwRes.status === 429 || kwRes.status >= 500) {
+        if (useCache) {
+          const stale = serverTagCache.getStale(cleanTag);
+          if (stale) return stale;
+        }
+        if (localMatches.length > 0 || isKnownPopularTag) {
+          return { valid: true, items: localMatches };
+        }
+        throw make503Error(`TMDB keyword lookup failed with HTTP ${kwRes.status}`);
+      }
+
+      if (kwRes.ok) {
+        const kwData = await kwRes.json();
+        const keywords = Array.isArray(kwData?.results) ? kwData.results : [];
+        const exactKw =
+          keywords.find((k: any) => String(k.name || '').toLowerCase() === cleanTag) ||
+          keywords[0];
+
+        if (exactKw && exactKw.id) {
+          const [movRes, tvRes] = await Promise.all([
+            fetchImpl(
+              `${TMDB_BASE_URL}/discover/movie?api_key=${effectiveKey}&with_keywords=${exactKw.id}&sort_by=popularity.desc&page=1`,
+              { signal: controller.signal }
+            ).catch(() => null),
+            fetchImpl(
+              `${TMDB_BASE_URL}/discover/tv?api_key=${effectiveKey}&with_keywords=${exactKw.id}&sort_by=popularity.desc&page=1`,
+              { signal: controller.signal }
+            ).catch(() => null)
+          ]);
+
+          const mergedMap = new Map<string, any>();
+          for (const item of localMatches) {
+            mergedMap.set(`${item.mediaType || 'movie'}:${item.id}`, item);
+          }
+
+          if (movRes && movRes.ok) {
+            const movJson = await movRes.json();
+            for (const r of movJson.results || []) {
+              if (!r.id || (!r.title && !r.name)) continue;
+              mergedMap.set(`movie:${r.id}`, {
+                id: r.id,
+                mediaType: 'movie',
+                title: r.title || r.name,
+                releaseDate: r.release_date || '',
+                voteAverage: r.vote_average || 0,
+                posterPath: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : ''
+              });
+            }
+          }
+
+          if (tvRes && tvRes.ok) {
+            const tvJson = await tvRes.json();
+            for (const r of tvJson.results || []) {
+              if (!r.id || (!r.name && !r.title)) continue;
+              mergedMap.set(`tv:${r.id}`, {
+                id: r.id,
+                mediaType: 'tv',
+                title: r.name || r.title,
+                name: r.name || r.title,
+                releaseDate: r.first_air_date || '',
+                voteAverage: r.vote_average || 0,
+                posterPath: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : ''
+              });
+            }
+          }
+
+          const result = { valid: true, items: Array.from(mergedMap.values()) };
+          if (useCache) serverTagCache.set(cleanTag, result);
+          return result;
+        }
+      }
+
+      const fallback = {
+        valid: isKnownPopularTag || localMatches.length > 0,
+        items: localMatches
+      };
+      if (useCache) serverTagCache.set(cleanTag, fallback);
+      return fallback;
+    } catch (err: any) {
+      if (useCache) {
+        const stale = serverTagCache.getStale(cleanTag);
+        if (stale) return stale;
+      }
       if (localMatches.length > 0 || isKnownPopularTag) {
         return { valid: true, items: localMatches };
       }
-      throw make503Error(`TMDB keyword lookup failed with HTTP ${kwRes.status}`);
+      if (err?.status === 503) throw err;
+      throw make503Error('TMDB tag discovery unavailable');
+    } finally {
+      clearTimeout(timeout);
     }
+  });
+}
 
-    if (kwRes.ok) {
-      const kwData = await kwRes.json();
-      const keywords = Array.isArray(kwData?.results) ? kwData.results : [];
-      const exactKw =
-        keywords.find((k: any) => String(k.name || '').toLowerCase() === cleanTag) ||
-        keywords[0];
+function normalizeServerTmdbListItem(r: any, forcedType?: 'movie' | 'tv') {
+  const mType: 'movie' | 'tv' = forcedType || (r.media_type === 'tv' || (!r.title && r.first_air_date) ? 'tv' : 'movie');
+  const title = r.title || r.name || '';
+  return {
+    id: r.id,
+    mediaType: mType,
+    title,
+    name: title,
+    releaseDate: r.release_date || r.first_air_date || '',
+    firstAirDate: mType === 'tv' ? r.first_air_date || '' : undefined,
+    voteAverage: Number(r.vote_average || 0),
+    voteCount: Number(r.vote_count || 0),
+    popularity: Number(r.popularity || 0),
+    posterPath: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : ''
+  };
+}
 
-      if (exactKw && exactKw.id) {
-        const [movRes, tvRes] = await Promise.all([
-          fetchImpl(
-            `${TMDB_BASE_URL}/discover/movie?api_key=${effectiveKey}&with_keywords=${exactKw.id}&sort_by=popularity.desc&page=1`,
-            { signal: controller.signal }
-          ).catch(() => null),
-          fetchImpl(
-            `${TMDB_BASE_URL}/discover/tv?api_key=${effectiveKey}&with_keywords=${exactKw.id}&sort_by=popularity.desc&page=1`,
-            { signal: controller.signal }
-          ).catch(() => null)
-        ]);
+/**
+ * Fetches genuine platform-specific movies & series (via TMDB watch providers/networks or verified catalog IDs).
+ * Never fabricates unrelated movies/series when platform data is empty or unavailable.
+ */
+export async function fetchServerPlatformMedia(
+  platConfig: PlatformMeta,
+  page = 1,
+  fetchImpl: typeof fetch = fetch,
+  tmdbApiKey: string = getServerTmdbApiKey()
+): Promise<{ items: any[]; totalPages: number }> {
+  const verifiedSet = new Set(platConfig.verifiedCatalogIds || []);
+  const localVerified = getAllCatalogMedia().filter(item => verifiedSet.has(item.id));
+  const useCache = fetchImpl === fetch;
+  const cacheKey = `platform:${platConfig.id}:${page}`;
 
-        const mergedMap = new Map<string, any>();
-        for (const item of localMatches) {
-          mergedMap.set(`${item.mediaType || 'movie'}:${item.id}`, item);
-        }
-
-        if (movRes && movRes.ok) {
-          const movJson = await movRes.json();
-          for (const r of movJson.results || []) {
-            if (!r.id || (!r.title && !r.name)) continue;
-            mergedMap.set(`movie:${r.id}`, {
-              id: r.id,
-              mediaType: 'movie',
-              title: r.title || r.name,
-              releaseDate: r.release_date || '',
-              voteAverage: r.vote_average || 0,
-              posterPath: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : ''
-            });
-          }
-        }
-
-        if (tvRes && tvRes.ok) {
-          const tvJson = await tvRes.json();
-          for (const r of tvJson.results || []) {
-            if (!r.id || (!r.name && !r.title)) continue;
-            mergedMap.set(`tv:${r.id}`, {
-              id: r.id,
-              mediaType: 'tv',
-              title: r.name || r.title,
-              name: r.name || r.title,
-              releaseDate: r.first_air_date || '',
-              voteAverage: r.vote_average || 0,
-              posterPath: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : ''
-            });
-          }
-        }
-
-        const result = { valid: true, items: Array.from(mergedMap.values()) };
-        if (useCache) serverTagCache.set(cleanTag, { data: result, expiry: now + 3600000 });
-        return result;
-      }
-    }
-
-    const fallback = {
-      valid: isKnownPopularTag || localMatches.length > 0,
-      items: localMatches
-    };
-    if (useCache) serverTagCache.set(cleanTag, { data: fallback, expiry: now + 3600000 });
-    return fallback;
-  } catch (err: any) {
-    if (localMatches.length > 0 || isKnownPopularTag) {
-      return { valid: true, items: localMatches };
-    }
-    if (err?.status === 503) throw err;
-    throw make503Error('TMDB tag discovery unavailable');
-  } finally {
-    clearTimeout(timeout);
+  if (useCache) {
+    const fresh = serverPlatformCache.getFresh(cacheKey);
+    if (fresh) return fresh;
   }
+
+  const effectiveKey = tmdbApiKey || (fetchImpl !== fetch ? 'test-key' : '');
+  if (!effectiveKey) {
+    const totalPages = Math.max(1, Math.ceil(localVerified.length / PAGE_SIZE));
+    const start = (page - 1) * PAGE_SIZE;
+    const result = {
+      items: start >= localVerified.length ? [] : localVerified.slice(start, start + PAGE_SIZE),
+      totalPages
+    };
+    if (useCache) serverPlatformCache.set(cacheKey, result);
+    return result;
+  }
+
+  return coalesceLookup(cacheKey, useCache, async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+      const watchRegion = encodeURIComponent(platConfig.watchRegion || 'US');
+      const watchProviderId = encodeURIComponent(platConfig.watchProviderId);
+      const networkId = encodeURIComponent(platConfig.networkId);
+      const [tvRes, movRes] = await Promise.all([
+        fetchImpl(
+          `${TMDB_BASE_URL}/discover/tv?api_key=${effectiveKey}&with_watch_providers=${watchProviderId}&watch_region=${watchRegion}&with_networks=${networkId}&sort_by=popularity.desc&page=${page}`,
+          { signal: controller.signal }
+        ),
+        fetchImpl(
+          `${TMDB_BASE_URL}/discover/movie?api_key=${effectiveKey}&with_watch_providers=${watchProviderId}&watch_region=${watchRegion}&sort_by=popularity.desc&page=${page}`,
+          { signal: controller.signal }
+        )
+      ]);
+
+      const tvTransientFail = tvRes.status === 429 || tvRes.status >= 500;
+      const movTransientFail = movRes.status === 429 || movRes.status >= 500;
+
+      if (tvTransientFail && movTransientFail) {
+        if (useCache) {
+          const stale = serverPlatformCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
+        if (localVerified.length > 0 && page === 1) {
+          return { items: localVerified.slice(0, PAGE_SIZE), totalPages: Math.max(1, Math.ceil(localVerified.length / PAGE_SIZE)) };
+        }
+        throw make503Error(`TMDB platform discovery returned HTTP ${tvRes.status}/${movRes.status}`);
+      }
+
+      const merged = new Map<string, any>();
+      let maxTotalPages = 1;
+
+      if (tvRes.ok) {
+        const tvJson = await tvRes.json();
+        maxTotalPages = Math.max(maxTotalPages, Math.min(Number(tvJson.total_pages || 1), 500));
+        for (const r of tvJson.results || []) {
+          if (r?.id && (r.name || r.title)) {
+            merged.set(`tv:${r.id}`, normalizeServerTmdbListItem(r, 'tv'));
+          }
+        }
+      }
+
+      if (movRes.ok) {
+        const movJson = await movRes.json();
+        maxTotalPages = Math.max(maxTotalPages, Math.min(Number(movJson.total_pages || 1), 500));
+        for (const r of movJson.results || []) {
+          if (r?.id && (r.title || r.name)) {
+            merged.set(`movie:${r.id}`, normalizeServerTmdbListItem(r, 'movie'));
+          }
+        }
+      }
+
+      if (page === 1 && merged.size === 0 && localVerified.length > 0) {
+        for (const item of localVerified) {
+          merged.set(`${item.mediaType || 'movie'}:${item.id}`, item);
+        }
+      }
+
+      const items = Array.from(merged.values())
+        .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
+        .slice(0, PAGE_SIZE);
+
+      const result = {
+        items,
+        totalPages: items.length === 0 && page === 1 ? 1 : maxTotalPages
+      };
+      if (useCache) serverPlatformCache.set(cacheKey, result);
+      return result;
+    } catch (err: any) {
+      if (useCache) {
+        const stale = serverPlatformCache.getStale(cacheKey);
+        if (stale) return stale;
+      }
+      if (localVerified.length > 0 && page === 1) {
+        return { items: localVerified.slice(0, PAGE_SIZE), totalPages: Math.max(1, Math.ceil(localVerified.length / PAGE_SIZE)) };
+      }
+      if (err?.status === 503) throw err;
+      throw make503Error('TMDB platform discovery unavailable');
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+}
+
+/**
+ * Genuine server-side catalog pagination for /movies, /tv-shows, /trending, /top-rated.
+ */
+export async function fetchServerCatalogPage(
+  routeType: 'movies' | 'tv-shows' | 'trending' | 'top-rated',
+  page = 1,
+  fetchImpl: typeof fetch = fetch,
+  tmdbApiKey: string = getServerTmdbApiKey()
+): Promise<{ items: any[]; totalPages: number }> {
+  const getOfflinePool = () => {
+    const all = getAllCatalogMedia();
+    if (routeType === 'movies') return all.filter(i => i.mediaType === 'movie');
+    if (routeType === 'tv-shows') return all.filter(i => i.mediaType === 'tv');
+    if (routeType === 'top-rated') return [...all].sort((a, b) => (b.voteAverage || 0) - (a.voteAverage || 0));
+    return all;
+  };
+
+  const offlinePool = getOfflinePool();
+  const useCache = fetchImpl === fetch;
+  const cacheKey = `catalog:${routeType}:${page}`;
+
+  if (useCache) {
+    const fresh = serverCatalogCache.getFresh(cacheKey);
+    if (fresh) return fresh;
+  }
+
+  const effectiveKey = tmdbApiKey || (fetchImpl !== fetch ? 'test-key' : '');
+  if (!effectiveKey) {
+    const totalPages = Math.max(1, Math.ceil(offlinePool.length / PAGE_SIZE));
+    const start = (page - 1) * PAGE_SIZE;
+    const result = {
+      items: start >= offlinePool.length ? [] : offlinePool.slice(start, start + PAGE_SIZE),
+      totalPages
+    };
+    if (useCache) serverCatalogCache.set(cacheKey, result);
+    return result;
+  }
+
+  return coalesceLookup(cacheKey, useCache, async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    let tmdbUrl = `${TMDB_BASE_URL}/discover/movie?api_key=${effectiveKey}&sort_by=popularity.desc&page=${page}`;
+    let forcedType: 'movie' | 'tv' | undefined = 'movie';
+    if (routeType === 'tv-shows') {
+      tmdbUrl = `${TMDB_BASE_URL}/discover/tv?api_key=${effectiveKey}&sort_by=popularity.desc&page=${page}`;
+      forcedType = 'tv';
+    } else if (routeType === 'trending') {
+      tmdbUrl = `${TMDB_BASE_URL}/trending/all/week?api_key=${effectiveKey}&page=${page}`;
+      forcedType = undefined;
+    } else if (routeType === 'top-rated') {
+      tmdbUrl = `${TMDB_BASE_URL}/discover/movie?api_key=${effectiveKey}&sort_by=vote_average.desc&vote_count.gte=500&page=${page}`;
+      forcedType = 'movie';
+    }
+
+    try {
+      const res = await fetchImpl(tmdbUrl, { signal: controller.signal });
+      if (res.status === 429 || res.status >= 500) {
+        if (useCache) {
+          const stale = serverCatalogCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
+        const totalPages = Math.max(1, Math.ceil(offlinePool.length / PAGE_SIZE));
+        const start = (page - 1) * PAGE_SIZE;
+        if (page <= totalPages && offlinePool.length > 0) {
+          return { items: offlinePool.slice(start, start + PAGE_SIZE), totalPages };
+        }
+        throw make503Error(`TMDB catalog lookup returned HTTP ${res.status}`);
+      }
+
+      if (!res.ok) {
+        const totalPages = Math.max(1, Math.ceil(offlinePool.length / PAGE_SIZE));
+        const start = (page - 1) * PAGE_SIZE;
+        return {
+          items: start >= offlinePool.length ? [] : offlinePool.slice(start, start + PAGE_SIZE),
+          totalPages
+        };
+      }
+
+      const json = await res.json();
+      const rawResults = Array.isArray(json.results) ? json.results : [];
+      const items = rawResults
+        .filter((r: any) => r?.id && (r.title || r.name))
+        .slice(0, PAGE_SIZE)
+        .map((r: any) => normalizeServerTmdbListItem(r, forcedType));
+
+      const totalPages = Math.max(1, Math.min(Number(json.total_pages || 1), 500));
+      const result = { items, totalPages };
+      if (useCache) serverCatalogCache.set(cacheKey, result);
+      return result;
+    } catch (err: any) {
+      if (useCache) {
+        const stale = serverCatalogCache.getStale(cacheKey);
+        if (stale) return stale;
+      }
+      if (err?.status === 503) throw err;
+      throw make503Error('TMDB catalog discovery unavailable');
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
 }
 
 /**
@@ -917,49 +1273,57 @@ export async function fetchServerPerson(
 
   const useCache = fetchImpl === fetch;
   const cacheKey = `person:${personId}`;
-  const now = Date.now();
   if (useCache) {
-    const cached = serverPersonCache.get(cacheKey);
-    if (cached && cached.expiry > now) {
-      return cached.data;
-    }
+    const fresh = serverPersonCache.getFresh(cacheKey);
+    if (fresh) return fresh;
   }
 
   const effectiveKey = tmdbApiKey || (fetchImpl !== fetch ? 'test-key' : '');
   if (effectiveKey) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-    try {
-      const res = await fetchImpl(`${TMDB_BASE_URL}/person/${personId}?api_key=${effectiveKey}`, {
-        signal: controller.signal
-      });
-      if (res.status === 404) return null;
-      if (res.status === 429 || res.status >= 500) {
+    return coalesceLookup(cacheKey, useCache, async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2500);
+      try {
+        const res = await fetchImpl(`${TMDB_BASE_URL}/person/${personId}?api_key=${effectiveKey}`, {
+          signal: controller.signal
+        });
+        if (res.status === 404) return null;
+        if (res.status === 429 || res.status >= 500) {
+          if (useCache) {
+            const stale = serverPersonCache.getStale(cacheKey);
+            if (stale) return stale;
+          }
+          const known = KNOWN_POPULAR_PEOPLE[personId];
+          if (known) return { id: personId, ...known };
+          throw make503Error(`TMDB person lookup returned HTTP ${res.status}`);
+        }
+        if (res.ok) {
+          const json = await res.json();
+          if (!json?.name) return null;
+          const data = {
+            id: json.id || personId,
+            name: json.name,
+            knownForDepartment: json.known_for_department || 'Acting',
+            bio: json.biography || `${json.name} filmography and credits on T Stream.`,
+            profilePath: json.profile_path ? `https://image.tmdb.org/t/p/h632${json.profile_path}` : undefined
+          };
+          if (useCache) serverPersonCache.set(cacheKey, data);
+          return data;
+        }
+      } catch (err: any) {
+        if (useCache) {
+          const stale = serverPersonCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
         const known = KNOWN_POPULAR_PEOPLE[personId];
         if (known) return { id: personId, ...known };
-        throw make503Error(`TMDB person lookup returned HTTP ${res.status}`);
+        if (err?.status === 503) throw err;
+        throw make503Error('TMDB person lookup failed');
+      } finally {
+        clearTimeout(timeout);
       }
-      if (res.ok) {
-        const json = await res.json();
-        if (!json?.name) return null;
-        const data = {
-          id: json.id || personId,
-          name: json.name,
-          knownForDepartment: json.known_for_department || 'Acting',
-          bio: json.biography || `${json.name} filmography and credits on T Stream.`,
-          profilePath: json.profile_path ? `https://image.tmdb.org/t/p/h632${json.profile_path}` : undefined
-        };
-        if (useCache) serverPersonCache.set(cacheKey, { data, expiry: now + 3600000 });
-        return data;
-      }
-    } catch (err: any) {
-      const known = KNOWN_POPULAR_PEOPLE[personId];
-      if (known) return { id: personId, ...known };
-      if (err?.status === 503) throw err;
-      throw make503Error('TMDB person lookup failed');
-    } finally {
-      clearTimeout(timeout);
-    }
+      return null;
+    });
   }
 
   const known = KNOWN_POPULAR_PEOPLE[personId];
@@ -1031,13 +1395,21 @@ export function render503Html(template: string): string {
   return result;
 }
 
-function renderMediaCardsGrid(items: any[], heading = 'Featured Titles'): string {
-  if (!items || items.length === 0) return '';
+function renderMediaCardsGrid(items: any[], heading = 'Featured Titles', emptyMessage?: string): string {
+  if (!items || items.length === 0) {
+    if (!emptyMessage) return '';
+    return `
+      <section class="max-w-5xl mx-auto my-6 bg-zinc-900/60 rounded-xl p-6 border border-white/10">
+        <h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-2">${escapeHtml(heading)}</h2>
+        <p class="text-sm text-zinc-300">${escapeHtml(emptyMessage)}</p>
+      </section>
+    `;
+  }
   return `
     <section class="max-w-5xl mx-auto my-6">
       <h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-3">${escapeHtml(heading)}</h2>
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        ${items.slice(0, 12).map(item => {
+        ${items.slice(0, PAGE_SIZE).map(item => {
           const itemTitle = item.title || item.name || '';
           const itemSlug = createMediaSlug(itemTitle, item.id);
           const itemType = item.mediaType === 'tv' ? 'tv' : 'movie';
@@ -1057,6 +1429,19 @@ function renderMediaCardsGrid(items: any[], heading = 'Featured Titles'): string
         }).join('')}
       </div>
     </section>
+  `;
+}
+
+function renderPaginationNav(basePath: string, currentPage: number, totalPages: number): string {
+  if (totalPages <= 1 || currentPage > totalPages) return '';
+  const prevHref = currentPage <= 2 ? basePath : `${basePath}?page=${currentPage - 1}`;
+  const nextHref = `${basePath}?page=${currentPage + 1}`;
+  return `
+    <nav aria-label="Pagination" class="max-w-5xl mx-auto my-4 flex items-center gap-4 text-xs text-zinc-300">
+      ${currentPage > 1 ? `<a href="${escapeHtml(prevHref)}" class="px-3 py-1.5 rounded bg-zinc-900 border border-white/10 hover:text-white">← Previous Page</a>` : ''}
+      <span>Page ${currentPage} of ${totalPages}</span>
+      ${currentPage < totalPages ? `<a href="${escapeHtml(nextHref)}" class="px-3 py-1.5 rounded bg-zinc-900 border border-white/10 hover:text-white">Next Page →</a>` : ''}
+    </nav>
   `;
 }
 
@@ -1397,11 +1782,17 @@ export async function renderSeoResult(
       };
     }
 
-    const matchingItems = tagLookup.items;
-    const isEmptyTag = matchingItems.length === 0;
-    const isNoindex = isEmptyTag || policy.noindex;
-    const pageCanonical = policy.canonicalUrl;
-    const pageSuffix = pageCanonical.includes('?page=') ? ` — Page ${pageCanonical.split('?page=')[1]}` : '';
+    const allMatchingItems = tagLookup.items;
+    const requestedPage = policy.page || 1;
+    const totalPages = Math.max(1, Math.ceil(allMatchingItems.length / PAGE_SIZE));
+    const isOutOfRange = requestedPage > totalPages || Boolean(policy.isInvalidPage);
+    const startIdx = (requestedPage - 1) * PAGE_SIZE;
+    const pagedItems = isOutOfRange ? [] : allMatchingItems.slice(startIdx, startIdx + PAGE_SIZE);
+    const isEmptyTag = allMatchingItems.length === 0;
+    const isNoindex = isEmptyTag || isOutOfRange || policy.noindex;
+    const baseTagCanonical = `${PRIMARY_ORIGIN}/tags/${encodeURIComponent(cleanTag)}`;
+    const pageCanonical = isNoindex ? baseTagCanonical : policy.canonicalUrl;
+    const pageSuffix = !isNoindex && requestedPage > 1 ? ` — Page ${requestedPage}` : '';
 
     const pageTitle = isEmptyTag
       ? `Movies Tagged #${cleanTag} — T Stream`
@@ -1450,7 +1841,14 @@ export async function renderSeoResult(
           <h1 class="text-3xl sm:text-4xl font-extrabold text-white mb-2">${escapeHtml(h1Heading)}</h1>
           <p class="text-sm sm:text-base text-zinc-300 max-w-2xl">${escapeHtml(pageDesc)}</p>
         </header>
-        ${renderMediaCardsGrid(matchingItems, `Titles Tagged #${cleanTag}`)}
+        ${renderMediaCardsGrid(
+          pagedItems,
+          `Titles Tagged #${cleanTag}`,
+          isOutOfRange
+            ? `Page ${requestedPage} exceeds the available catalog range for #${cleanTag}.`
+            : `No titles currently indexed for tag #${cleanTag}.`
+        )}
+        ${renderPaginationNav(`/tags/${encodeURIComponent(cleanTag)}`, requestedPage, totalPages)}
         <section class="max-w-5xl mx-auto pt-6 border-t border-white/10 flex flex-wrap gap-4 text-xs text-zinc-400">
           <a href="/tags" class="hover:text-white">All Tags</a>
           <a href="/movies" class="hover:text-white">Movies</a>
@@ -1477,36 +1875,68 @@ export async function renderSeoResult(
   let isNoindex = policy.noindex;
   let matchingItems: any[] = [];
   let extraSectionsHtml = '';
+  let emptyStateMessage = '';
+  let paginationBasePath = '';
+  let currentPage = policy.page || 1;
+  let totalPages = 1;
 
-  const pageSuffix = pageCanonical.includes('?page=') ? ` — Page ${pageCanonical.split('?page=')[1]}` : '';
+  const pageSuffix = !policy.isInvalidPage && currentPage > 1 && !policy.noindex ? ` — Page ${currentPage}` : '';
 
   if (route.type === 'home') {
     pageCanonical = `${PRIMARY_ORIGIN}/`;
     matchingItems = [...DETAILED_MOVIES.slice(0, 6), ...DETAILED_TV_SHOWS.slice(0, 6)];
-  } else if (route.type === 'movies') {
-    pageTitle = `Popular & Latest Movies Free HD${pageSuffix} — T Stream`;
-    pageDesc = 'Browse and watch thousands of blockbuster movies online in HD 1080p and 4K on T Stream.';
-    h1Heading = 'Popular & Latest Movies Online in HD';
-    breadcrumbTitle = 'Movies';
-    matchingItems = DETAILED_MOVIES.slice(0, 12);
-  } else if (route.type === 'tv-shows') {
-    pageTitle = `TV Shows & Full Episodes Free${pageSuffix} — T Stream`;
-    pageDesc = 'Stream full seasons and episodes of your favorite TV series and dramas on T Stream.';
-    h1Heading = 'Watch TV Shows & Full Series Free';
-    breadcrumbTitle = 'TV Shows';
-    matchingItems = DETAILED_TV_SHOWS.slice(0, 12);
-  } else if (route.type === 'trending') {
-    pageTitle = `Trending Movies & TV Shows Today${pageSuffix} — T Stream`;
-    pageDesc = 'Discover the hottest and most popular movies and series streaming right now on T Stream.';
-    h1Heading = 'Trending Movies & Shows Today';
-    breadcrumbTitle = 'Trending';
-    matchingItems = getAllCatalogMedia().slice(0, 12);
-  } else if (route.type === 'top-rated') {
-    pageTitle = `Top Rated Movies & Shows of All Time${pageSuffix} — T Stream`;
-    pageDesc = 'Explore the highest critically-acclaimed films and television series on T Stream.';
-    h1Heading = 'Top Rated Movies & Series of All Time';
-    breadcrumbTitle = 'Top Rated';
-    matchingItems = getAllCatalogMedia().sort((a, b) => (b.voteAverage || 0) - (a.voteAverage || 0)).slice(0, 12);
+  } else if (
+    route.type === 'movies' ||
+    route.type === 'tv-shows' ||
+    route.type === 'trending' ||
+    route.type === 'top-rated'
+  ) {
+    paginationBasePath = `/${route.type}`;
+    let catalogRes: { items: any[]; totalPages: number } = { items: [], totalPages: 1 };
+    try {
+      catalogRes = await fetchServerCatalogPage(route.type, currentPage, fetchImpl, tmdbApiKey);
+    } catch (err: any) {
+      if (err?.status === 503) {
+        return {
+          html: render503Html(result),
+          status: 503,
+          canonicalUrl: `${PRIMARY_ORIGIN}/`,
+          isNoindex: true
+        };
+      }
+    }
+
+    matchingItems = catalogRes.items;
+    totalPages = catalogRes.totalPages;
+    const isOutOfRange = Boolean(policy.isInvalidPage) || currentPage > totalPages || matchingItems.length === 0;
+    if (isOutOfRange) {
+      isNoindex = true;
+      pageCanonical = `${PRIMARY_ORIGIN}/${route.type}`;
+      emptyStateMessage = `No titles found for ${route.type} page ${currentPage}. Browse page 1 for the complete catalog.`;
+    }
+
+    const activeSuffix = !isNoindex && currentPage > 1 ? ` — Page ${currentPage}` : '';
+    if (route.type === 'movies') {
+      pageTitle = `Popular & Latest Movies Free HD${activeSuffix} — T Stream`;
+      pageDesc = 'Browse and watch thousands of blockbuster movies online in HD 1080p and 4K on T Stream.';
+      h1Heading = 'Popular & Latest Movies Online in HD';
+      breadcrumbTitle = 'Movies';
+    } else if (route.type === 'tv-shows') {
+      pageTitle = `TV Shows & Full Episodes Free${activeSuffix} — T Stream`;
+      pageDesc = 'Stream full seasons and episodes of your favorite TV series and dramas on T Stream.';
+      h1Heading = 'Watch TV Shows & Full Series Free';
+      breadcrumbTitle = 'TV Shows';
+    } else if (route.type === 'trending') {
+      pageTitle = `Trending Movies & TV Shows Today${activeSuffix} — T Stream`;
+      pageDesc = 'Discover the hottest and most popular movies and series streaming right now on T Stream.';
+      h1Heading = 'Trending Movies & Shows Today';
+      breadcrumbTitle = 'Trending';
+    } else {
+      pageTitle = `Top Rated Movies & Shows of All Time${activeSuffix} — T Stream`;
+      pageDesc = 'Explore the highest critically-acclaimed films and television series on T Stream.';
+      h1Heading = 'Top Rated Movies & Series of All Time';
+      breadcrumbTitle = 'Top Rated';
+    }
   } else if (route.type === 'collections') {
     pageTitle = 'Movie Franchises & Sagas — T Stream';
     pageDesc = 'Explore complete cinematic universes and movie franchises on T Stream.';
@@ -1563,13 +1993,46 @@ export async function renderSeoResult(
       </section>
     `;
   } else if (route.type === 'platform' && route.platform) {
-    const platMeta = SUPPORTED_PLATFORM_META[route.platform];
-    const name = platMeta ? platMeta.name : route.platform.toUpperCase();
-    pageTitle = `${name} Hub — Movies & TV Series${pageSuffix} — T Stream`;
-    pageDesc = platMeta ? platMeta.description : `Stream movies and television series from ${name} on T Stream.`;
-    h1Heading = `${name} Hub — Streaming Catalog`;
-    breadcrumbTitle = name;
-    matchingItems = getAllCatalogMedia().slice(0, 8);
+    const platConfig = getPlatformConfigById(route.platform);
+    if (!platConfig) {
+      return {
+        html: render404Html(result),
+        status: 404,
+        canonicalUrl: `${PRIMARY_ORIGIN}/404`,
+        isNoindex: true
+      };
+    }
+
+    paginationBasePath = `/platform/${platConfig.id}`;
+    let platRes: { items: any[]; totalPages: number } = { items: [], totalPages: 1 };
+    try {
+      platRes = await fetchServerPlatformMedia(platConfig, currentPage, fetchImpl, tmdbApiKey);
+    } catch (err: any) {
+      if (err?.status === 503) {
+        return {
+          html: render503Html(result),
+          status: 503,
+          canonicalUrl: `${PRIMARY_ORIGIN}/`,
+          isNoindex: true
+        };
+      }
+    }
+
+    matchingItems = platRes.items;
+    totalPages = platRes.totalPages;
+    const isEmptyOrOutOfRange = matchingItems.length === 0 || currentPage > totalPages || Boolean(policy.isInvalidPage);
+    isNoindex = isNoindex || isEmptyOrOutOfRange || Boolean(route.isPlatformAlias);
+    if (isEmptyOrOutOfRange || route.isPlatformAlias) {
+      pageCanonical = `${PRIMARY_ORIGIN}/platform/${platConfig.id}`;
+    }
+
+    pageTitle = `${platConfig.name} Hub — Movies & TV Series${pageSuffix} — T Stream`;
+    pageDesc = platConfig.description;
+    h1Heading = `${platConfig.name} Hub — Streaming Catalog`;
+    breadcrumbTitle = platConfig.name;
+    if (matchingItems.length === 0) {
+      emptyStateMessage = `Live ${platConfig.name} titles are loaded dynamically when streaming metadata is active. Browse Movies or TV Shows for instant playback.`;
+    }
   } else if (route.type === 'az' && route.letter) {
     matchingItems = getMatchingCatalogForLetter(route.letter);
     pageTitle = `Titles Starting With ${route.letter} — A-Z Directory — T Stream`;
@@ -1578,6 +2041,9 @@ export async function renderSeoResult(
     h1Heading = `Movies & Shows Starting With "${route.letter}"`;
     breadcrumbTitle = `Letter ${route.letter}`;
     isNoindex = isNoindex || matchingItems.length === 0;
+    if (matchingItems.length === 0) {
+      emptyStateMessage = `No curated titles currently indexed under "${route.letter}".`;
+    }
   }
 
   result = setTitle(result, pageTitle);
@@ -1625,7 +2091,8 @@ export async function renderSeoResult(
   };
   result = setJsonLd(result, landingSchema);
 
-  const mediaGridHtml = renderMediaCardsGrid(matchingItems);
+  const mediaGridHtml = renderMediaCardsGrid(matchingItems, 'Featured Titles', emptyStateMessage);
+  const paginationNavHtml = paginationBasePath ? renderPaginationNav(paginationBasePath, currentPage, totalPages) : '';
 
   const landingHtml = `
     <main class="min-h-screen bg-[#232326] text-[#F3F3F3] p-4 sm:p-8" id="seo-prerender">
@@ -1641,6 +2108,7 @@ export async function renderSeoResult(
       </header>
       ${extraSectionsHtml}
       ${mediaGridHtml}
+      ${paginationNavHtml}
       <section class="max-w-5xl mx-auto pt-6 border-t border-white/10 flex flex-wrap gap-4 text-xs text-zinc-400">
         <a href="/" class="hover:text-white">Home</a>
         <a href="/movies" class="hover:text-white">Movies</a>

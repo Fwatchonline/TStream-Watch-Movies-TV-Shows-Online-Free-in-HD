@@ -28,8 +28,9 @@ import { createMediaSlug } from '../src/utils/slug.ts';
 import {
   getMatchingCatalogForTag,
   getMatchingCatalogForLetter,
-  getAllCatalogMedia
+  fetchServerPlatformMedia
 } from './seoHtmlPlugin.ts';
+import { PLATFORM_CONFIGS } from '../src/services/platformConfig.ts';
 
 const DOMAIN = 'https://tstream.online';
 const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
@@ -285,14 +286,16 @@ export async function generateSitemaps(isDryRun = false) {
     }
   }
 
-  // OTT Platform Hubs
-  const platforms = ['netflix', 'apple', 'max', 'prime', 'disney', 'peacock', 'paramount', 'hulu', 'crunchyroll'];
-  for (const plat of platforms) {
-    mainEntries.push({
-      url: `${DOMAIN}/platform/${plat}`,
-      changefreq: 'weekly',
-      priority: '0.7'
-    });
+  // OTT Platform Hubs: only include platforms with verified or live titles
+  for (const plat of PLATFORM_CONFIGS) {
+    const platData = await fetchServerPlatformMedia(plat, 1).catch(() => ({ items: [] }));
+    if (platData.items.length > 0) {
+      mainEntries.push({
+        url: `${DOMAIN}/platform/${plat.id}`,
+        changefreq: 'weekly',
+        priority: '0.7'
+      });
+    }
   }
 
   // A-Z Directory: Only include letters that actually have catalog entries

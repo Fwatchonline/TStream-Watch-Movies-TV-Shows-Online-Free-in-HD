@@ -1,5 +1,5 @@
 import { CollectionSummary, MediaItem } from '../types/media';
-import { getTmdbApiKey, normalizeTMDBItem, TMDB_BASE_URL } from './tmdb';
+import { normalizeTMDBItem, TMDB_BASE_URL } from './tmdb';
 import {
   SPIDERMAN_COLLECTION,
   HARRY_POTTER_COLLECTION,
@@ -386,16 +386,16 @@ export async function autoDiscoverMovieFranchise(movie: {
   title: string;
   belongsToCollection?: any;
 }): Promise<DiscoveredCollection | null> {
-  const apiKey = getTmdbApiKey();
+  const inBrowser = typeof window !== 'undefined';
 
   // 1. If the movie already has belongs_to_collection with parts
   if (movie.belongsToCollection && movie.belongsToCollection.id) {
     const colId = movie.belongsToCollection.id;
     let parts = movie.belongsToCollection.parts || [];
 
-    if (!parts || parts.length <= 1) {
+    if ((!parts || parts.length <= 1) && inBrowser) {
       try {
-        const res = await fetch(`${TMDB_BASE_URL}/collection/${colId}?api_key=${apiKey}`);
+        const res = await fetch(`${TMDB_BASE_URL}/collection/${colId}`);
         if (res.ok) {
           const raw = await res.json();
           parts = (raw.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'));
@@ -424,14 +424,15 @@ export async function autoDiscoverMovieFranchise(movie: {
     return collection;
   }
 
-  // 2. Fallback: Search collection if title matches major franchises (e.g. Pirates, Avatar, Fast, Harry Potter, etc.)
+  if (!inBrowser) return null;
+
+  // 2. Fallback: Search collection if title matches major franchises
   try {
-    // Strip sequels subtitle e.g. "Pirates of the Caribbean: At World's End" -> "Pirates of the Caribbean"
     const cleanedTitle = movie.title.split(/[:–—\-]/)[0].trim();
     const query = cleanedTitle.length >= 3 ? cleanedTitle : movie.title;
 
     const searchRes = await fetch(
-      `${TMDB_BASE_URL}/search/collection?api_key=${apiKey}&query=${encodeURIComponent(query)}`
+      `${TMDB_BASE_URL}/search/collection?query=${encodeURIComponent(query)}`
     );
 
     if (searchRes.ok) {
@@ -440,7 +441,7 @@ export async function autoDiscoverMovieFranchise(movie: {
 
       if (firstMatch && firstMatch.id) {
         // Fetch full collection details
-        const colRes = await fetch(`${TMDB_BASE_URL}/collection/${firstMatch.id}?api_key=${apiKey}`);
+        const colRes = await fetch(`${TMDB_BASE_URL}/collection/${firstMatch.id}`);
         if (colRes.ok) {
           const colData = await colRes.json();
           const parts = (colData.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'));

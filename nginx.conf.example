@@ -1,7 +1,9 @@
-# Nginx Production Configuration for TStream.online (Hybrid SSG + Node.js Runtime SEO)
-# File location on VPS: /etc/nginx/sites-available/tstream.online
-# Enable with: sudo ln -sf /etc/nginx/sites-available/tstream.online /etc/nginx/sites-enabled/
-# Test with: sudo nginx -t && sudo systemctl reload nginx
+# Nginx Production Configuration Template for TStream.online
+# Architecture: Atomic release symlink (<APP_DIR>/current/dist) + Node.js Runtime SEO & Streaming Server
+#
+# IMPORTANT: Replace /var/www/tstream below with your verified production APP_DIR
+# before installing into /etc/nginx/sites-available/tstream.online.
+# Test syntax before reload: sudo nginx -t && sudo systemctl reload nginx
 
 # 1. HTTP (port 80) -> Canonical HTTPS non-www 301 Permanent Redirect
 server {
@@ -29,13 +31,14 @@ server {
     listen [::]:443 ssl http2;
     server_name tstream.online;
 
-    root /var/www/tstream/dist;
+    # Point to atomic current/ release dist/ (update path to match verified APP_DIR)
+    root /var/www/tstream/current/dist;
     index index.html;
 
-    # Preserve genuine upstream 404/503 status codes from Node.js SEO/API server
+    # Preserve genuine upstream 404/503 status codes from Node.js SEO/API server (never mask errors as 200!)
     proxy_intercept_errors off;
 
-    # Buffer & Timeout settings for streaming & SSR stability
+    # Buffer & Timeout settings for SSR stability
     client_max_body_size 50M;
     proxy_connect_timeout 30s;
     proxy_send_timeout 120s;
@@ -56,46 +59,67 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
-    # Static Assets (JS, CSS, Images, Fonts, Video Chunks) — missing assets return genuine 404
-    location ~* \.(?:ico|css|js|mjs|map|gif|jpe?g|png|svg|woff2?|webp|mp4|webm|m3u8|ts|webmanifest)$ {
-        expires 30d;
-        add_header Cache-Control "public, no-transform";
+    # Hashed Vite Static Assets under /assets/ — long immutable cache, genuine 404 if missing
+    location ^~ /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
         try_files $uri =404;
     }
 
-    # XML Sitemaps & robots.txt — direct static delivery with genuine 404 if missing
+    # Unhashed Static Assets & Media — short cache / revalidated, genuine 404 if missing
+    location ~* \.(?:ico|css|js|mjs|map|gif|jpe?g|png|svg|woff2?|webp|mp4|webm|m3u8|ts|webmanifest)$ {
+        expires 1d;
+        add_header Cache-Control "public, max-age=86400, no-transform" always;
+        try_files $uri =404;
+    }
+
+    # XML Sitemaps & robots.txt — short cache so updates propagate cleanly, genuine 404 if missing
     location ~* \.xml$ {
         default_type application/xml;
-        expires 1d;
-        add_header Cache-Control "public, no-transform";
+        expires 5m;
+        add_header Cache-Control "public, max-age=300, must-revalidate, no-transform" always;
         try_files $uri =404;
     }
 
     location = /robots.txt {
         default_type text/plain;
-        expires 1d;
-        add_header Cache-Control "public, no-transform";
+        expires 5m;
+        add_header Cache-Control "public, max-age=300, must-revalidate, no-transform" always;
         try_files $uri =404;
     }
 
-    # Proxy API & Stream routes to Node.js / PM2 production server (dist/server.mjs) on port 3000
+    # Stream & Media Proxy Endpoints: disable proxy buffering & preserve Range / HLS streaming behavior
+    location ~ ^/api/(?:stream-proxy|stream-resolve|proxy|stream/|subtitle-proxy) {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+        proxy_set_header Host $host;
+        proxy_set_header Range $http_range;
+        proxy_set_header If-Range $http_if_range;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # General API routes (/api/health, /api/tmdb/*)
     location /api/ {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
     }
 
     # Hybrid SSG + Runtime SEO Routing:
-    # - Requests with query strings (?page=2, ?genre=28, /search?q=...) bypass static files
-    #   and route directly to Node runtime (@seo_runtime) for dynamic canonical & noindex headers.
-    # - Query-less routes check pre-rendered static HTML first ($uri/index.html), then
-    #   fall back to @seo_runtime so live TMDB routes return 200 and nonexistent routes return 404.
+    # - Requests with query strings (?page=2, ?genreId=28, /search?q=...) bypass static files
+    #   and route directly to Node runtime (@seo_runtime) for dynamic pagination, canonical & noindex.
+    # - Query-less routes serve existing pre-rendered static HTML ($uri/index.html) directly,
+    #   and fall back to @seo_runtime so live TMDB routes return 200 and nonexistent routes return 404/503.
+    # - NEVER use `error_page 404 /index.html;`
     location / {
         if ($is_args = "?") {
             return 418;

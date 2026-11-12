@@ -1,7 +1,10 @@
-name: Deploy TStream
+name: TStream CI & Production Deploy
 
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
   workflow_dispatch:
@@ -10,12 +13,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: tstream-online-production
+  group: tstream-online-ci-deploy
   cancel-in-progress: false
 
 jobs:
   ci:
-    name: Test, Lint & Build Verification
+    name: Test, Lint, Build & Local HTTP SEO Verification
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -23,51 +26,95 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24 LTS (>=24.12.0)
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24.12.0'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Run unit & SEO tests
+      - name: Run automated test suite
         run: npm test
 
-      - name: Type check
+      - name: TypeScript check
         run: npm run lint
 
-      - name: Build production bundle & verify prerender
+      - name: Build production bundle & prerendered HTML into dist/
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          VITE_TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: npm run build
 
+      - name: Verify zero private credential leakage in frontend bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          test -s dist/server.mjs
+          test -s dist/prerender-report.json
+          if grep -rn "VITE_TMDB_API_KEY" dist/assets/; then
+            echo "ERROR: VITE_TMDB_API_KEY reference leaked into frontend bundle!"
+            exit 1
+          fi
+          if [ -n "${TMDB_API_KEY:-}" ] && grep -rnF "$TMDB_API_KEY" dist/; then
+            echo "ERROR: Server TMDB_API_KEY leaked into generated dist/ output!"
+            exit 1
+          fi
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+
+      - name: Verify built dist/server.mjs HTTP & SEO endpoints on isolated port
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT=3099 node dist/server.mjs > /tmp/tstream-ci-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:3099/api/health | grep -q '"status":"ok"'; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          npx --no-install tsx scripts/verify-production.ts --base-url=http://127.0.0.1:3099
+
   deploy:
-    name: Deploy to TStream VPS
+    name: Manual Production Deploy (Approval Gated)
     needs: ci
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
-      - name: Validate deployment secrets
+      - name: Validate deployment configuration & SSH secrets
         shell: bash
         env:
           VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
+          TSTREAM_APP_DIR: ${{ vars.TSTREAM_APP_DIR }}
+          TSTREAM_PM2_APP_NAME: ${{ vars.TSTREAM_PM2_APP_NAME }}
         run: |
           set -euo pipefail
           test -n "$VPS_SSH_KEY_B64"
+          test -n "$VPS_SSH_HOST_KEY"
           test -n "$VPS_HOST"
           test -n "$VPS_USER"
           test -n "$VPS_PORT"
+          test -n "$TSTREAM_APP_DIR"
+          test -n "$TSTREAM_PM2_APP_NAME"
+          if ! [[ "$VPS_SSH_HOST_KEY" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))[[:space:]]+[A-Za-z0-9+/=]+ ]]; then
+            echo "ERROR: VPS_SSH_HOST_KEY does not appear to be a valid SSH public host key."
+            exit 1
+          fi
 
-      - name: Configure SSH
+      - name: Configure strict SSH authentication
         shell: bash
         env:
           VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
@@ -76,7 +123,6 @@ jobs:
           VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
         run: |
           set -euo pipefail
-
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
 
@@ -90,20 +136,22 @@ jobs:
             KNOWN_HOST="[$VPS_HOST]:$VPS_PORT"
           fi
 
-          HOST_KEY="${VPS_SSH_HOST_KEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPnHaOxj0O4nk4a7572Ng/mhXpM/D8wcD09msz/hAdEI root@vultr}"
-          printf '%s %s\n' "$KNOWN_HOST" "$HOST_KEY" > "$HOME/.ssh/known_hosts"
+          printf '%s %s\n' "$KNOWN_HOST" "$VPS_SSH_HOST_KEY" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
           ssh-keygen -F "$KNOWN_HOST" -f "$HOME/.ssh/known_hosts"
 
-      - name: Run remote deployment script & verify HTTP endpoints
+      - name: Execute atomic VPS release deployment & SEO verification
         shell: bash
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
+          TSTREAM_APP_DIR: ${{ vars.TSTREAM_APP_DIR }}
+          TSTREAM_PM2_APP_NAME: ${{ vars.TSTREAM_PM2_APP_NAME }}
+          TSTREAM_PORT: ${{ vars.TSTREAM_PORT || '3000' }}
+          TSTREAM_NODE_BIN: ${{ vars.TSTREAM_NODE_BIN || 'node' }}
         run: |
           set -euo pipefail
-
           ssh \
             -i "$HOME/.ssh/id_ed25519" \
             -p "$VPS_PORT" \
@@ -113,4 +161,4 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o ConnectTimeout=15 \
             "$VPS_USER@$VPS_HOST" \
-            "cd /var/www/tstream && bash scripts/update-vps.sh && npx tsx scripts/verify-production.ts --base-url=http://127.0.0.1:3000"
+            "APP_DIR='$TSTREAM_APP_DIR' PM2_APP_NAME='$TSTREAM_PM2_APP_NAME' PORT='$TSTREAM_PORT' NODE_BIN='$TSTREAM_NODE_BIN' bash '$TSTREAM_APP_DIR/repo/scripts/update-vps.sh'"

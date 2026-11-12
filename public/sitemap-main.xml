@@ -111,11 +111,6 @@
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/platform/prime</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
     <loc>https://tstream.online/platform/disney</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
@@ -132,11 +127,6 @@
   </url>
   <url>
     <loc>https://tstream.online/platform/hulu</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/platform/crunchyroll</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>

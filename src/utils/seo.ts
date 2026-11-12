@@ -4,6 +4,7 @@
  */
 
 import { createMediaSlug } from './slug.ts';
+import { PLATFORM_ALIASES } from '../services/platformConfig.ts';
 
 export interface SEOConfig {
   title?: string;
@@ -20,6 +21,8 @@ export interface QueryCanonicalPolicy {
   canonicalUrl: string;
   noindex: boolean;
   reason?: string;
+  page?: number;
+  isInvalidPage?: boolean;
 }
 
 export const PRIMARY_ORIGIN = 'https://tstream.online';
@@ -49,6 +52,20 @@ const TRACKING_PARAMS = new Set([
   'sid',
   '_ga',
   '_gl'
+]);
+
+const FILTER_PARAMS = new Set([
+  'sortby',
+  'year',
+  'minrating',
+  'country',
+  'genreid',
+  'genre',
+  'filter',
+  'mediatype',
+  'platform',
+  'letter',
+  'tag'
 ]);
 
 const PAGINATED_INDEXABLE_PREFIXES = [
@@ -190,8 +207,10 @@ export function getImageMimeType(url: string): string {
  * - Always HTTPS, non-WWW: https://tstream.online
  * - Strips tracking/session query parameters (?utm_*, ?fbclid, ?ref, ?session)
  * - Strips trailing slashes (except root '/')
- * - Preserves ?page=N (when N > 1) on indexable paginated browse routes without filter bloat
- * - Marks search pages and multi-filter/sort parameter URLs as noindex and canonicalizes filters to clean base path
+ * - Normalizes platform alias routes (e.g., /platform/hbo -> /platform/max) with noindex
+ * - Strips ?page=1 cleanly
+ * - Preserves ?page=N (when N > 1) strictly on indexable paginated routes with no other params
+ * - Marks search, filter combinations, invalid pagination, and unknown query params as noindex
  */
 export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy {
   try {
@@ -223,6 +242,16 @@ export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy 
       rawPath = rawPath.slice(0, -1);
     }
 
+    // Platform alias handling (/platform/hbo -> /platform/max)
+    let isPlatformAlias = false;
+    if (rawPath.startsWith('/platform/')) {
+      const platSeg = rawPath.slice('/platform/'.length).split('/')[0].toLowerCase();
+      if (platSeg && PLATFORM_ALIASES[platSeg]) {
+        rawPath = `/platform/${PLATFORM_ALIASES[platSeg]}`;
+        isPlatformAlias = true;
+      }
+    }
+
     const params = new URLSearchParams(rawSearch);
     // Strip tracking/session parameters
     for (const key of Array.from(params.keys())) {
@@ -237,49 +266,91 @@ export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy 
       return {
         canonicalUrl: `${PRIMARY_ORIGIN}/search`,
         noindex: true,
-        reason: 'search_page'
+        reason: 'search_page',
+        page: 1
       };
     }
 
-    // Check remaining content-altering query parameters
-    const pageRaw = params.get('page');
-    const pageNum = pageRaw ? parseInt(pageRaw, 10) : 1;
-    const hasFilterParams =
-      params.has('sortBy') ||
-      params.has('year') ||
-      params.has('minRating') ||
-      params.has('country') ||
-      params.has('genreId') ||
-      params.has('filter');
-
-    if (hasFilterParams) {
-      // Filtered/sorted combinations must not create unlimited indexable URLs
+    if (isPlatformAlias) {
       return {
         canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
         noindex: true,
-        reason: 'filtered_catalog_view'
+        reason: 'platform_alias',
+        page: 1
       };
     }
 
-    // Distinct paginated pages (?page=2, ?page=3, ...)
+    // Detect filter and unknown query parameters
+    let hasFilterParams = false;
+    let hasUnknownParams = false;
+    for (const key of Array.from(params.keys())) {
+      const lower = key.toLowerCase();
+      if (lower === 'page') continue;
+      if (FILTER_PARAMS.has(lower)) {
+        hasFilterParams = true;
+      } else {
+        hasUnknownParams = true;
+      }
+    }
+
+    // Strict integer page validation
+    const hasPageParam = params.has('page');
+    const pageRaw = params.get('page');
+    const isStrictInt = Boolean(pageRaw && /^\d+$/.test(pageRaw.trim()));
+    const parsedPage = isStrictInt ? parseInt(pageRaw!.trim(), 10) : 1;
+    const isInvalidPage = hasPageParam && (!isStrictInt || parsedPage < 1 || parsedPage > 500);
+
+    if (hasFilterParams || hasUnknownParams) {
+      return {
+        canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
+        noindex: true,
+        reason: hasFilterParams ? 'filtered_catalog_view' : 'unknown_query_param',
+        page: isInvalidPage ? 1 : parsedPage,
+        isInvalidPage
+      };
+    }
+
+    if (isInvalidPage) {
+      return {
+        canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
+        noindex: true,
+        reason: 'invalid_page',
+        page: 1,
+        isInvalidPage: true
+      };
+    }
+
     const isPaginatedIndexable = PAGINATED_INDEXABLE_PREFIXES.some(
       p => rawPath === p || (p.endsWith('/') && rawPath.startsWith(p))
     );
-    if (isPaginatedIndexable && !isNaN(pageNum) && pageNum > 1) {
+
+    if (parsedPage > 1) {
+      if (isPaginatedIndexable) {
+        return {
+          canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}?page=${parsedPage}`,
+          noindex: false,
+          page: parsedPage
+        };
+      }
       return {
-        canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}?page=${pageNum}`,
-        noindex: false
+        canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
+        noindex: true,
+        reason: 'unsupported_pagination',
+        page: parsedPage,
+        isInvalidPage: true
       };
     }
 
     return {
       canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
-      noindex: false
+      noindex: false,
+      page: 1
     };
   } catch {
     return {
       canonicalUrl: `${PRIMARY_ORIGIN}/`,
-      noindex: false
+      noindex: false,
+      page: 1
     };
   }
 }

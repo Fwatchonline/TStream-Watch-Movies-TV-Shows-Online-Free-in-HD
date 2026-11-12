@@ -33,7 +33,26 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 const ASSET_EXT_REGEX = /\.(?:js|mjs|css|map|json|webmanifest|xml|txt|png|jpe?g|gif|webp|svg|ico|woff2?|mp4|webm|m3u8|ts)$/i;
-const TRACKING_PARAMS = new Set(['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid', 'ref', 'session']);
+const TRACKING_PARAMS = new Set([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_term',
+  'utm_content',
+  'utm_id',
+  'fbclid',
+  'gclid',
+  'yclid',
+  'mc_cid',
+  'mc_eid',
+  'ref',
+  'referrer',
+  'source',
+  'session',
+  'sid',
+  '_ga',
+  '_gl'
+]);
 
 const honoListener = getRequestListener(serverApp.fetch);
 
@@ -49,7 +68,7 @@ function loadDistTemplate(): string | null {
   return null;
 }
 
-const cachedBaseTemplate = loadDistTemplate();
+let cachedBaseTemplate = loadDistTemplate();
 
 function resolveSafeDistFile(urlPath: string): string | null {
   let decodedPath = urlPath;
@@ -63,6 +82,18 @@ function resolveSafeDistFile(urlPath: string): string | null {
   if (candidate !== DIST_DIR && !candidate.startsWith(DIST_DIR + path.sep)) {
     return null;
   }
+  try {
+    if (fs.existsSync(DIST_DIR) && fs.existsSync(candidate)) {
+      const realDist = fs.realpathSync(DIST_DIR);
+      const realCandidate = fs.realpathSync(candidate);
+      if (realCandidate !== realDist && !realCandidate.startsWith(realDist + path.sep)) {
+        return null;
+      }
+      return realCandidate;
+    }
+  } catch {
+    return null;
+  }
   return candidate;
 }
 
@@ -74,13 +105,13 @@ function sendStaticFile(
 ) {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+  const stat = fs.statSync(filePath);
   res.statusCode = 200;
   res.setHeader('Content-Type', contentType);
   res.setHeader('Cache-Control', cacheControl);
+  res.setHeader('Content-Length', String(stat.size));
 
   if (req.method === 'HEAD') {
-    const stat = fs.statSync(filePath);
-    res.setHeader('Content-Length', String(stat.size));
     res.end();
     return;
   }
@@ -90,11 +121,25 @@ function sendStaticFile(
 
 function hasFunctionalQueryParams(searchParams: URLSearchParams): boolean {
   for (const key of searchParams.keys()) {
-    if (!TRACKING_PARAMS.has(key.toLowerCase())) {
+    const lower = key.toLowerCase();
+    if (!TRACKING_PARAMS.has(lower) && !lower.startsWith('utm_')) {
       return true;
     }
   }
   return false;
+}
+
+function getStaticCacheControl(pathname: string): string {
+  if (pathname.startsWith('/assets/')) {
+    return 'public, max-age=31536000, immutable';
+  }
+  if (pathname === '/robots.txt' || pathname.endsWith('.xml') || pathname.endsWith('.webmanifest') || pathname.endsWith('.json')) {
+    return 'public, max-age=300, must-revalidate';
+  }
+  if (ASSET_EXT_REGEX.test(pathname)) {
+    return 'public, max-age=86400';
+  }
+  return 'no-cache';
 }
 
 const server = http.createServer(async (req, res) => {
@@ -107,6 +152,10 @@ const server = http.createServer(async (req, res) => {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
     res.end(
       JSON.stringify({
         status: 'ok',
@@ -124,11 +173,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 3. Hono streaming/subtitle API routes (/api/proxy*, /api/stream/*, /api/subtitle-proxy*)
+  // 3. Hono API routes (/api/proxy*, /api/stream/*, /api/subtitle-proxy*, /api/tmdb*)
   if (
     pathname.startsWith('/api/proxy') ||
     pathname.startsWith('/api/stream/') ||
-    pathname.startsWith('/api/subtitle-proxy')
+    pathname.startsWith('/api/subtitle-proxy') ||
+    pathname === '/api/tmdb' ||
+    pathname.startsWith('/api/tmdb/')
   ) {
     return honoListener(req, res);
   }
@@ -137,6 +188,11 @@ const server = http.createServer(async (req, res) => {
   if (pathname.startsWith('/api/')) {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
     res.end(JSON.stringify({ error: 'API endpoint not found' }));
     return;
   }
@@ -153,13 +209,7 @@ const server = http.createServer(async (req, res) => {
   if (exactFilePath && fs.existsSync(exactFilePath) && fs.statSync(exactFilePath).isFile()) {
     // Only serve index.html directly when exact path IS '/' without functional query params
     if (pathname !== '/' && pathname !== '/index.html') {
-      const isImmutableAsset = pathname.startsWith('/assets/');
-      const cacheControl = isImmutableAsset
-        ? 'public, max-age=31536000, immutable'
-        : ASSET_EXT_REGEX.test(pathname)
-          ? 'public, max-age=86400'
-          : 'no-cache';
-      sendStaticFile(req, res, exactFilePath, cacheControl);
+      sendStaticFile(req, res, exactFilePath, getStaticCacheControl(pathname));
       return;
     }
   }
@@ -168,6 +218,11 @@ const server = http.createServer(async (req, res) => {
   if (ASSET_EXT_REGEX.test(pathname)) {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
     res.end('Not Found');
     return;
   }
@@ -185,7 +240,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 7. Dynamic SSR SEO Rendering for live TMDB titles, episodes, tags, paginated hubs, 404s & 503s
-  const template = cachedBaseTemplate || loadDistTemplate();
+  if (!cachedBaseTemplate) {
+    cachedBaseTemplate = loadDistTemplate();
+  }
+  const template = cachedBaseTemplate;
   if (!template) {
     res.statusCode = 500;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');

@@ -1,4 +1,4 @@
-import { TMDB_BASE_URL, getTmdbApiKey } from './tmdb';
+import { TMDB_BASE_URL } from './tmdb';
 import { MediaItem } from '../types/media';
 
 export type EpisodeReleasePeriod = 'today' | 'yesterday' | 'this_week' | 'recent';
@@ -275,10 +275,10 @@ export async function fetchTvLastEpisode(tvId: number): Promise<{
     voteAverage: number;
   } | null;
 } | null> {
-  const apiKey = getTmdbApiKey();
+  if (typeof window === 'undefined') return null;
   const todayIso = new Date().toISOString().slice(0, 10);
   try {
-    const res = await fetch(`${TMDB_BASE_URL}/tv/${tvId}?api_key=${apiKey}`);
+    const res = await fetch(`${TMDB_BASE_URL}/tv/${tvId}`);
     if (!res.ok) return null;
     const data = await res.json();
     
@@ -325,7 +325,10 @@ export async function fetchNewEpisodes(options: { forceRefresh?: boolean; extraS
     return episodesCache.data;
   }
 
-  const apiKey = getTmdbApiKey();
+  if (typeof window === 'undefined') {
+    return CURATED_NEW_EPISODES;
+  }
+
   const todayIso = new Date().toISOString().slice(0, 10);
   const yesterdayIso = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const twoDaysAgoIso = new Date(Date.now() - 86400000 * 2).toISOString().slice(0, 10);
@@ -334,13 +337,13 @@ export async function fetchNewEpisodes(options: { forceRefresh?: boolean; extraS
   try {
     // Fetch targeted shows across Today, Yesterday, and This Week concurrently
     const [todayRes1, todayRes2, yestRes1, yestRes2, weekRes1, weekRes2, onAirRes] = await Promise.all([
-      fetch(`${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&air_date.lte=${todayIso}&air_date.gte=${todayIso}&sort_by=popularity.desc&page=1`).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(`${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&air_date.lte=${todayIso}&air_date.gte=${todayIso}&sort_by=popularity.desc&page=2`).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(`${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&air_date.lte=${yesterdayIso}&air_date.gte=${yesterdayIso}&sort_by=popularity.desc&page=1`).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(`${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&air_date.lte=${yesterdayIso}&air_date.gte=${yesterdayIso}&sort_by=popularity.desc&page=2`).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(`${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&air_date.lte=${twoDaysAgoIso}&air_date.gte=${sevenDaysAgoIso}&sort_by=popularity.desc&page=1`).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(`${TMDB_BASE_URL}/discover/tv?api_key=${apiKey}&air_date.lte=${twoDaysAgoIso}&air_date.gte=${sevenDaysAgoIso}&sort_by=popularity.desc&page=2`).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(`${TMDB_BASE_URL}/tv/on_the_air?api_key=${apiKey}&page=1`).then(r => r.json()).catch(() => ({ results: [] }))
+      fetch(`${TMDB_BASE_URL}/discover/tv?air_date.lte=${todayIso}&air_date.gte=${todayIso}&sort_by=popularity.desc&page=1`).then(r => (r.ok ? r.json() : { results: [] })).catch(() => ({ results: [] })),
+      fetch(`${TMDB_BASE_URL}/discover/tv?air_date.lte=${todayIso}&air_date.gte=${todayIso}&sort_by=popularity.desc&page=2`).then(r => (r.ok ? r.json() : { results: [] })).catch(() => ({ results: [] })),
+      fetch(`${TMDB_BASE_URL}/discover/tv?air_date.lte=${yesterdayIso}&air_date.gte=${yesterdayIso}&sort_by=popularity.desc&page=1`).then(r => (r.ok ? r.json() : { results: [] })).catch(() => ({ results: [] })),
+      fetch(`${TMDB_BASE_URL}/discover/tv?air_date.lte=${yesterdayIso}&air_date.gte=${yesterdayIso}&sort_by=popularity.desc&page=2`).then(r => (r.ok ? r.json() : { results: [] })).catch(() => ({ results: [] })),
+      fetch(`${TMDB_BASE_URL}/discover/tv?air_date.lte=${twoDaysAgoIso}&air_date.gte=${sevenDaysAgoIso}&sort_by=popularity.desc&page=1`).then(r => (r.ok ? r.json() : { results: [] })).catch(() => ({ results: [] })),
+      fetch(`${TMDB_BASE_URL}/discover/tv?air_date.lte=${twoDaysAgoIso}&air_date.gte=${sevenDaysAgoIso}&sort_by=popularity.desc&page=2`).then(r => (r.ok ? r.json() : { results: [] })).catch(() => ({ results: [] })),
+      fetch(`${TMDB_BASE_URL}/tv/on_the_air?page=1`).then(r => (r.ok ? r.json() : { results: [] })).catch(() => ({ results: [] }))
     ]);
 
     const targetShows: any[] = [];

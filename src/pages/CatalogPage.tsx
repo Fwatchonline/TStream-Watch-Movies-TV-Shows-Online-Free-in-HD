@@ -154,40 +154,83 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
 
   useEffect(() => {
     loadData();
-    const updatedPath = updateUrl(filters);
-    const pageSuffix = filters.page && filters.page > 1 ? ` — Page ${filters.page}` : '';
+    updateUrl(filters);
+  }, [loadData, updateUrl, filters]);
+
+  useEffect(() => {
+    const queryStr = (() => {
+      const params = new URLSearchParams();
+      if (filters.page && filters.page > 1) params.set('page', filters.page.toString());
+      if (filters.query && filters.query.trim()) params.set('q', filters.query.trim());
+      if (filters.genreId) params.set('genreId', filters.genreId.toString());
+      if (filters.year) params.set('year', filters.year.toString());
+      if (filters.minRating) params.set('minRating', filters.minRating.toString());
+      if (filters.sortBy && filters.sortBy !== 'popularity.desc') params.set('sortBy', filters.sortBy);
+      if (filters.mediaType && filters.mediaType !== 'all') params.set('mediaType', filters.mediaType);
+      if (filters.platform && category !== 'platform') params.set('platform', filters.platform);
+      if (filters.letter && filters.letter !== 'All' && category !== 'az') params.set('letter', filters.letter);
+      if (filters.country) params.set('country', filters.country);
+      const qs = params.toString();
+      return qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    })();
+
+    const activePage = filters.page || 1;
+    const isEmptyOrOutOfRange = !loading && (data.results.length === 0 || activePage > Math.max(1, data.totalPages));
+    const pageSuffix = activePage > 1 ? ` — Page ${activePage}` : '';
+
     if (category === 'search') {
       updateSEO({
         title: filters.query ? `Search: "${filters.query}"` : 'Search Movies & TV Shows',
         noindex: true,
         url: '/search'
       });
+    } else if (category === 'platform') {
+      const plat = getPlatformById(filters.platform || 'netflix');
+      const platName = plat?.name || (filters.platform || 'Netflix').toUpperCase();
+      updateSEO({
+        title: `${platName} Hub — Movies & TV Series${pageSuffix}`,
+        description: plat?.description || `Stream movies and television series from ${platName} on T Stream.`,
+        noindex: isEmptyOrOutOfRange,
+        url: queryStr.startsWith('/platform/') ? queryStr : `/platform/${plat?.id || filters.platform || 'netflix'}`
+      });
+    } else if (category === 'az') {
+      const letter = (filters.letter || 'A').toUpperCase();
+      updateSEO({
+        title: `Titles Starting With ${letter} — A-Z Directory`,
+        description: `Browse movies and TV shows alphabetically starting with letter ${letter} on T Stream.`,
+        noindex: isEmptyOrOutOfRange,
+        url: `/az/${letter}`
+      });
     } else if (category === 'movies') {
       updateSEO({
         title: `Popular & Latest Movies Free HD${pageSuffix}`,
         description: 'Browse and watch thousands of blockbuster movies online in HD 1080p and 4K on T Stream.',
-        url: updatedPath
+        noindex: isEmptyOrOutOfRange,
+        url: isEmptyOrOutOfRange ? '/movies' : queryStr
       });
     } else if (category === 'tv-shows') {
       updateSEO({
         title: `TV Shows & Full Episodes Free${pageSuffix}`,
         description: 'Stream full seasons and episodes of your favorite TV series and dramas on T Stream.',
-        url: updatedPath
+        noindex: isEmptyOrOutOfRange,
+        url: isEmptyOrOutOfRange ? '/tv-shows' : queryStr
       });
     } else if (category === 'trending') {
       updateSEO({
         title: `Trending Movies & TV Shows Today${pageSuffix}`,
         description: 'Discover the hottest and most popular movies and series streaming right now on T Stream.',
-        url: updatedPath
+        noindex: isEmptyOrOutOfRange,
+        url: isEmptyOrOutOfRange ? '/trending' : queryStr
       });
     } else if (category === 'top-rated') {
       updateSEO({
         title: `Top Rated Movies & Shows of All Time${pageSuffix}`,
         description: 'Explore the highest critically-acclaimed films and television series on T Stream.',
-        url: updatedPath
+        noindex: isEmptyOrOutOfRange,
+        url: isEmptyOrOutOfRange ? '/top-rated' : queryStr
       });
     }
-  }, [loadData, updateUrl, filters, category]);
+  }, [filters, category, loading, data.results.length, data.totalPages]);
 
   // Handle page transitions (Preserves all existing query params and filters!)
   const handlePageChange = (newPage: number) => {

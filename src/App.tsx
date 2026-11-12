@@ -244,11 +244,13 @@ export default function App() {
         url: '/collections'
       });
     } else if (currentView === 'platform') {
-      const name = (selectedPlatform || 'netflix').toUpperCase();
+      const platMeta = getPlatformById(selectedPlatform || 'netflix');
+      const name = platMeta ? platMeta.name : (selectedPlatform || 'netflix').toUpperCase();
+      const normalizedId = platMeta ? platMeta.id : (selectedPlatform || 'netflix');
       updateSEO({
         title: `${name} Hub — Movies & TV Series`,
-        description: `Stream movies and television series from ${name} on T Stream.`,
-        url: urlWithQuery.startsWith('/platform/') ? urlWithQuery : `/platform/${selectedPlatform || 'netflix'}`
+        description: platMeta?.description || `Stream movies and television series from ${name} on T Stream.`,
+        url: urlWithQuery.startsWith('/platform/') ? urlWithQuery : `/platform/${normalizedId}`
       });
     } else if (currentView === 'az') {
       updateSEO({

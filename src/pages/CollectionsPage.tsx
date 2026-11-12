@@ -13,7 +13,7 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { CollectionSummary, MediaItem } from '../types/media';
-import { getCollectionDetail, normalizeTMDBItem, TMDB_BASE_URL, getTmdbApiKey } from '../services/tmdb';
+import { getCollectionDetail, normalizeTMDBItem, TMDB_BASE_URL } from '../services/tmdb';
 import {
   getDiscoveredCollections,
   saveDiscoveredCollection,
@@ -157,15 +157,14 @@ export const CollectionsPage: React.FC<CollectionsPageProps> = ({
 
     setIsSearchingOnline(true);
     try {
-      const apiKey = getTmdbApiKey();
       const res = await fetch(
-        `${TMDB_BASE_URL}/search/collection?api_key=${apiKey}&query=${encodeURIComponent(filterQuery.trim())}`
+        `${TMDB_BASE_URL}/search/collection?query=${encodeURIComponent(filterQuery.trim())}`
       );
       if (res.ok) {
         const data = await res.json();
         const firstMatch = data.results?.[0];
         if (firstMatch && firstMatch.id) {
-          const colRes = await fetch(`${TMDB_BASE_URL}/collection/${firstMatch.id}?api_key=${apiKey}`);
+          const colRes = await fetch(`${TMDB_BASE_URL}/collection/${firstMatch.id}`);
           if (colRes.ok) {
             const fullCol = await colRes.json();
             const parts = (fullCol.parts || []).map((p: any) => normalizeTMDBItem(p, 'movies'));

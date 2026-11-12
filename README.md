@@ -37,9 +37,9 @@ A modern, high-performance, dark-themed streaming web application for discoverin
 
 ## 1. Instalacija na VPS Server (Ubuntu / Debian)
 
-Ovo uputstvo opisuje kompletnu instalaciju na čistom **Ubuntu 22.04 / 24.04 LTS** ili **Debian 12** VPS serveru koristeći **Node.js 22**, **Nginx** i besplatan **Let's Encrypt SSL sertifikat**.
+Ovo uputstvo opisuje kompletnu instalaciju na čistom **Ubuntu 22.04 / 24.04 LTS** ili **Debian 12** VPS serveru koristeći **Node.js 24 LTS (>= 24.12.0, potrebno zbog Firebase zavisnosti)**, **Nginx** i besplatan **Let's Encrypt SSL sertifikat**.
 
-### Korak 1: Priprema VPS servera i instalacija Node.js 22
+### Korak 1: Priprema VPS servera i instalacija Node.js 24 LTS
 Prijavite se na vaš VPS putem SSH-a:
 ```bash
 ssh root@tvoja_vps_ip_adresa
@@ -51,12 +51,12 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y curl git nginx build-essential
 ```
 
-Instalirajte **Node.js 22 LTS**:
+Instalirajte **Node.js 24 LTS (`>= 24.12.0`)**:
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt install -y nodejs
 sudo npm install -g pm2
-node -v   # Treba da ispise v22.x.x
+node -v   # Treba da ispise >= v24.12.0
 npm -v
 ```
 
@@ -84,10 +84,9 @@ Kreirajte `.env` datoteku:
 ```bash
 nano .env
 ```
-Upišite sledeće promenljive (prilagodite ukoliko imate sopstveni TMDB ključ):
+Upišite sledeće promenljive (`TMDB_API_KEY` ostaje isključivo na serveru i nikada se ne pakuje u klijentski `dist/assets/*.js`):
 ```dotenv
 TMDB_API_KEY=your_tmdb_api_key_here
-VITE_TMDB_API_KEY=your_tmdb_api_key_here
 APP_URL=https://tstream.online
 PORT=3000
 HOST=0.0.0.0
@@ -197,8 +196,7 @@ Ako želite da hostujete frontend na **Vercel** platformi sa globalnim CDN-om:
    - **Build Command**: `npm run build`
    - **Output Directory**: `dist`
 5. U sekciji **Environment Variables** dodajte:
-   - `TMDB_API_KEY`: `<your_tmdb_api_key>`
-   - `VITE_TMDB_API_KEY`: `<your_tmdb_api_key>`
+   - `TMDB_API_KEY`: `<your_tmdb_api_key>` (server-side samo; `VITE_TMDB_API_KEY` ne sme postojati)
    - `APP_URL`: `https://tstream.online` (ili vaš Vercel domen)
 6. Kliknite **Deploy**.
 
