@@ -187,28 +187,31 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const audioCtxRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
 
-  // Flatten all streams
-  const allStreams: Array<ResolvedStream & { providerName: string; providerKey: string }> = [];
-  for (const pr of providerResults) {
-    if (pr.provider?.toLowerCase().includes('castle') || pr.providerName?.toLowerCase().includes('castle')) {
-      continue;
-    }
-    for (const st of pr.streams) {
-      if (
-        st.server?.toLowerCase().includes('castle') ||
-        st.url?.toLowerCase().includes('castle') ||
-        (st as any).providerKey?.toLowerCase().includes('castle')
-      ) {
+  // Flatten all streams (memoized so activeStream keeps stable reference across renders)
+  const allStreams = useMemo(() => {
+    const list: Array<ResolvedStream & { providerName: string; providerKey: string }> = [];
+    for (const pr of providerResults) {
+      if (pr.provider?.toLowerCase().includes('castle') || pr.providerName?.toLowerCase().includes('castle')) {
         continue;
       }
-      allStreams.push({
-        ...st,
-        server: cleanServerDisplay(st.server),
-        providerName: cleanServerDisplay(pr.providerName),
-        providerKey: pr.provider
-      });
+      for (const st of pr.streams) {
+        if (
+          st.server?.toLowerCase().includes('castle') ||
+          st.url?.toLowerCase().includes('castle') ||
+          (st as any).providerKey?.toLowerCase().includes('castle')
+        ) {
+          continue;
+        }
+        list.push({
+          ...st,
+          server: cleanServerDisplay(st.server),
+          providerName: cleanServerDisplay(pr.providerName),
+          providerKey: pr.provider
+        });
+      }
     }
-  }
+    return list;
+  }, [providerResults]);
 
   // Active Stream Selection
   const [selectedStreamIndex, setSelectedStreamIndex] = useState<number>(0);
@@ -896,38 +899,42 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeModal, volume, duration]);
 
-  // Combine subtitles from API + stream + user uploads
-  const combinedSubtitles: SubtitleTrack[] = [...uploadedSubs];
-  const seenUrls = new Set<string>();
+  // Combine subtitles from API + stream + user uploads (memoized to keep reference stable)
+  const combinedSubtitles: SubtitleTrack[] = useMemo(() => {
+    const list: SubtitleTrack[] = [...uploadedSubs];
+    const seenUrls = new Set<string>();
 
-  for (const s of uploadedSubs) {
-    seenUrls.add(s.url);
-  }
+    for (const s of uploadedSubs) {
+      seenUrls.add(s.url);
+    }
 
-  for (const pr of providerResults) {
-    if (Array.isArray(pr.subtitles)) {
-      for (const sub of pr.subtitles) {
-        if (sub?.url && !seenUrls.has(sub.url)) {
-          seenUrls.add(sub.url);
-          combinedSubtitles.push({
-            id: sub.url,
-            label: sub.label || sub.language || 'Subtitles',
-            language: sub.language || 'en',
-            languageCode: sub.language || 'en',
-            url: sub.url,
-            format: 'vtt'
-          });
+    for (const pr of providerResults) {
+      if (Array.isArray(pr.subtitles)) {
+        for (const sub of pr.subtitles) {
+          if (sub?.url && !seenUrls.has(sub.url)) {
+            seenUrls.add(sub.url);
+            list.push({
+              id: sub.url,
+              label: sub.label || sub.language || 'Subtitles',
+              language: sub.language || 'en',
+              languageCode: sub.language || 'en',
+              url: sub.url,
+              format: 'vtt'
+            });
+          }
         }
       }
     }
-  }
 
-  for (const sub of availableSubtitles) {
-    if (sub?.url && !seenUrls.has(sub.url)) {
-      seenUrls.add(sub.url);
-      combinedSubtitles.push(sub);
+    for (const sub of availableSubtitles) {
+      if (sub?.url && !seenUrls.has(sub.url)) {
+        seenUrls.add(sub.url);
+        list.push(sub);
+      }
     }
-  }
+
+    return list;
+  }, [uploadedSubs, providerResults, availableSubtitles]);
 
   const filteredSubtitles = useMemo(() => {
     if (!subSearchQuery.trim()) return combinedSubtitles;
@@ -975,11 +982,9 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   useEffect(() => {
     if (activeSubTrackUrl) {
       const activeTrack = combinedSubtitles.find(s => s.url === activeSubTrackUrl);
-      if (activeTrack?.languageCode) {
-        setExpandedLanguages(prev => ({
-          ...prev,
-          [activeTrack.languageCode!.toLowerCase()]: true
-        }));
+      const langKey = activeTrack?.languageCode?.toLowerCase();
+      if (langKey) {
+        setExpandedLanguages(prev => (prev[langKey] ? prev : { ...prev, [langKey]: true }));
       }
     }
   }, [activeSubTrackUrl, combinedSubtitles]);
@@ -1197,12 +1202,13 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   // Sync subtitle text with playback & delay (supports overlapping dialogue cues)
   useEffect(() => {
     if (!cues.length || !activeSubTrackUrl) {
-      setCustomSubtitleText('');
+      setCustomSubtitleText(prev => (prev === '' ? prev : ''));
       return;
     }
     const adjustedTime = currentTime - subDelay;
     const matchingCues = cues.filter(c => adjustedTime >= c.start && adjustedTime <= c.end);
-    setCustomSubtitleText(matchingCues.map(c => c.text).join('\n'));
+    const nextText = matchingCues.map(c => c.text).join('\n');
+    setCustomSubtitleText(prev => (prev === nextText ? prev : nextText));
   }, [currentTime, cues, subDelay, activeSubTrackUrl]);
 
   // Handle custom subtitle file upload (.vtt, .srt)

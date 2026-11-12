@@ -120,7 +120,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
   // Sync initialGenreId prop if passed
   useEffect(() => {
     if (initialGenreId !== undefined) {
-      setFilters(prev => ({ ...prev, genreId: initialGenreId, page: 1 }));
+      setFilters(prev => (prev.genreId === initialGenreId ? prev : { ...prev, genreId: initialGenreId, page: 1 }));
     }
   }, [initialGenreId]);
 

@@ -177,7 +177,7 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     const currentSeasonObj = tv.seasons?.find(s => s.seasonNumber === currentSeason);
 
     if (currentSeasonObj?.episodes && currentSeasonObj.episodes.length > 0) {
-      setEpisodesMap(prev => ({ ...prev, [currentSeason]: currentSeasonObj.episodes! }));
+      setEpisodesMap(prev => (prev[currentSeason]?.length ? prev : { ...prev, [currentSeason]: currentSeasonObj.episodes! }));
       return;
     }
 

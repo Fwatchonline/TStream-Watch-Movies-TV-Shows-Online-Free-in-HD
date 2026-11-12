@@ -39,7 +39,8 @@ export const DetailsHero: React.FC<DetailsHeroProps> = ({
   // Keep state updated if cloud watchlist changes
   React.useEffect(() => {
     if (user) {
-      setInWatchlist(isCloudInWatchlist(media.id));
+      const next = isCloudInWatchlist(media.id);
+      setInWatchlist(prev => (prev === next ? prev : next));
     }
   }, [user, isCloudInWatchlist, media.id]);
 

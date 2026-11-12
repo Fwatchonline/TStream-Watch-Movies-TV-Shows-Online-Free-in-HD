@@ -118,15 +118,18 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   }, [initialSeason, initialEpisode]);
 
   // Load TV episodes for current season
+  const attemptedSeasonsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (isMovie) return;
     let isMounted = true;
+    const cacheKey = `${media.tmdbId || media.id}_${currentSeason}`;
     async function loadSeason() {
-      if (episodesMap[currentSeason] && episodesMap[currentSeason].length > 0) return;
       if (currentSeasonData?.episodes && currentSeasonData.episodes.length > 0) {
-        setEpisodesMap(prev => ({ ...prev, [currentSeason]: currentSeasonData.episodes! }));
+        setEpisodesMap(prev => (prev[currentSeason]?.length ? prev : { ...prev, [currentSeason]: currentSeasonData.episodes! }));
         return;
       }
+      if (attemptedSeasonsRef.current.has(cacheKey)) return;
+      attemptedSeasonsRef.current.add(cacheKey);
       setLoadingEpisodes(true);
       try {
         const eps = await fetchSeasonEpisodes(media.tmdbId || media.id, currentSeason);
@@ -163,38 +166,53 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
 
   const currentEpisodeData = episodesList.find((e: any) => e.episodeNumber === currentEpisode);
 
-  // Load Direct Native HLS Streams with target cluster support
-  const loadDirectStreams = useCallback(async (targetCluster?: string) => {
-    setLoadingDirect(true);
-    setDirectFailed(false);
-    setIsScanningAlternative(true);
-    const cluster = targetCluster || activeCluster;
-    if (targetCluster) setActiveCluster(targetCluster);
+  const [streamReloadTick, setStreamReloadTick] = useState<number>(0);
 
-    try {
-      const results = await fetchDirectStreams({
-        tmdbId: media.tmdbId || media.id,
-        mediaType: media.mediaType,
-        season: isMovie ? undefined : currentSeason,
-        episode: isMovie ? undefined : currentEpisode,
-        provider: cluster === 'all' ? undefined : cluster
-      });
-      setDirectResults(results || []);
-      if (!results || results.length === 0) {
-        setDirectFailed(true);
-      }
-    } catch (err) {
-      console.warn('Direct stream resolution failed:', err);
-      setDirectFailed(true);
-    } finally {
-      setLoadingDirect(false);
-      setIsScanningAlternative(false);
+  // Load Direct Native HLS Streams cleanly without double-fetching
+  const loadDirectStreams = useCallback((targetCluster?: string) => {
+    if (targetCluster && targetCluster !== activeCluster) {
+      setActiveCluster(targetCluster);
+    } else {
+      setStreamReloadTick(t => t + 1);
     }
-  }, [media.tmdbId, media.id, media.mediaType, currentSeason, currentEpisode, isMovie, activeCluster]);
+  }, [activeCluster]);
 
   useEffect(() => {
-    loadDirectStreams();
-  }, [loadDirectStreams]);
+    let isMounted = true;
+    async function runFetch() {
+      setLoadingDirect(true);
+      setDirectFailed(false);
+      setIsScanningAlternative(true);
+
+      try {
+        const results = await fetchDirectStreams({
+          tmdbId: media.tmdbId || media.id,
+          mediaType: media.mediaType,
+          season: isMovie ? undefined : currentSeason,
+          episode: isMovie ? undefined : currentEpisode,
+          provider: activeCluster === 'all' ? undefined : activeCluster
+        });
+        if (!isMounted) return;
+        setDirectResults(results || []);
+        if (!results || results.length === 0) {
+          setDirectFailed(true);
+        }
+      } catch (err) {
+        console.warn('Direct stream resolution failed:', err);
+        if (isMounted) setDirectFailed(true);
+      } finally {
+        if (isMounted) {
+          setLoadingDirect(false);
+          setIsScanningAlternative(false);
+        }
+      }
+    }
+
+    runFetch();
+    return () => {
+      isMounted = false;
+    };
+  }, [media.tmdbId, media.id, media.mediaType, currentSeason, currentEpisode, isMovie, activeCluster, streamReloadTick]);
 
   // Load subtitles
   useEffect(() => {
@@ -248,7 +266,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     };
   }, [user, media.id, media.tmdbId, media.mediaType, currentSeason, currentEpisode, isMovie, getContinueWatchingItem]);
 
-  const handleProgressUpdate = (progressSeconds: number, durationSeconds: number) => {
+  const handleProgressUpdate = useCallback((progressSeconds: number, durationSeconds: number) => {
     // Continue watching is strictly for registered users
     if (!user) return;
     saveContinueWatching({
@@ -263,27 +281,27 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
       episodeNumber: isMovie ? undefined : currentEpisode,
       episodeName: currentEpisodeData?.name
     });
-  };
+  }, [user, saveContinueWatching, media.tmdbId, media.id, media.mediaType, media.title, media.posterPath, media.backdropPath, isMovie, currentSeason, currentEpisode, currentEpisodeData?.name]);
 
   const maxEpisode = currentSeasonData?.episodeCount || episodesList.length || 10;
   const hasNextEpisode = !isMovie && currentEpisode < maxEpisode;
   const hasPrevEpisode = !isMovie && currentEpisode > 1;
 
-  const handleNextEpisode = () => {
+  const handleNextEpisode = useCallback(() => {
     if (hasNextEpisode) {
       const next = currentEpisode + 1;
       setCurrentEpisode(next);
       onEpisodeChange && onEpisodeChange(currentSeason, next);
     }
-  };
+  }, [hasNextEpisode, currentEpisode, currentSeason, onEpisodeChange]);
 
-  const handlePrevEpisode = () => {
+  const handlePrevEpisode = useCallback(() => {
     if (hasPrevEpisode) {
       const prev = currentEpisode - 1;
       setCurrentEpisode(prev);
       onEpisodeChange && onEpisodeChange(currentSeason, prev);
     }
-  };
+  }, [hasPrevEpisode, currentEpisode, currentSeason, onEpisodeChange]);
 
   // Generate Web Embed URL (strictly only fmov.my, movietvapi.stream, vidsrc.sh, or custom embed url)
   const tmdbId = media.tmdbId || media.id;

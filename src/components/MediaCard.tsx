@@ -18,7 +18,8 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onSelect, onWatch })
 
   React.useEffect(() => {
     if (user) {
-      setInWatchlist(isCloudInWatchlist(item.id));
+      const next = isCloudInWatchlist(item.id);
+      setInWatchlist(prev => (prev === next ? prev : next));
     }
   }, [user, isCloudInWatchlist, item.id]);
 

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   auth,
   googleProvider,
@@ -95,15 +95,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
   const checkingShowsRef = useRef(false);
+  const notificationsRef = useRef<EpisodeNotification[]>([]);
+  notificationsRef.current = notifications;
+  const watchlistRef = useRef<WatchlistItem[]>([]);
+  watchlistRef.current = watchlist;
+  const followedShowsRef = useRef<FollowedShowItem[]>([]);
+  followedShowsRef.current = followedShows;
 
-  const openAuthModal = (mode: AuthModalMode = 'login') => {
+  const openAuthModal = useCallback((mode: AuthModalMode = 'login') => {
     setAuthModalMode(mode);
     setIsAuthModalOpen(true);
-  };
+  }, []);
 
-  const closeAuthModal = () => {
+  const closeAuthModal = useCallback(() => {
     setIsAuthModalOpen(false);
-  };
+  }, []);
 
   // Auth State Listener
   useEffect(() => {
@@ -204,12 +210,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    * Scans followed TV series against TMDB to detect if a new episode aired
    * and creates an interactive alert notification if not yet registered.
    */
-  const checkFollowedShowsForNewEpisodes = async () => {
-    if (!user || checkingShowsRef.current || followedShows.length === 0) return;
+  const checkFollowedShowsForNewEpisodes = useCallback(async () => {
+    const currentFollowed = followedShowsRef.current;
+    if (!user || checkingShowsRef.current || currentFollowed.length === 0) return;
     checkingShowsRef.current = true;
 
     try {
-      for (const show of followedShows) {
+      for (const show of currentFollowed) {
         const tvId = parseInt(show.showId, 10);
         if (isNaN(tvId)) continue;
 
@@ -220,7 +227,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const notifId = `notif_${tvId}_s${ep.seasonNumber}_e${ep.episodeNumber}`;
 
         // Check if notification already exists
-        const alreadyExists = notifications.some(n => n.id === notifId);
+        const alreadyExists = notificationsRef.current.some(n => n.id === notifId);
         if (!alreadyExists) {
           const newNotif: EpisodeNotification = {
             id: notifId,
@@ -244,22 +251,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       checkingShowsRef.current = false;
     }
-  };
+  }, [user]);
 
   // Follow / Unfollow TV Series
-  const isFollowingShow = (showId: number | string): boolean => {
+  const isFollowingShow = useCallback((showId: number | string): boolean => {
     const idStr = String(showId);
     return followedShows.some(s => String(s.showId) === idStr);
-  };
+  }, [followedShows]);
 
-  const toggleFollowShow = async (show: Partial<MediaItem> & { id: number; title?: string }): Promise<boolean> => {
+  const toggleFollowShow = useCallback(async (show: Partial<MediaItem> & { id: number; title?: string }): Promise<boolean> => {
     if (!user) {
       openAuthModal('login');
       return false;
     }
 
     const showIdStr = String(show.id);
-    const following = isFollowingShow(showIdStr);
+    const following = followedShowsRef.current.some(s => String(s.showId) === showIdStr);
 
     if (following) {
       await unfollowShow(user.uid, showIdStr);
@@ -300,32 +307,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       return true;
     }
-  };
+  }, [user, openAuthModal]);
 
-  const markNotificationRead = async (notifId: string): Promise<void> => {
+  const markNotificationRead = useCallback(async (notifId: string): Promise<void> => {
     if (!user) return;
     await markNotificationAsRead(user.uid, notifId);
-  };
+  }, [user]);
 
-  const markAllNotificationsRead = async (): Promise<void> => {
+  const markAllNotificationsRead = useCallback(async (): Promise<void> => {
     if (!user) return;
     await markAllNotificationsAsRead(user.uid);
-  };
+  }, [user]);
 
   // Watchlist Actions
-  const isInWatchlist = (tmdbId: number | string): boolean => {
+  const isInWatchlist = useCallback((tmdbId: number | string): boolean => {
     const idStr = String(tmdbId);
     return watchlist.some((item) => item.tmdbId === idStr);
-  };
+  }, [watchlist]);
 
-  const toggleWatchlist = async (item: Partial<MediaItem> & { id: number; title?: string }): Promise<boolean> => {
+  const toggleWatchlist = useCallback(async (item: Partial<MediaItem> & { id: number; title?: string }): Promise<boolean> => {
     if (!user) {
       openAuthModal('login');
       return false;
     }
 
     const idStr = String(item.id);
-    const exists = isInWatchlist(idStr);
+    const exists = watchlistRef.current.some((w) => w.tmdbId === idStr);
 
     if (exists) {
       await removeFromWatchlist(user.uid, idStr);
@@ -342,10 +349,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       return true;
     }
-  };
+  }, [user, openAuthModal]);
 
   // Continue Watching Actions
-  const saveContinueWatching = async (item: {
+  const saveContinueWatching = useCallback(async (item: {
     tmdbId: string | number;
     mediaType: 'movie' | 'tv';
     title: string;
@@ -382,44 +389,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (item.episodeName) payload.episodeName = item.episodeName;
 
     await saveUserContinueWatching(payload);
-  };
+  }, [user]);
 
-  const removeContinueWatching = async (
+  const removeContinueWatching = useCallback(async (
     mediaType: 'movie' | 'tv',
     tmdbId: string | number
   ): Promise<void> => {
     if (!user) return;
     await removeUserContinueWatching(user.uid, mediaType, tmdbId);
-  };
+  }, [user]);
 
-  const getContinueWatchingItem = async (
+  const getContinueWatchingItem = useCallback(async (
     mediaType: 'movie' | 'tv',
     tmdbId: string | number
   ): Promise<ContinueWatchingRecord | null> => {
     if (!user) return null;
     return getUserContinueWatchingItem(user.uid, mediaType, tmdbId);
-  };
+  }, [user]);
 
   // Auth Operations
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = useCallback(async () => {
     const result = await signInWithPopup(auth, googleProvider);
     if (result.user) {
       const p = await syncUserProfile(result.user);
       setProfile(p);
       closeAuthModal();
     }
-  };
+  }, [closeAuthModal]);
 
-  const signInWithEmail = async (email: string, pass: string) => {
+  const signInWithEmail = useCallback(async (email: string, pass: string) => {
     const result = await signInWithEmailAndPassword(auth, email.trim(), pass);
     if (result.user) {
       const p = await syncUserProfile(result.user);
       setProfile(p);
       closeAuthModal();
     }
-  };
+  }, [closeAuthModal]);
 
-  const registerWithEmail = async (email: string, pass: string, displayName: string) => {
+  const registerWithEmail = useCallback(async (email: string, pass: string, displayName: string) => {
     const result = await createUserWithEmailAndPassword(auth, email.trim(), pass);
     if (result.user) {
       if (displayName.trim()) {
@@ -429,9 +436,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setProfile(p);
       closeAuthModal();
     }
-  };
+  }, [closeAuthModal]);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     await signOut(auth);
     setProfile(null);
     setWatchlist([]);
@@ -439,41 +446,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setFollowedShows([]);
     setNotifications([]);
     closeAuthModal();
-  };
+  }, [closeAuthModal]);
 
-  const unreadNotificationsCount = notifications.filter(n => !n.read).length;
+  const unreadNotificationsCount = useMemo(
+    () => notifications.filter(n => !n.read).length,
+    [notifications]
+  );
+
+  const contextValue = useMemo<AuthContextType>(() => ({
+    user,
+    profile,
+    watchlist,
+    continueWatching,
+    followedShows,
+    notifications,
+    unreadNotificationsCount,
+    loading,
+    isAuthModalOpen,
+    authModalMode,
+    openAuthModal,
+    closeAuthModal,
+    signInWithGoogle,
+    signInWithEmail,
+    registerWithEmail,
+    logout,
+    toggleWatchlist,
+    isInWatchlist,
+    saveContinueWatching,
+    removeContinueWatching,
+    getContinueWatchingItem,
+    toggleFollowShow,
+    isFollowingShow,
+    markNotificationRead,
+    markAllNotificationsRead,
+    checkFollowedShowsForNewEpisodes
+  }), [
+    user,
+    profile,
+    watchlist,
+    continueWatching,
+    followedShows,
+    notifications,
+    unreadNotificationsCount,
+    loading,
+    isAuthModalOpen,
+    authModalMode,
+    openAuthModal,
+    closeAuthModal,
+    signInWithGoogle,
+    signInWithEmail,
+    registerWithEmail,
+    logout,
+    toggleWatchlist,
+    isInWatchlist,
+    saveContinueWatching,
+    removeContinueWatching,
+    getContinueWatchingItem,
+    toggleFollowShow,
+    isFollowingShow,
+    markNotificationRead,
+    markAllNotificationsRead,
+    checkFollowedShowsForNewEpisodes
+  ]);
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        profile,
-        watchlist,
-        continueWatching,
-        followedShows,
-        notifications,
-        unreadNotificationsCount,
-        loading,
-        isAuthModalOpen,
-        authModalMode,
-        openAuthModal,
-        closeAuthModal,
-        signInWithGoogle,
-        signInWithEmail,
-        registerWithEmail,
-        logout,
-        toggleWatchlist,
-        isInWatchlist,
-        saveContinueWatching,
-        removeContinueWatching,
-        getContinueWatchingItem,
-        toggleFollowShow,
-        isFollowingShow,
-        markNotificationRead,
-        markAllNotificationsRead,
-        checkFollowedShowsForNewEpisodes
-      }}
-    >
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );

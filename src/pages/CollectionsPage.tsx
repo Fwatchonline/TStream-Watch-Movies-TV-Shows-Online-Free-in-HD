@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Layers,
   ArrowUpRight,
@@ -130,10 +130,12 @@ export const CollectionsPage: React.FC<CollectionsPageProps> = ({
     }
   };
 
+  const autoOpenedIdRef = useRef<number | null>(null);
   useEffect(() => {
-    if (initialCollectionId && collections.length > 0) {
+    if (initialCollectionId && collections.length > 0 && autoOpenedIdRef.current !== initialCollectionId) {
       const found = collections.find(c => c.id === initialCollectionId);
       if (found) {
+        autoOpenedIdRef.current = initialCollectionId;
         handleOpenCollection(found);
       }
     }

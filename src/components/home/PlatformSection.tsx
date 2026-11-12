@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ChevronRight, Tv } from 'lucide-react';
 import { PLATFORMS_LIST, PlatformInfo } from '../../services/platformData';
 import { fetchCatalog } from '../../services/tmdb';
@@ -19,22 +19,25 @@ export const PlatformSection: React.FC<PlatformSectionProps> = ({
 }) => {
   // We feature the top global streaming platforms
   const featuredPlatforms = PLATFORMS_LIST.filter(p =>
-    ['netflix', 'disney', 'hbo', 'apple', 'amazon', 'paramount', 'hulu'].includes(p.id)
+    ['netflix', 'disney', 'max', 'hbo', 'apple', 'prime', 'amazon', 'paramount', 'hulu'].includes(p.id)
   );
 
   const [activePlatformId, setActivePlatformId] = useState<string>('netflix');
   const [platformItems, setPlatformItems] = useState<Record<string, MediaItem[]>>({});
   const [loading, setLoading] = useState<boolean>(false);
+  const attemptedPlatformsRef = useRef<Set<string>>(new Set());
 
   const currentPlatform = featuredPlatforms.find(p => p.id === activePlatformId) || featuredPlatforms[0];
 
   useEffect(() => {
     let isMounted = true;
 
-    // If already loaded in memory cache, avoid refetching
-    if (platformItems[activePlatformId] && platformItems[activePlatformId].length > 0) {
+    // Avoid refetching platforms already loaded or attempted in this session
+    if (attemptedPlatformsRef.current.has(activePlatformId)) {
       return;
     }
+
+    attemptedPlatformsRef.current.add(activePlatformId);
 
     async function loadPlatformItems() {
       setLoading(true);
@@ -47,11 +50,17 @@ export const PlatformSection: React.FC<PlatformSectionProps> = ({
         if (isMounted) {
           setPlatformItems(prev => ({
             ...prev,
-            [activePlatformId]: res.results.slice(0, 16)
+            [activePlatformId]: (res.results || []).slice(0, 16)
           }));
         }
       } catch (err) {
         console.warn(`Failed loading items for platform ${activePlatformId}:`, err);
+        if (isMounted) {
+          setPlatformItems(prev => ({
+            ...prev,
+            [activePlatformId]: prev[activePlatformId] || []
+          }));
+        }
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -59,7 +68,7 @@ export const PlatformSection: React.FC<PlatformSectionProps> = ({
 
     loadPlatformItems();
     return () => { isMounted = false; };
-  }, [activePlatformId, platformItems]);
+  }, [activePlatformId]);
 
   const items = platformItems[activePlatformId] || [];
 
