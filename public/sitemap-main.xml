@@ -136,11 +136,6 @@
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://tstream.online/genre/horror</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
     <loc>https://tstream.online/genre/mystery</loc>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>

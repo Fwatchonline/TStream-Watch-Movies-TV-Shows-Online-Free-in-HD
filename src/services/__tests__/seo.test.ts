@@ -15,6 +15,8 @@ import {
   buildCanonicalUrl,
   resolveRouteSeoPolicy,
   isEpisodeSeoIndexable,
+  isGenuineEpisodeName,
+  validateVerifiedEpisodeRecord,
   DEFAULT_KEYWORDS
 } from '../../utils/seo';
 import {
@@ -27,7 +29,8 @@ import {
   PRIMARY_GENRE_SLUGS,
   genreToSlug,
   slugToGenre,
-  getCanonicalGenreUrl
+  getCanonicalGenreUrl,
+  itemMatchesGenre
 } from '../../utils/genres';
 import { POPULAR_TAGS } from '../catalogData';
 import {
@@ -51,7 +54,7 @@ import {
   getVerifiedEpisodeInventory
 } from '../../../scripts/routeInventory';
 import { generateSitemaps, validateSitemapXml } from '../../../scripts/generate-sitemaps';
-import { validateBuildArgs, verifyNoLeakedSecretsInDist } from '../../../scripts/run-build.mjs';
+import { validateBuildArgs, verifyNoLeakedSecretsInDist, verifyNoInternalArtifacts } from '../../../scripts/run-build.mjs';
 import { loadBuildEnv } from '../../../scripts/loadEnv.mjs';
 import { getPlatformConfigById } from '../platformConfig';
 import {
@@ -59,7 +62,7 @@ import {
   computeBalancedTopRatedPlan,
   mergeBalancedTopRatedSlices
 } from '../platformDiscovery';
-import { fetchCatalog, fetchByTag } from '../tmdb';
+import { fetchCatalog, fetchByTag, queryLocalCatalog } from '../tmdb';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -711,7 +714,7 @@ async function runTests() {
     sitemapDry.mainXml.includes('https://tstream.online/tags/time-travel') &&
       !sitemapDry.mainXml.includes('%20') &&
       sitemapDry.mainXml.includes('https://tstream.online/genre/action') &&
-      sitemapDry.mainXml.includes('https://tstream.online/genre/horror') &&
+      !sitemapDry.mainXml.includes('https://tstream.online/genre/horror') &&
       !sitemapDry.mainXml.includes('https://tstream.online/genre/western') &&
       sitemapDry.moviesXml.includes('https://tstream.online/movie/spider-man-homecoming-315635') &&
       !sitemapDry.moviesXml.includes('spider-man-homecoming-28') &&
@@ -803,7 +806,414 @@ async function runTests() {
     `Verified episode inventory (${verifiedEps.length}) matches sitemap-episodes.xml count (${sitemapDry.episodesCount})`
   );
 
-  console.log('\n--- ALL SEO, TAGS, GENRES, EPISODES, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
+  // =======================================================================
+  // STRICT EPISODE VERIFICATION TESTS (GENERIC TITLES, IDS, BOUNDS, ASSOCIATIONS)
+  // =======================================================================
+  const mockSeries = {
+    id: 1396,
+    mediaType: 'tv',
+    name: 'Breaking Bad',
+    overview: 'A high school chemistry teacher turns to cooking meth.',
+    voteAverage: 8.9,
+    voteCount: 13500,
+    numberOfSeasons: 2,
+    seasons: [
+      {
+        seasonNumber: 1,
+        episodeCount: 7,
+        overview: 'Season 1 follows Walter White entering the drug trade.',
+        episodes: []
+      },
+      {
+        seasonNumber: 2,
+        episodeCount: 13,
+        overview: 'Season 2 escalates consequences.',
+        episodes: []
+      }
+    ]
+  };
+
+  assert(
+    !isGenuineEpisodeName('') &&
+      !isGenuineEpisodeName('Episode 1') &&
+      !isGenuineEpisodeName('Ep. 2') &&
+      !isGenuineEpisodeName('Season 1 Episode 1') &&
+      !isGenuineEpisodeName('TBD') &&
+      isGenuineEpisodeName('Pilot'),
+    'isGenuineEpisodeName rejects missing/generic placeholders and accepts genuine episode titles'
+  );
+
+  // 1) Missing title -> not indexable
+  assert(
+    !isEpisodeSeoIndexable({
+      seriesId: 1396,
+      episodeId: 62085,
+      seasonNumber: 1,
+      episodeNumber: 1,
+      seasonEpisodeCount: 7,
+      numberOfSeasons: 2,
+      episodeName: '',
+      episodeOverview: 'Walter White collapses at his car wash job and receives life-altering medical news.',
+      seriesOverview: mockSeries.overview,
+      isVerifiedEpisode: true
+    }),
+    'Episode with missing title is NOT indexable'
+  );
+
+  // 2) Generic title ("Episode 1") -> not indexable (even via fetchServerEpisode/renderSeoResult)
+  assert(
+    !isEpisodeSeoIndexable({
+      seriesId: 1396,
+      episodeId: 62085,
+      seasonNumber: 1,
+      episodeNumber: 1,
+      episodeName: 'Episode 1',
+      episodeOverview: 'Walter White collapses at his car wash job and receives life-altering medical news.',
+      seriesOverview: mockSeries.overview,
+      isVerifiedEpisode: true
+    }),
+    'Episode with generic title ("Episode 1") is NOT indexable'
+  );
+
+  const mockGenericTitleFetch = (async () =>
+    new Response(
+      JSON.stringify({
+        id: 62086,
+        season_number: 1,
+        episode_number: 2,
+        name: 'Episode 2',
+        overview: 'Walter and Jesse deal with the aftermath in the desert RV.',
+        vote_average: 8.7,
+        vote_count: 300
+      }),
+      { status: 200 }
+    )) as typeof fetch;
+  const genericTitleRendered = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/tv/breaking-bad-1396/1/2', {
+    preloadedMedia: mockSeries,
+    fetchImpl: mockGenericTitleFetch,
+    tmdbApiKey: 'test-key'
+  });
+  assert(
+    genericTitleRendered.status === 200 && genericTitleRendered.isNoindex,
+    'Live TMDB episode with generic title "Episode 2" emits 200 + noindex'
+  );
+
+  // 3) Empty overview -> not indexable
+  assert(
+    !isEpisodeSeoIndexable({
+      seriesId: 1396,
+      episodeId: 62085,
+      seasonNumber: 1,
+      episodeNumber: 1,
+      episodeName: 'Pilot',
+      episodeOverview: '',
+      seriesOverview: mockSeries.overview,
+      isVerifiedEpisode: true
+    }),
+    'Episode with empty overview is NOT indexable'
+  );
+
+  // 4) Overview identical to parent series overview or season overview -> not indexable
+  assert(
+    !isEpisodeSeoIndexable({
+      seriesId: 1396,
+      episodeId: 62085,
+      seasonNumber: 1,
+      episodeNumber: 1,
+      episodeName: 'Pilot',
+      episodeOverview: mockSeries.overview,
+      seriesOverview: mockSeries.overview,
+      isVerifiedEpisode: true
+    }) &&
+      !isEpisodeSeoIndexable({
+        seriesId: 1396,
+        episodeId: 62085,
+        seasonNumber: 1,
+        episodeNumber: 1,
+        episodeName: 'Pilot',
+        episodeOverview: mockSeries.seasons[0].overview,
+        seriesOverview: mockSeries.overview,
+        seasonOverview: mockSeries.seasons[0].overview,
+        isVerifiedEpisode: true
+      }),
+    'Episode overview matching parent series or season overview is NOT indexable'
+  );
+
+  // 5) Missing or invalid episode ID -> not verified / not indexable
+  assert(
+    !isEpisodeSeoIndexable({
+      seriesId: 1396,
+      episodeId: 0,
+      seasonNumber: 1,
+      episodeNumber: 1,
+      episodeName: 'Pilot',
+      episodeOverview: 'Walter White collapses at his car wash job and learns he has terminal cancer.',
+      seriesOverview: mockSeries.overview,
+      isVerifiedEpisode: true
+    }) &&
+      !validateVerifiedEpisodeRecord({
+        show: mockSeries,
+        season: mockSeries.seasons[0],
+        episode: {
+          id: 0,
+          seasonNumber: 1,
+          episodeNumber: 1,
+          name: 'Pilot',
+          overview: 'Walter White collapses at his car wash job and learns he has terminal cancer.'
+        }
+      }),
+    'Episode missing positive integer TMDB ID fails verification and is NOT indexable'
+  );
+
+  // 6) Nonexistent season & 7) episode exceeding season episodeCount -> 404
+  const badSeasonEp = await fetchServerEpisode(mockSeries, 99, 1, mock404Fetch, 'test-key');
+  const badEpisodeBounds = await fetchServerEpisode(mockSeries, 1, 9, mock404Fetch, 'test-key');
+  assert(
+    badSeasonEp === null && badEpisodeBounds === null,
+    'Nonexistent season (99) and episode exceeding season episodeCount (9 > 7) return null (HTTP 404)'
+  );
+
+  // 8) Wrong parent series or season association -> rejected by validateVerifiedEpisodeRecord & fetchServerEpisode
+  assert(
+    !validateVerifiedEpisodeRecord({
+      show: mockSeries,
+      season: mockSeries.seasons[0],
+      episode: {
+        id: 62085,
+        showId: 99999,
+        seasonNumber: 1,
+        episodeNumber: 1,
+        name: 'Pilot',
+        overview: 'Walter White collapses at his car wash job and learns he has terminal cancer.'
+      }
+    }) &&
+      !validateVerifiedEpisodeRecord({
+        show: mockSeries,
+        season: mockSeries.seasons[0],
+        episode: {
+          id: 62085,
+          seasonNumber: 2,
+          episodeNumber: 1,
+          name: 'Pilot',
+          overview: 'Walter White collapses at his car wash job and learns he has terminal cancer.'
+        }
+      }),
+    'Mismatched parent showId or seasonNumber fails verified episode check'
+  );
+
+  // 9) Genuine verified TMDB episode -> indexable + included when verified
+  const mockGenuineEpFetch = (async () =>
+    new Response(
+      JSON.stringify({
+        id: 62085,
+        season_number: 1,
+        episode_number: 5,
+        name: 'Gray Matter',
+        overview: 'Walter rejects Eliot and Gretchen’s offer of financial assistance at a birthday gathering.',
+        air_date: '2008-02-24',
+        vote_average: 8.4,
+        vote_count: 295
+      }),
+      { status: 200 }
+    )) as typeof fetch;
+  const genuineLiveEpRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/tv/breaking-bad-1396/1/5', {
+    preloadedMedia: mockSeries,
+    fetchImpl: mockGenuineEpFetch,
+    tmdbApiKey: 'test-key'
+  });
+  assert(
+    genuineLiveEpRes.status === 200 &&
+      !genuineLiveEpRes.isNoindex &&
+      genuineLiveEpRes.html.includes('Gray Matter') &&
+      /"ratingValue"\s*:\s*8\.4/.test(genuineLiveEpRes.html) &&
+      /"ratingCount"\s*:\s*295/.test(genuineLiveEpRes.html),
+    'Genuine verified episode with positive ID, unique synopsis, and episode rating renders indexable TVEpisode'
+  );
+
+  // 10) Upstream 429 & 5xx both throw 503
+  for (const upstreamStatus of [429, 502]) {
+    let threw503 = false;
+    try {
+      await fetchServerEpisode(
+        mockSeries,
+        1,
+        3,
+        (async () => new Response('err', { status: upstreamStatus })) as typeof fetch,
+        'test-key'
+      );
+    } catch (e: any) {
+      threw503 = e?.status === 503;
+    }
+    assert(threw503, `Episode upstream HTTP ${upstreamStatus} propagates as HTTP 503`);
+  }
+
+  // 11) Sitemap episodes exclusion parity: all sitemap-episodes.xml URLs pass validateVerifiedEpisodeRecord
+  assert(
+    verifiedEps.every(ep => ep.episodeName && !/^(?:episode|ep\.?)\s*\d+$/i.test(ep.episodeName)) &&
+      !sitemapDry.episodesXml?.includes('/1/6'),
+    'sitemap-episodes.xml strictly includes only verified content-rich episodes and excludes unverified ones'
+  );
+
+  // =======================================================================
+  // PUBLIC ARTIFACT SAFETY CHECKS
+  // =======================================================================
+  verifyNoInternalArtifacts(process.cwd(), ['public']);
+  assert(
+    fs.existsSync(path.resolve(process.cwd(), 'public/assets/aistudio/tstream-logo-yellow-transparent_1__d41aea4b.png')),
+    'Legitimate website logo asset in public/assets/aistudio/ is preserved while internal prompts are absent'
+  );
+
+  const artifactSandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'tstream-artifact-guard-'));
+  fs.mkdirSync(path.join(artifactSandbox, 'public/assets/aistudio'), { recursive: true });
+  fs.writeFileSync(path.join(artifactSandbox, 'public/assets/aistudio/Paste_test_prompt'), 'TSTREAM.ONLINE — FINAL', 'utf8');
+  let caughtInternalArtifact = false;
+  try {
+    verifyNoInternalArtifacts(artifactSandbox, ['public']);
+  } catch {
+    caughtInternalArtifact = true;
+  }
+  fs.rmSync(artifactSandbox, { recursive: true, force: true });
+  assert(caughtInternalArtifact, 'verifyNoInternalArtifacts fails build if Paste_* or prompt artifacts exist in public/ or dist/');
+
+  // =======================================================================
+  // CROSS-MEDIA GENRE MATCHING ISOLATION (MOVIES VS TV SERIES)
+  // =======================================================================
+  const actionMeta = slugToGenre('action')!;
+  const actionAdventureMeta = slugToGenre('action-adventure')!;
+  const sciFiMeta = slugToGenre('science-fiction')!;
+  const sciFiFantasyMeta = slugToGenre('sci-fi-fantasy')!;
+  const dramaMeta = slugToGenre('drama')!;
+  const mysteryMeta = slugToGenre('mystery')!;
+  const horrorMeta = slugToGenre('horror')!;
+
+  const sampleActionMovie = { id: 315635, mediaType: 'movie', title: 'Spider-Man: Homecoming', genres: [{ id: 28, name: 'Action' }] };
+  const sampleSciFiMovie = { id: 27205, mediaType: 'movie', title: 'Inception', genres: [{ id: 878, name: 'Science Fiction' }, { id: 28, name: 'Action' }] };
+  const sampleMysteryMovie = { id: 414906, mediaType: 'movie', title: 'The Batman', genres: [{ id: 80, name: 'Crime' }, { id: 9648, name: 'Mystery' }, { id: 53, name: 'Thriller' }] };
+  const sampleHorrorMovie = { id: 36647, mediaType: 'movie', title: 'Blade', genres: [{ id: 28, name: 'Action' }, { id: 27, name: 'Horror' }] };
+  const corruptMovieWithTvIds = { id: 99901, mediaType: 'movie', title: 'Corrupt Movie', genres: [{ id: 10759, name: 'Action & Adventure' }, { id: 10765, name: 'Sci-Fi & Fantasy' }] };
+
+  const sampleActionTv = { id: 126308, mediaType: 'tv', name: 'Shogun', genres: [{ id: 18, name: 'Drama' }, { id: 10759, name: 'Action & Adventure' }] };
+  const sampleSciFiTv = { id: 66732, mediaType: 'tv', name: 'Stranger Things', genres: [{ id: 10765, name: 'Sci-Fi & Fantasy' }, { id: 18, name: 'Drama' }, { id: 9648, name: 'Mystery' }] };
+  const corruptTvWithMovieIds = { id: 99902, mediaType: 'tv', name: 'Corrupt TV', genres: [{ id: 28, name: 'Action' }, { id: 878, name: 'Science Fiction' }, { id: 27, name: 'Horror' }] };
+
+  // Action (28) & Action & Adventure (10759)
+  assert(
+    itemMatchesGenre(sampleActionMovie, actionMeta) &&
+      !itemMatchesGenre(corruptMovieWithTvIds, actionMeta) &&
+      itemMatchesGenre(sampleActionTv, actionMeta) &&
+      !itemMatchesGenre(corruptTvWithMovieIds, actionMeta) &&
+      itemMatchesGenre(sampleActionTv, actionAdventureMeta) &&
+      !itemMatchesGenre(sampleActionMovie, actionAdventureMeta) &&
+      !itemMatchesGenre(corruptMovieWithTvIds, actionAdventureMeta) &&
+      !itemMatchesGenre(corruptTvWithMovieIds, actionAdventureMeta),
+    'Action & Action & Adventure strictly separate movie ID 28 and TV ID 10759'
+  );
+
+  // Science Fiction (878) & Sci-Fi & Fantasy (10765)
+  assert(
+    itemMatchesGenre(sampleSciFiMovie, sciFiMeta) &&
+      !itemMatchesGenre(corruptMovieWithTvIds, sciFiMeta) &&
+      itemMatchesGenre(sampleSciFiTv, sciFiMeta) &&
+      !itemMatchesGenre(corruptTvWithMovieIds, sciFiMeta) &&
+      itemMatchesGenre(sampleSciFiTv, sciFiFantasyMeta) &&
+      !itemMatchesGenre(sampleSciFiMovie, sciFiFantasyMeta) &&
+      !itemMatchesGenre(corruptMovieWithTvIds, sciFiFantasyMeta) &&
+      !itemMatchesGenre(corruptTvWithMovieIds, sciFiFantasyMeta),
+    'Science Fiction & Sci-Fi & Fantasy strictly separate movie ID 878 and TV ID 10765'
+  );
+
+  // Drama (18) & Mystery (9648) & Horror (27)
+  assert(
+    itemMatchesGenre(sampleActionTv, dramaMeta) &&
+      !itemMatchesGenre(sampleHorrorMovie, dramaMeta) &&
+      itemMatchesGenre(sampleMysteryMovie, mysteryMeta) &&
+      itemMatchesGenre(sampleSciFiTv, mysteryMeta) &&
+      itemMatchesGenre(sampleHorrorMovie, horrorMeta) &&
+      !itemMatchesGenre(sampleMysteryMovie, horrorMeta) &&
+      !itemMatchesGenre(sampleSciFiTv, horrorMeta) &&
+      !itemMatchesGenre(corruptTvWithMovieIds, horrorMeta),
+    'Drama, Mystery, and Horror match strictly without Mystery (9648) contaminating Horror (27)'
+  );
+
+  // Offline /genre/horror SSR & queryLocalCatalog must exclude The Batman / Stranger Things / Severance (noindex, 0 fabricated cards)
+  const horrorGenreSsr = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/genre/horror');
+  const horrorSsrTitles = extractCardTitles(horrorGenreSsr.html);
+  const localHorrorTitles = queryLocalCatalog({ genreId: 27 }).results.map(r => r.title);
+  assert(
+    horrorGenreSsr.status === 200 &&
+      horrorGenreSsr.isNoindex &&
+      horrorSsrTitles.length === 0 &&
+      localHorrorTitles.length === 0 &&
+      !horrorSsrTitles.includes('The Batman') &&
+      !horrorSsrTitles.includes('Stranger Things') &&
+      !horrorSsrTitles.includes('Severance') &&
+      !localHorrorTitles.includes('The Batman'),
+    'Offline /genre/horror emits noindex with zero fabricated Mystery (9648) or TV cards'
+  );
+
+  // Live TMDB /genre/horror queries /discover/movie?with_genres=27 only (never /discover/tv) and renders indexable CollectionPage
+  const calledHorrorUrls: string[] = [];
+  const mockHorrorFetch = (async (input: string | URL | Request) => {
+    const u = String(input);
+    calledHorrorUrls.push(u);
+    if (u.includes('/discover/movie') && u.includes('with_genres=27')) {
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              id: 36647,
+              title: 'Blade',
+              release_date: '1998-08-21',
+              vote_average: 7.2,
+              genre_ids: [27, 28]
+            }
+          ],
+          total_pages: 1
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ results: [], total_pages: 1 }), { status: 200 });
+  }) as typeof fetch;
+  const liveHorrorSsr = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/genre/horror', {
+    fetchImpl: mockHorrorFetch,
+    tmdbApiKey: 'test-key'
+  });
+  const liveHorrorCards = extractCardTitles(liveHorrorSsr.html);
+  assert(
+    liveHorrorSsr.status === 200 &&
+      !liveHorrorSsr.isNoindex &&
+      liveHorrorCards.includes('Blade') &&
+      !liveHorrorCards.includes('The Batman') &&
+      !liveHorrorCards.includes('Stranger Things') &&
+      calledHorrorUrls.some(u => u.includes('/discover/movie') && u.includes('with_genres=27')) &&
+      calledHorrorUrls.every(u => !u.includes('/discover/tv')),
+    'Live /genre/horror queries movie genre 27 only and excludes TV & Mystery contamination'
+  );
+
+  // Offline /genre/action-adventure returns TV series only
+  const actionAdvSsr = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/genre/action-adventure');
+  assert(
+    actionAdvSsr.status === 200 &&
+      !actionAdvSsr.isNoindex &&
+      !/href="\/movie\//i.test(actionAdvSsr.html) &&
+      /href="\/tv\//i.test(actionAdvSsr.html),
+    '/genre/action-adventure filters TV series strictly without leaking Action movies'
+  );
+
+  // Browser fetchCatalog mediaType='movie' with TV-only genre returns empty without unfiltered fallback
+  const tvOnlyWithMovieType = await fetchCatalog('movies', 1, {
+    mediaType: 'movie',
+    genreId: 10759
+  }, {
+    fetchImpl: mock404Fetch
+  });
+  assert(
+    tvOnlyWithMovieType.results.length === 0,
+    'fetchCatalog(movies, genreId=10759) returns empty rather than cross-matching TV-only genre onto movies'
+  );
+
+  console.log('\n--- ALL SEO, TAGS, GENRES, EPISODES, ARTIFACTS, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
 }
 
 runTests().catch(err => {

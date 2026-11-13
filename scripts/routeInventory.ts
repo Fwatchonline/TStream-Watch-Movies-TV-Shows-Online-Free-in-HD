@@ -18,7 +18,7 @@ import { PLATFORM_CONFIGS, type PlatformMeta } from '../src/services/platformCon
 import { GENRE_LANDINGS, type GenreLandingMeta } from '../src/utils/genres.ts';
 import { createMediaSlug } from '../src/utils/slug.ts';
 import { tagToSlug, slugToTag } from '../src/utils/tags.ts';
-import { isEpisodeSeoIndexable, PRIMARY_ORIGIN } from '../src/utils/seo.ts';
+import { validateVerifiedEpisodeRecord, PRIMARY_ORIGIN } from '../src/utils/seo.ts';
 import {
   getAllCatalogMedia,
   getMatchingCatalogForTag,
@@ -215,11 +215,10 @@ export function getVerifiedEpisodeInventory(): EpisodeInventoryEntry[] {
 
       for (const ep of season.episodes) {
         if (!ep || !Number.isInteger(ep.episodeNumber) || ep.episodeNumber < 1) continue;
-        const indexable = isEpisodeSeoIndexable({
-          episodeName: ep.name,
-          episodeOverview: ep.overview,
-          seriesOverview: show.overview,
-          isVerifiedEpisode: true
+        const indexable = validateVerifiedEpisodeRecord({
+          show,
+          season,
+          episode: ep
         });
         if (!indexable) continue;
 

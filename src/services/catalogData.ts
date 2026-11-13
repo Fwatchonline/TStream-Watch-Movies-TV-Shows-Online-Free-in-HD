@@ -1269,7 +1269,7 @@ export const EXPANDED_CATALOG: MediaItem[] = [
     voteAverage: 8.4,
     voteCount: 2100,
     popularity: 92.4,
-    genres: [{ id: 18, name: 'Drama' }, { id: 9648, name: 'Mystery' }, { id: 878, name: 'Science Fiction' }],
+    genres: [{ id: 18, name: 'Drama' }, { id: 9648, name: 'Mystery' }, { id: 10765, name: 'Sci-Fi & Fantasy' }],
     mediaType: 'tv' as MediaType,
     certification: 'TV-MA',
     numberOfSeasons: 2,

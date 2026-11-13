@@ -21,6 +21,7 @@ import {
   buildMediaMetadata,
   resolveRouteSeoPolicy,
   isEpisodeSeoIndexable,
+  isGenuineEpisodeName,
   DEFAULT_TITLE,
   DEFAULT_DESC,
   DEFAULT_KEYWORDS,
@@ -816,6 +817,7 @@ export async function fetchServerMedia(
 }
 
 export interface ServerEpisodeResult {
+  episodeId?: number;
   name: string;
   hasGenuineName: boolean;
   overview: string;
@@ -827,9 +829,9 @@ export interface ServerEpisodeResult {
 
 /**
  * Validates and fetches metadata for a specific TV episode.
- * - Returns null if the season or episode is provably invalid/nonexistent (triggering HTTP 404).
+ * - Returns null if the series, season, or episode is provably invalid/nonexistent (triggering HTTP 404).
  * - NEVER fabricates fake episode titles/overviews on TMDB failures or blindly assumes `episode <= 25`.
- * - NEVER copies parent series overview into episode overview.
+ * - NEVER copies parent series or season overview into episode overview.
  * - Throws 503 on transient upstream failure when no verified local/cached episode exists.
  */
 export async function fetchServerEpisode(
@@ -839,7 +841,16 @@ export async function fetchServerEpisode(
   fetchImpl: typeof fetch = fetch,
   tmdbApiKey: string = getServerTmdbApiKey()
 ): Promise<ServerEpisodeResult | null> {
-  if (!show || !Number.isInteger(season) || !Number.isInteger(episode) || season < 1 || episode < 1) {
+  const showId = Number(show?.id || show?.tmdbId);
+  if (
+    !show ||
+    !Number.isInteger(showId) ||
+    showId <= 0 ||
+    !Number.isInteger(season) ||
+    !Number.isInteger(episode) ||
+    season < 1 ||
+    episode < 1
+  ) {
     return null;
   }
 
@@ -848,37 +859,55 @@ export async function fetchServerEpisode(
   }
 
   const showOverview = (show.overview || '').trim();
-  const seasonObj = Array.isArray(show.seasons)
+  const hasPopulatedSeasons = Array.isArray(show.seasons) && show.seasons.length > 0;
+  const seasonObj = hasPopulatedSeasons
     ? show.seasons.find((s: any) => s.seasonNumber === season)
     : undefined;
 
-  if (seasonObj?.episodes && Array.isArray(seasonObj.episodes)) {
-    const exactEp = seasonObj.episodes.find((e: any) => e.episodeNumber === episode);
-    if (exactEp) {
-      const rawName = (exactEp.name || '').trim();
-      const rawOverview = (exactEp.overview || '').trim();
-      const uniqueOverview =
-        rawOverview && (!showOverview || rawOverview.toLowerCase() !== showOverview.toLowerCase())
-          ? rawOverview
-          : '';
-      return {
-        name: rawName || `Episode ${episode}`,
-        hasGenuineName: Boolean(rawName && !/^episode\s+\d+$/i.test(rawName)),
-        overview: uniqueOverview,
-        airDate: exactEp.airDate || seasonObj.airDate || '',
-        voteAverage: exactEp.voteAverage && exactEp.voteAverage > 0 ? Number(exactEp.voteAverage) : undefined,
-        voteCount: (exactEp as any).voteCount && (exactEp as any).voteCount > 0 ? Number((exactEp as any).voteCount) : undefined,
-        isVerified: true
-      };
-    }
+  if (hasPopulatedSeasons && !seasonObj) {
+    return null;
   }
 
   if (seasonObj?.episodeCount && episode > seasonObj.episodeCount) {
     return null;
   }
 
+  const seasonOverview = (seasonObj?.overview || '').trim();
+
+  if (seasonObj?.episodes && Array.isArray(seasonObj.episodes)) {
+    const exactEp = seasonObj.episodes.find((e: any) => e.episodeNumber === episode);
+    if (exactEp) {
+      const matchesParent = exactEp.showId === undefined || Number(exactEp.showId) === showId;
+      const matchesSeason = exactEp.seasonNumber === undefined || Number(exactEp.seasonNumber) === season;
+      if (matchesParent && matchesSeason) {
+        const epId = Number(exactEp.id);
+        const hasValidEpId = Number.isInteger(epId) && epId > 0;
+        const rawName = (exactEp.name || '').trim();
+        const hasGenuineName = isGenuineEpisodeName(rawName);
+        const rawOverview = (exactEp.overview || '').trim();
+        const isDistinctFromShow = !showOverview || rawOverview.toLowerCase() !== showOverview.toLowerCase();
+        const isDistinctFromSeason = !seasonOverview || rawOverview.toLowerCase() !== seasonOverview.toLowerCase();
+        const uniqueOverview = rawOverview && isDistinctFromShow && isDistinctFromSeason ? rawOverview : '';
+        const isVerified = Boolean(
+          hasValidEpId && hasGenuineName && uniqueOverview.length >= 15
+        );
+
+        return {
+          episodeId: hasValidEpId ? epId : undefined,
+          name: rawName || `Episode ${episode}`,
+          hasGenuineName,
+          overview: uniqueOverview,
+          airDate: exactEp.airDate || seasonObj.airDate || '',
+          voteAverage: exactEp.voteAverage && exactEp.voteAverage > 0 ? Number(exactEp.voteAverage) : undefined,
+          voteCount: (exactEp as any).voteCount && (exactEp as any).voteCount > 0 ? Number((exactEp as any).voteCount) : undefined,
+          isVerified
+        };
+      }
+    }
+  }
+
   const useCache = fetchImpl === fetch;
-  const cacheKey = `${show.id}:${season}:${episode}`;
+  const cacheKey = `${showId}:${season}:${episode}`;
   if (useCache) {
     const fresh = serverEpisodeCache.getFresh(cacheKey);
     if (fresh) return fresh;
@@ -891,7 +920,7 @@ export async function fetchServerEpisode(
       const timeout = setTimeout(() => controller.abort(), 2500);
       try {
         const res = await fetchImpl(
-          `${TMDB_BASE_URL}/tv/${show.id}/season/${season}/episode/${episode}?api_key=${effectiveKey}`,
+          `${TMDB_BASE_URL}/tv/${showId}/season/${season}/episode/${episode}?api_key=${effectiveKey}`,
           { signal: controller.signal }
         );
         if (res.status === 404) {
@@ -919,21 +948,34 @@ export async function fetchServerEpisode(
         }
 
         const epJson = await res.json();
+        if (
+          (epJson?.season_number !== undefined && Number(epJson.season_number) !== season) ||
+          (epJson?.episode_number !== undefined && Number(epJson.episode_number) !== episode)
+        ) {
+          return null;
+        }
+
+        const epId = Number(epJson?.id);
+        const hasValidEpId = Number.isInteger(epId) && epId > 0;
         const rawName = (epJson.name || '').trim();
+        const hasGenuineName = isGenuineEpisodeName(rawName);
         const rawOverview = (epJson.overview || '').trim();
-        const uniqueOverview =
-          rawOverview && (!showOverview || rawOverview.toLowerCase() !== showOverview.toLowerCase())
-            ? rawOverview
-            : '';
+        const isDistinctFromShow = !showOverview || rawOverview.toLowerCase() !== showOverview.toLowerCase();
+        const isDistinctFromSeason = !seasonOverview || rawOverview.toLowerCase() !== seasonOverview.toLowerCase();
+        const uniqueOverview = rawOverview && isDistinctFromShow && isDistinctFromSeason ? rawOverview : '';
+        const isVerified = Boolean(
+          hasValidEpId && hasGenuineName && uniqueOverview.length >= 15
+        );
 
         const data: ServerEpisodeResult = {
+          episodeId: hasValidEpId ? epId : undefined,
           name: rawName || `Episode ${episode}`,
-          hasGenuineName: Boolean(rawName && !/^episode\s+\d+$/i.test(rawName)),
+          hasGenuineName,
           overview: uniqueOverview,
           airDate: epJson.air_date || '',
           voteAverage: epJson.vote_average && epJson.vote_average > 0 ? Number(epJson.vote_average) : undefined,
           voteCount: epJson.vote_count && epJson.vote_count > 0 ? Number(epJson.vote_count) : undefined,
-          isVerified: true
+          isVerified
         };
         if (useCache) serverEpisodeCache.set(cacheKey, data);
         return data;
@@ -1854,15 +1896,25 @@ export async function renderSeoResult(
       }
     }
 
+    const seasonObjForSeo = Array.isArray(media.seasons)
+      ? media.seasons.find((s: any) => s.seasonNumber === route.season)
+      : undefined;
     const isEpisodeIndexed =
       route.type === 'watch_tv'
         ? route.season !== undefined &&
           route.episode !== undefined &&
           Boolean(episodeData) &&
           isEpisodeSeoIndexable({
+            seriesId: Number(media.id || media.tmdbId),
+            episodeId: episodeData?.episodeId,
+            seasonNumber: route.season,
+            episodeNumber: route.episode,
+            seasonEpisodeCount: seasonObjForSeo?.episodeCount,
+            numberOfSeasons: media.numberOfSeasons,
             episodeName: episodeData?.hasGenuineName ? episodeData.name : '',
             episodeOverview: episodeData?.overview,
             seriesOverview: media.overview,
+            seasonOverview: seasonObjForSeo?.overview,
             isVerifiedEpisode: episodeData?.isVerified
           }) &&
           !policy.noindex

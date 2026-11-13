@@ -78,8 +78,7 @@ const GENRE_META_OVERRIDES: Record<number, Omit<GenreLandingMeta, 'id' | 'name'>
   27: {
     slug: 'horror',
     tmdbMovieGenreId: 27,
-    tmdbTvGenreId: 9648,
-    description: 'Stream chilling horror films, supernatural thrillers, and suspenseful series in HD on T Stream.'
+    description: 'Stream chilling horror films and supernatural thrillers in HD on T Stream.'
   },
   10402: {
     slug: 'music',
@@ -112,7 +111,6 @@ const GENRE_META_OVERRIDES: Record<number, Omit<GenreLandingMeta, 'id' | 'name'>
   53: {
     slug: 'thriller',
     tmdbMovieGenreId: 53,
-    tmdbTvGenreId: 80,
     description: 'Stream edge-of-your-seat psychological, espionage, and suspense thrillers in HD on T Stream.'
   },
   10752: {
@@ -129,13 +127,11 @@ const GENRE_META_OVERRIDES: Record<number, Omit<GenreLandingMeta, 'id' | 'name'>
   },
   10759: {
     slug: 'action-adventure',
-    tmdbMovieGenreId: 28,
     tmdbTvGenreId: 10759,
-    description: 'Watch action and adventure television series and blockbuster journeys free on T Stream.'
+    description: 'Watch action and adventure television series free in HD on T Stream.'
   },
   10765: {
     slug: 'sci-fi-fantasy',
-    tmdbMovieGenreId: 878,
     tmdbTvGenreId: 10765,
     description: 'Stream acclaimed sci-fi and fantasy television series and speculative worlds on T Stream.'
   }
@@ -171,7 +167,7 @@ export const GENRE_LANDINGS: GenreLandingMeta[] = ALL_GENRES.map(g => {
     id: g.id,
     name: g.name,
     slug: override?.slug || rawGenreNameToSlug(g.name),
-    tmdbMovieGenreId: override?.tmdbMovieGenreId ?? g.id,
+    tmdbMovieGenreId: override ? override.tmdbMovieGenreId : g.id,
     tmdbTvGenreId: override?.tmdbTvGenreId,
     description: override?.description || `Watch the best ${g.name} movies and TV shows free in HD on T Stream.`
   };
@@ -228,24 +224,36 @@ export function getCanonicalGenreUrl(slug: string, page?: number): string {
 
 export function itemMatchesGenre(item: any, genre: GenreLandingMeta): boolean {
   if (!item || !genre) return false;
-  const targetIds = new Set<number>([genre.id]);
-  if (genre.tmdbMovieGenreId) targetIds.add(genre.tmdbMovieGenreId);
-  if (genre.tmdbTvGenreId) targetIds.add(genre.tmdbTvGenreId);
-  const targetName = genre.name.toLowerCase();
+  const isTv =
+    item.mediaType === 'tv' ||
+    (!item.mediaType && Boolean(item.firstAirDate) && !item.releaseDate);
+  const targetId = isTv ? genre.tmdbTvGenreId : genre.tmdbMovieGenreId;
+  if (!targetId) return false;
 
   if (Array.isArray(item.genres)) {
+    let sawNumericId = false;
     for (const g of item.genres) {
-      if (typeof g === 'number' && targetIds.has(g)) return true;
-      if (typeof g === 'string' && g.toLowerCase().trim() === targetName) return true;
-      if (g && typeof g === 'object') {
-        if (typeof g.id === 'number' && targetIds.has(g.id)) return true;
-        if (typeof g.name === 'string' && g.name.toLowerCase().trim() === targetName) return true;
+      if (typeof g === 'number') {
+        sawNumericId = true;
+        if (g === targetId) return true;
+      } else if (g && typeof g === 'object' && typeof g.id === 'number') {
+        sawNumericId = true;
+        if (g.id === targetId) return true;
+      }
+    }
+    if (!sawNumericId) {
+      const targetName = genre.name.toLowerCase();
+      for (const g of item.genres) {
+        const name = typeof g === 'string' ? g : g?.name;
+        if (typeof name === 'string' && name.toLowerCase().trim() === targetName) {
+          return true;
+        }
       }
     }
   }
   if (Array.isArray(item.genre_ids)) {
     for (const id of item.genre_ids) {
-      if (targetIds.has(Number(id))) return true;
+      if (Number(id) === targetId) return true;
     }
   }
   return false;

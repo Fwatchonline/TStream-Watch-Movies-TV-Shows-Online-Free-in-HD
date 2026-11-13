@@ -426,22 +426,116 @@ export interface MediaMetadataResult {
   rawTitle: string;
 }
 
-/**
- * Determines whether a TV episode watch route has genuine, unique episode metadata
- * worthy of search indexing (never copies show overview or fabricated titles).
- */
-export function isEpisodeSeoIndexable(options: {
+export interface EpisodeSeoValidationOptions {
+  seriesId?: number;
+  episodeId?: number;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  seasonEpisodeCount?: number;
+  numberOfSeasons?: number;
   episodeName?: string;
   episodeOverview?: string;
   seriesOverview?: string;
+  seasonOverview?: string;
   isVerifiedEpisode?: boolean;
-}): boolean {
-  if (options.isVerifiedEpisode === false) return false;
+}
+
+/**
+ * Checks whether an episode title is a genuine title rather than a generic placeholder.
+ */
+export function isGenuineEpisodeName(name?: string): boolean {
+  const trimmed = (name || '').trim();
+  if (!trimmed || trimmed.length < 2) return false;
+  if (/^(?:episode|ep\.?)\s*\d+$/i.test(trimmed)) return false;
+  if (/^season\s*\d+\s*(?:episode|ep\.?)\s*\d+$/i.test(trimmed)) return false;
+  if (/^(?:tba|tbd|untitled|n\/a)$/i.test(trimmed)) return false;
+  return true;
+}
+
+/**
+ * Determines whether a TV episode watch route has genuine, verified episode metadata
+ * worthy of search indexing (never copies show/season overview or fabricated/generic titles).
+ */
+export function isEpisodeSeoIndexable(options: EpisodeSeoValidationOptions): boolean {
+  if (options.isVerifiedEpisode !== true) return false;
+
+  if (options.seriesId !== undefined && (!Number.isInteger(options.seriesId) || options.seriesId <= 0)) {
+    return false;
+  }
+  if (options.episodeId !== undefined && (!Number.isInteger(options.episodeId) || options.episodeId <= 0)) {
+    return false;
+  }
+
+  if (options.seasonNumber !== undefined) {
+    if (!Number.isInteger(options.seasonNumber) || options.seasonNumber < 1) return false;
+    if (
+      options.numberOfSeasons !== undefined &&
+      options.numberOfSeasons > 0 &&
+      options.seasonNumber > options.numberOfSeasons
+    ) {
+      return false;
+    }
+  }
+
+  if (options.episodeNumber !== undefined) {
+    if (!Number.isInteger(options.episodeNumber) || options.episodeNumber < 1) return false;
+    if (
+      options.seasonEpisodeCount !== undefined &&
+      options.seasonEpisodeCount > 0 &&
+      options.episodeNumber > options.seasonEpisodeCount
+    ) {
+      return false;
+    }
+  }
+
+  if (!isGenuineEpisodeName(options.episodeName)) return false;
+
   const epOverview = (options.episodeOverview || '').trim();
   const showOverview = (options.seriesOverview || '').trim();
+  const seasonOverview = (options.seasonOverview || '').trim();
   if (!epOverview || epOverview.length < 15) return false;
   if (showOverview && epOverview.toLowerCase() === showOverview.toLowerCase()) return false;
+  if (seasonOverview && epOverview.toLowerCase() === seasonOverview.toLowerCase()) return false;
   return true;
+}
+
+/**
+ * Validates a structured local or fetched episode record against its parent TV show and season.
+ */
+export function validateVerifiedEpisodeRecord(params: {
+  show: any;
+  season: any;
+  episode: any;
+}): boolean {
+  const { show, season, episode } = params || {};
+  if (!show || !season || !episode) return false;
+
+  const showId = Number(show.id || show.tmdbId);
+  const seasonNum = Number(season.seasonNumber);
+  const epNum = Number(episode.episodeNumber);
+  const epId = Number(episode.id);
+
+  if (!Number.isInteger(showId) || showId <= 0) return false;
+  if (!Number.isInteger(seasonNum) || seasonNum < 1) return false;
+  if (!Number.isInteger(epNum) || epNum < 1) return false;
+  if (!Number.isInteger(epId) || epId <= 0) return false;
+
+  if (episode.showId !== undefined && Number(episode.showId) !== showId) return false;
+  if (episode.seasonNumber !== undefined && Number(episode.seasonNumber) !== seasonNum) return false;
+
+  return isEpisodeSeoIndexable({
+    seriesId: showId,
+    episodeId: epId,
+    seasonNumber: seasonNum,
+    episodeNumber: epNum,
+    seasonEpisodeCount: Number(season.episodeCount || 0) || undefined,
+    numberOfSeasons: Number(show.numberOfSeasons || 0) || undefined,
+    episodeName: episode.name,
+    episodeOverview: episode.overview,
+    seriesOverview: show.overview,
+    seasonOverview: season.overview,
+    isVerifiedEpisode: true
+  });
 }
 
 /**
@@ -477,8 +571,8 @@ export function buildMediaMetadata(
     if (isMovie) {
       title = `Watch ${rawTitle}${yearStr} Full Movie Free Online in HD — T Stream`;
     } else {
-      const epSuffix = options.episodeName && !/^episode\s+\d+$/i.test(options.episodeName.trim())
-        ? ` "${options.episodeName.trim()}"`
+      const epSuffix = isGenuineEpisodeName(options.episodeName)
+        ? ` "${options.episodeName!.trim()}"`
         : '';
       title = `Watch ${rawTitle} Season ${options.season || 1} Episode ${options.episode || 1}${epSuffix} Free HD — T Stream`;
     }
@@ -545,7 +639,7 @@ export function buildMediaMetadata(
   const schema: Record<string, any> = {
     '@context': 'https://schema.org',
     '@type': schemaType,
-    'name': isDistinctEpisode && options.episodeName ? `${rawTitle} - ${options.episodeName}` : rawTitle,
+    'name': isDistinctEpisode && isGenuineEpisodeName(options.episodeName) ? `${rawTitle} - ${options.episodeName!.trim()}` : rawTitle,
     'description': description,
     'url': canonicalUrl,
     'image': image,
@@ -750,8 +844,13 @@ export function updateSEO(config: SEOConfig = {}) {
 export function updateMediaSEO(
   media: any,
   options: {
+    seriesId?: number;
+    episodeId?: number;
     season?: number;
     episode?: number;
+    seasonEpisodeCount?: number;
+    numberOfSeasons?: number;
+    seasonOverview?: string;
     episodeName?: string;
     episodeOverview?: string;
     episodeAirDate?: string;
@@ -768,11 +867,18 @@ export function updateMediaSEO(
   const effectiveNoindex =
     options.noindex !== undefined
       ? options.noindex
-      : isDistinctEpisode && options.episodeOverview !== undefined
+      : isDistinctEpisode && (options.episodeOverview !== undefined || options.isVerifiedEpisode !== undefined)
       ? !isEpisodeSeoIndexable({
+          seriesId: options.seriesId ?? media.id,
+          episodeId: options.episodeId,
+          seasonNumber: options.season,
+          episodeNumber: options.episode,
+          seasonEpisodeCount: options.seasonEpisodeCount,
+          numberOfSeasons: options.numberOfSeasons ?? media.numberOfSeasons,
           episodeName: options.episodeName,
           episodeOverview: options.episodeOverview,
           seriesOverview: media.overview,
+          seasonOverview: options.seasonOverview,
           isVerifiedEpisode: options.isVerifiedEpisode
         })
       : false;

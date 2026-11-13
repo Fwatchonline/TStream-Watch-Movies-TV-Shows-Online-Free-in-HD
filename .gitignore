@@ -6,3 +6,11 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Internal AI Studio prompt & scratch artifacts under public/assets/aistudio/
+public/assets/aistudio/Paste_*
+public/assets/aistudio/AwesomeScreenshot-*
+public/assets/aistudio/Spider-Man_Streaming_Watch_Page_*
+public/assets/aistudio/image_*.png
+!public/assets/aistudio/tstream-logo-yellow-transparent_1__d41aea4b.png
+

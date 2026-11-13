@@ -298,12 +298,24 @@ async function runTests() {
       'utf8'
     );
 
+    const legacyPreloadPath = path.join(sb.stateDir, 'legacy-node22-preload.cjs');
+    fs.writeFileSync(
+      legacyPreloadPath,
+      'Object.defineProperty(process.versions, "node", { value: "22.23.2", configurable: true });\n',
+      'utf8'
+    );
     const oldNodeBin = path.join(sb.binDir, 'node-legacy');
     makeExecutable(
       oldNodeBin,
-      `#!/usr/bin/env bash\nexec "${process.execPath}" -e 'Object.defineProperty(process.versions, "node", { value: "22.23.2", configurable: true });' -- "$@"\n`
+      `#!/usr/bin/env bash\nexec "${process.execPath}" --require "${legacyPreloadPath}" "$@"\n`
     );
-    // Test rejection when Node < 24.12.0 before testing ownership validation
+    const actionsLogPath = path.join(sb.stateDir, 'pm2-actions.log');
+    const pm2StatePath = path.join(sb.stateDir, 'pm2-state.json');
+    const pm2StateBefore = fs.readFileSync(pm2StatePath, 'utf8');
+    const releasesBefore = fs.readdirSync(path.join(sb.appDir, 'releases'));
+    const repoHeadBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sb.repoDir, encoding: 'utf8' }).trim();
+
+    // Test rejection when Node < 24.12.0 before testing ownership validation (always use wrapper regardless of host Node)
     const legacyNodeRes = spawnSync('bash', [scriptPath], {
       env: {
         ...process.env,
@@ -312,13 +324,24 @@ async function runTests() {
         PM2_APP_NAME: 'tstream-app',
         DEPLOY_REF: sb.commitB,
         SKIP_NGINX_CHECK: '1',
-        NODE_BIN: process.versions.node.startsWith('22.') ? process.execPath : oldNodeBin
+        NODE_BIN: oldNodeBin
       },
       encoding: 'utf8'
     });
+    const legacyCombinedOut = legacyNodeRes.stderr + legacyNodeRes.stdout;
+    const legacyPm2Actions = fs.existsSync(actionsLogPath) ? fs.readFileSync(actionsLogPath, 'utf8') : '';
+    const releasesAfter = fs.readdirSync(path.join(sb.appDir, 'releases'));
+    const repoHeadAfter = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sb.repoDir, encoding: 'utf8' }).trim();
     assert(
       legacyNodeRes.status !== 0 &&
-        (legacyNodeRes.stderr + legacyNodeRes.stdout).includes('Required >= 24.12.0'),
+        legacyCombinedOut.includes('Required >= 24.12.0') &&
+        legacyCombinedOut.includes('Pre-flight') &&
+        !legacyCombinedOut.includes('[2/9]') &&
+        legacyPm2Actions === '' &&
+        fs.readFileSync(pm2StatePath, 'utf8') === pm2StateBefore &&
+        !fs.existsSync(path.join(sb.appDir, 'current')) &&
+        releasesAfter.length === releasesBefore.length &&
+        repoHeadAfter === repoHeadBefore,
       'Task 2: update-vps.sh strictly rejects Node.js < 24.12.0'
     );
 

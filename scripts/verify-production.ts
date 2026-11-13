@@ -290,8 +290,11 @@ async function run() {
     { path: '/genre/action', expectedCanonical: 'https://tstream.online/genre/action', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/action/index.html' },
     { path: '/genre/comedy', expectedCanonical: 'https://tstream.online/genre/comedy', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/comedy/index.html' },
     { path: '/genre/drama', expectedCanonical: 'https://tstream.online/genre/drama', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/drama/index.html' },
+    { path: '/genre/mystery', expectedCanonical: 'https://tstream.online/genre/mystery', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/mystery/index.html' },
     { path: '/genre/science-fiction', expectedCanonical: 'https://tstream.online/genre/science-fiction', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/science-fiction/index.html' },
     { path: '/genre/thriller', expectedCanonical: 'https://tstream.online/genre/thriller', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/thriller/index.html' },
+    { path: '/genre/action-adventure', expectedCanonical: 'https://tstream.online/genre/action-adventure', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/action-adventure/index.html' },
+    { path: '/genre/sci-fi-fantasy', expectedCanonical: 'https://tstream.online/genre/sci-fi-fantasy', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/sci-fi-fantasy/index.html' },
     { path: '/platform/netflix', expectedCanonical: 'https://tstream.online/platform/netflix', requireCards: true },
     { path: '/platform/max', expectedCanonical: 'https://tstream.online/platform/max', requireCards: true },
     { path: '/az/S', expectedCanonical: 'https://tstream.online/az/S', requireCards: true },
@@ -355,6 +358,15 @@ async function run() {
           'TVEpisode /watch/tv/breaking-bad-1396/1/1 does NOT inherit parent series aggregateRating',
           Boolean(jsonLd && jsonLd['@type'] === 'TVEpisode' && !leakedParentRating),
           `hasAggregateRating=${Boolean(jsonLd?.aggregateRating)}, leakedParent=${leakedParentRating}`
+        );
+      }
+      if (item.path === '/genre/action-adventure') {
+        const hasTvLinks = /href="\/tv\//i.test(bot.body);
+        const hasMovieLinks = /href="\/movie\//i.test(bot.body);
+        record(
+          'Genre /genre/action-adventure renders TV series only without movie bleed',
+          hasTvLinks && !hasMovieLinks,
+          `hasTvLinks=${hasTvLinks}, hasMovieLinks=${hasMovieLinks}`
         );
       }
       if (checkDist && item.distHtmlRel) {
@@ -443,23 +455,34 @@ async function run() {
     }
   }
 
-  // Parity checks for offline-empty platform (Crunchyroll) & offline-empty genre (Western)
+  // Parity checks for offline-empty platform (Crunchyroll) & offline-empty genres (Western, Horror)
   for (const parityRoute of [
     { url: '/platform/crunchyroll', fullUrl: 'https://tstream.online/platform/crunchyroll', label: 'Platform /platform/crunchyroll' },
-    { url: '/genre/western', fullUrl: 'https://tstream.online/genre/western', label: 'Genre /genre/western' }
+    { url: '/genre/western', fullUrl: 'https://tstream.online/genre/western', label: 'Genre /genre/western' },
+    { url: '/genre/horror', fullUrl: 'https://tstream.online/genre/horror', label: 'Genre /genre/horror' }
   ]) {
     try {
       const res = await fetchHtml(baseUrl, parityRoute.url, GOOGLEBOT_UA);
       const robots = extractRobots(res.body);
       const inSitemap = mainSitemapUrls.includes(parityRoute.fullUrl);
       const isNoindex = robots.includes('noindex');
-      const hasCards = extractCardTitles(res.body).length > 0;
+      const cards = extractCardTitles(res.body);
+      const hasCards = cards.length > 0;
       const ok = res.status === 200 && (!inSitemap ? isNoindex && !hasCards : !isNoindex && hasCards);
       record(
         `${parityRoute.label} sitemap-indexability parity`,
         ok,
         `HTTP=${res.status}, inSitemap=${inSitemap}, noindex=${isNoindex}, cards=${hasCards}`
       );
+      if (parityRoute.url === '/genre/horror') {
+        const clean =
+          !cards.includes('The Batman') && !cards.includes('Stranger Things') && !cards.includes('Severance');
+        record(
+          'Genre /genre/horror excludes Mystery (9648) cross-contamination',
+          clean,
+          `cards=${cards.length}, clean=${clean}`
+        );
+      }
     } catch (err: any) {
       record(`${parityRoute.label} sitemap-indexability parity`, false, err.message);
     }

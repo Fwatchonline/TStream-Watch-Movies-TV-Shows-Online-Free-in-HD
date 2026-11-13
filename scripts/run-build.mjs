@@ -25,6 +25,63 @@ export function validateBuildArgs(args = process.argv.slice(2)) {
   }
 }
 
+export function verifyNoInternalArtifacts(rootDir = process.cwd(), dirsToScan = ['public', 'dist']) {
+  const forbiddenNamePatterns = [
+    /^Paste_/i,
+    /^AwesomeScreenshot-/i,
+    /^Spider-Man_Streaming_Watch_Page_/i,
+    /^TSTREAM_SEO_/i,
+    /\.(bak|orig|tmp)$/i
+  ];
+  const forbiddenTextMarkers = [
+    'TSTREAM.ONLINE — FINAL',
+    'Act as a senior Technical SEO Engineer',
+    'AIS_METADATA_SECTION_START'
+  ];
+
+  const violations = [];
+
+  const walk = (baseDir, dirLabel, curDir) => {
+    if (!fs.existsSync(curDir)) return;
+    for (const entry of fs.readdirSync(curDir, { withFileTypes: true })) {
+      const full = path.join(curDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(baseDir, dirLabel, full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+
+      const rel = `${dirLabel}/${path.relative(baseDir, full).replace(/\\/g, '/')}`;
+      if (forbiddenNamePatterns.some(rx => rx.test(entry.name))) {
+        violations.push(`Forbidden internal artifact filename: ${rel}`);
+        continue;
+      }
+
+      // Check extensionless files or prompt-like text docs inside public/ or dist/
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!ext || ext === '.md' || ext === '.txt' || ext === '.bak') {
+        try {
+          const sample = fs.readFileSync(full, 'utf8').slice(0, 4096);
+          if (forbiddenTextMarkers.some(marker => sample.includes(marker))) {
+            violations.push(`Forbidden internal prompt/report content detected in: ${rel}`);
+          }
+        } catch {
+          // ignore unreadable binary files
+        }
+      }
+    }
+  };
+
+  for (const label of dirsToScan) {
+    const targetDir = path.resolve(rootDir, label);
+    walk(targetDir, label, targetDir);
+  }
+
+  if (violations.length > 0) {
+    throw new Error(`Internal artifact safety check failed:\n- ${violations.join('\n- ')}`);
+  }
+}
+
 export function verifyNoLeakedSecretsInDist(rootDir = process.cwd(), secretValue = process.env.TMDB_API_KEY || '') {
   const distDir = path.resolve(rootDir, 'dist');
   const assetsDir = path.join(distDir, 'assets');
@@ -68,13 +125,13 @@ export function verifyNoLeakedSecretsInDist(rootDir = process.cwd(), secretValue
     }
   }
 
-  // Spot-check generated prerendered route HTML files recursively (skip dist/assets/aistudio scratch uploads)
+  // Spot-check generated prerendered route HTML files recursively
   const walkHtml = dir => {
     if (!fs.existsSync(dir)) return;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === 'assets' || entry.name === 'aistudio') continue;
+        if (entry.name === 'assets') continue;
         walkHtml(full);
       } else if (entry.isFile() && entry.name.endsWith('.html')) {
         scanFile(full);
@@ -143,6 +200,7 @@ function runCommand(bin, args, cwd) {
 export function runProductionBuild(rootDir = process.cwd(), extraArgs = process.argv.slice(2)) {
   validateBuildArgs(extraArgs);
   loadBuildEnv(rootDir);
+  verifyNoInternalArtifacts(rootDir, ['public']);
 
   const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const esbuildLocal = path.resolve(rootDir, 'node_modules/.bin/esbuild');
@@ -178,6 +236,7 @@ export function runProductionBuild(rootDir = process.cwd(), extraArgs = process.
 
   const summary = verifyDistArtifacts(rootDir);
   verifyNoLeakedSecretsInDist(rootDir);
+  verifyNoInternalArtifacts(rootDir, ['public', 'dist']);
   console.log(
     `[Build Complete] Authoritative dist/ verified (${summary.files.length} root artifacts, ${summary.assetCount} asset files).`
   );

@@ -104,20 +104,26 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       if (isMounted) {
         setDetail(data);
         if (data) {
-          const initSeasonEps =
+          const initSeasonObj =
             data.mediaType === 'tv'
-              ? (data as TVDetail).seasons?.find(s => s.seasonNumber === currentSeason)?.episodes || []
-              : [];
+              ? (data as TVDetail).seasons?.find(s => s.seasonNumber === currentSeason)
+              : undefined;
+          const initSeasonEps = initSeasonObj?.episodes || [];
           const initEp = initSeasonEps.find(e => e.episodeNumber === currentEpisode);
           updateMediaSEO(data, {
+            seriesId: data.id,
+            episodeId: initEp?.id,
             season: currentSeason,
             episode: currentEpisode,
+            seasonEpisodeCount: initSeasonObj?.episodeCount,
+            numberOfSeasons: (data as TVDetail).numberOfSeasons,
+            seasonOverview: initSeasonObj?.overview,
             episodeName: initEp?.name,
             episodeOverview: initEp?.overview,
             episodeAirDate: initEp?.airDate,
             episodeVoteAverage: initEp?.voteAverage,
             episodeVoteCount: (initEp as any)?.voteCount,
-            isVerifiedEpisode: Boolean(initEp),
+            isVerifiedEpisode: Boolean(initEp && Number.isInteger(initEp.id) && initEp.id > 0),
             isWatching: true
           });
           setInWatchlist(isInWatchlist(data.id));
@@ -171,17 +177,23 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   // Update SEO when TV season/episode changes or episodes load
   useEffect(() => {
     if (detail && detail.mediaType === 'tv') {
-      const seasonEps = episodesMap[currentSeason] || (detail as TVDetail).seasons?.find(s => s.seasonNumber === currentSeason)?.episodes || [];
+      const seasonObj = (detail as TVDetail).seasons?.find(s => s.seasonNumber === currentSeason);
+      const seasonEps = episodesMap[currentSeason] || seasonObj?.episodes || [];
       const activeEp = seasonEps.find(e => e.episodeNumber === currentEpisode);
       updateMediaSEO(detail, {
+        seriesId: detail.id,
+        episodeId: activeEp?.id,
         season: currentSeason,
         episode: currentEpisode,
+        seasonEpisodeCount: seasonObj?.episodeCount,
+        numberOfSeasons: (detail as TVDetail).numberOfSeasons,
+        seasonOverview: seasonObj?.overview,
         episodeName: activeEp?.name,
         episodeOverview: activeEp?.overview,
         episodeAirDate: activeEp?.airDate,
         episodeVoteAverage: activeEp?.voteAverage,
         episodeVoteCount: (activeEp as any)?.voteCount,
-        isVerifiedEpisode: Boolean(activeEp),
+        isVerifiedEpisode: Boolean(activeEp && Number.isInteger(activeEp.id) && activeEp.id > 0),
         isWatching: true
       });
     }

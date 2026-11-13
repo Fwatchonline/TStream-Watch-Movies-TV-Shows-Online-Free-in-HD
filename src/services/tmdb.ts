@@ -522,8 +522,8 @@ export async function fetchCatalog(
     const defaultSort = (category === 'top-movies' || category === 'top-tv' || category === 'top-rated') ? 'vote_average.desc' : 'popularity.desc';
     const sortBy = extraFilters.sortBy || defaultSort;
     const genreMeta = extraFilters.genreId ? getGenreById(Number(extraFilters.genreId)) : undefined;
-    const movieGenreId = genreMeta?.tmdbMovieGenreId ?? extraFilters.genreId;
-    const tvGenreId = genreMeta?.tmdbTvGenreId ?? extraFilters.genreId;
+    const movieGenreId = genreMeta ? genreMeta.tmdbMovieGenreId : extraFilters.genreId;
+    const tvGenreId = genreMeta ? genreMeta.tmdbTvGenreId : extraFilters.genreId;
     const genreQueryMovie = movieGenreId ? `&with_genres=${movieGenreId}` : '';
     const genreQueryTv = tvGenreId ? `&with_genres=${tvGenreId}` : '';
     const minRatingQuery = extraFilters.minRating
@@ -534,6 +534,9 @@ export async function fetchCatalog(
     const countryQuery = extraFilters.country ? `&with_origin_country=${extraFilters.country}` : '';
 
     if (targetType === 'movie') {
+      if (extraFilters.genreId && !movieGenreId) {
+        return { page: safePage, totalPages: 1, totalResults: 0, results: [] };
+      }
       const movUrl = `${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryMovie}${minRatingQuery}${yearQueryMovie}${countryQuery}`;
       const res = await fetch(movUrl);
       if (res.ok) {
@@ -549,6 +552,9 @@ export async function fetchCatalog(
         };
       }
     } else if (targetType === 'tv') {
+      if (extraFilters.genreId && !tvGenreId) {
+        return { page: safePage, totalPages: 1, totalResults: 0, results: [] };
+      }
       const tvUrl = `${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryTv}${minRatingQuery}${yearQueryTv}${countryQuery}`;
       const res = await fetch(tvUrl);
       if (res.ok) {
