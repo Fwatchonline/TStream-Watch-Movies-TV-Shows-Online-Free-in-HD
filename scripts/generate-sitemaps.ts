@@ -1,43 +1,35 @@
 /**
  * Production TypeScript XML Sitemap Generator for TStream.online
  *
- * Imports directly from structured TypeScript catalog data.
- * Guarantees 100% data integrity with record-level validation:
+ * Uses the single authoritative routeInventory.ts shared with prerender.ts and verify-production.ts:
  * - Positive integer TMDB IDs.
  * - Explicit Spider-Man: Homecoming TMDB ID 315635 verification.
  * - Preserves legitimate TMDB movie ID 28 (does NOT blindly delete valid IDs).
  * - Excludes movie watch routes from sitemaps (pointing instead to authoritative /movie/:slug).
- * - Excludes empty tags and empty A-Z letters from sitemap-main.xml to prevent thin-content indexing.
- * - Excludes utility/dynamic client-side pages (/random, /people, /new-episodes).
- * - Validates XML structure, canonical HTTPS non-WWW domain, and 0 duplicate URLs.
+ * - Uses canonical kebab-case tag slugs (/tags/time-travel, /tags/coming-of-age, etc.).
+ * - Includes populated /genre/:slug, /platform/:id, and /az/:letter pages only.
+ * - Creates sitemap-episodes.xml ONLY for verified, content-rich TV episodes (isEpisodeSeoIndexable).
+ * - Omits <lastmod> completely because catalog/TMDB records lack genuine per-URL modification timestamps.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { loadBuildEnv } from './loadEnv.mjs';
 import {
-  DETAILED_MOVIES,
-  DETAILED_TV_SHOWS,
-  EXPANDED_CATALOG,
-  POPULAR_TAGS,
-  SPIDERMAN_COLLECTION,
-  AVENGERS_COLLECTION,
-  HARRY_POTTER_COLLECTION,
-  PIRATES_COLLECTION
-} from '../src/services/catalogData.ts';
-import { createMediaSlug } from '../src/utils/slug.ts';
-import {
-  getMatchingCatalogForTag,
-  getMatchingCatalogForLetter,
-  fetchServerPlatformMedia
-} from './seoHtmlPlugin.ts';
-import { PLATFORM_CONFIGS } from '../src/services/platformConfig.ts';
+  getMovieInventory,
+  getTvInventory,
+  getVerifiedEpisodeInventory,
+  getTagInventory,
+  getGenreInventory,
+  getPlatformInventory,
+  getAzInventory
+} from './routeInventory.ts';
 
 loadBuildEnv();
 
 const DOMAIN = 'https://tstream.online';
-const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
-const DIST_DIR = path.resolve(process.cwd(), 'dist');
+const DEFAULT_PUBLIC_DIR = path.resolve(process.cwd(), 'public');
+const DEFAULT_DIST_DIR = path.resolve(process.cwd(), 'dist');
 
 export interface SitemapUrlEntry {
   url: string;
@@ -46,17 +38,17 @@ export interface SitemapUrlEntry {
   priority?: string;
 }
 
-function formatDate(dateStr?: string): string | undefined {
-  if (!dateStr) return undefined;
-  try {
-    const d = new Date(dateStr);
-    if (!isNaN(d.getTime())) {
-      return d.toISOString().split('T')[0];
-    }
-  } catch {
-    // ignore
-  }
-  return undefined;
+export interface SitemapGenerationResult {
+  mainCount: number;
+  moviesCount: number;
+  tvCount: number;
+  episodesCount: number;
+  totalCount: number;
+  sitemapIndexXml: string;
+  mainXml: string;
+  moviesXml: string;
+  tvXml: string;
+  episodesXml: string | null;
 }
 
 function escapeXml(unsafe: string): string {
@@ -95,9 +87,20 @@ function buildXmlUrlset(entries: SitemapUrlEntry[]): string {
   return xml;
 }
 
-export function validateSitemapXml(xmlContent: string, sitemapName: string): { valid: boolean; count: number; urls: string[] } {
+export function validateSitemapXml(
+  xmlContent: string,
+  sitemapName: string,
+  options: { allowVerifiedLastmod?: boolean } = {}
+): { valid: boolean; count: number; urls: string[] } {
   if (!xmlContent.startsWith('<?xml version="1.0" encoding="UTF-8"?>')) {
     throw new Error(`[Sitemap Validator] ${sitemapName} is missing valid XML declaration`);
+  }
+
+  // Priority 3: Fake/unverified <lastmod> (releaseDate, firstAirDate, or build timestamp) must never be emitted
+  if (!options.allowVerifiedLastmod && /<lastmod>/i.test(xmlContent)) {
+    throw new Error(
+      `[Sitemap Validator] ${sitemapName} contains unverified <lastmod> tag; omit <lastmod> unless genuine modification timestamps exist.`
+    );
   }
 
   const locRegex = /<loc>([^<]+)<\/loc>/g;
@@ -110,6 +113,10 @@ export function validateSitemapXml(xmlContent: string, sitemapName: string): { v
     }
     if (url.includes('undefined') || url.includes('null') || url.includes('NaN')) {
       throw new Error(`[Sitemap Validator] ${sitemapName} contains corrupted URL: ${url}`);
+    }
+    // Reject non-kebab / space-encoded tag URLs (e.g. /tags/time%20travel)
+    if (url.includes('/tags/') && (url.includes('%20') || /\s/.test(url) || /[A-Z]/.test(url.split('/tags/')[1] || ''))) {
+      throw new Error(`[Sitemap Validator] ${sitemapName} contains non-canonical tag slug: ${url}`);
     }
     // Never allow corrupted spider-man-homecoming-28
     if (url.includes('spider-man-homecoming-28')) {
@@ -138,131 +145,38 @@ export function validateSitemapXml(xmlContent: string, sitemapName: string): { v
   return { valid: true, count: urls.length, urls };
 }
 
-export async function generateSitemaps(isDryRun = false) {
-  console.log('Generating production sitemaps from structured catalog data...');
+export async function generateSitemaps(
+  isDryRun = false,
+  publicDir: string = DEFAULT_PUBLIC_DIR,
+  distDir: string = DEFAULT_DIST_DIR
+): Promise<SitemapGenerationResult> {
+  console.log('Generating production sitemaps from authoritative routeInventory...');
 
-  // 1. Gather Movies from structured data
-  const movieMap = new Map<number, { id: number; title: string; releaseDate?: string }>();
+  // 1. Movies from authoritative inventory (no fake releaseDate lastmod)
+  const movies = getMovieInventory();
+  const movieEntries: SitemapUrlEntry[] = movies.map(m => ({
+    url: m.canonicalUrl,
+    changefreq: 'weekly',
+    priority: '0.9'
+  }));
 
-  // Add from DETAILED_MOVIES
-  for (const movie of DETAILED_MOVIES) {
-    if (movie.id && movie.title) {
-      movieMap.set(movie.id, {
-        id: movie.id,
-        title: movie.title,
-        releaseDate: movie.releaseDate
-      });
-    }
-  }
+  // 2. TV Series from authoritative inventory (no fake firstAirDate lastmod)
+  const tvShows = getTvInventory();
+  const tvEntries: SitemapUrlEntry[] = tvShows.map(t => ({
+    url: t.canonicalUrl,
+    changefreq: 'weekly',
+    priority: '0.9'
+  }));
 
-  // Add from collections
-  const collections = [SPIDERMAN_COLLECTION, AVENGERS_COLLECTION, HARRY_POTTER_COLLECTION, PIRATES_COLLECTION];
-  for (const col of collections) {
-    for (const part of col.parts) {
-      const id = part.id || (part as any).tmdbId;
-      if (id && part.title && !movieMap.has(id)) {
-        movieMap.set(id, {
-          id,
-          title: part.title,
-          releaseDate: part.releaseDate
-        });
-      }
-    }
-  }
+  // 3. Verified, content-rich TV Episodes only
+  const verifiedEpisodes = getVerifiedEpisodeInventory();
+  const episodeEntries: SitemapUrlEntry[] = verifiedEpisodes.map(ep => ({
+    url: ep.canonicalUrl,
+    changefreq: 'weekly',
+    priority: '0.7'
+  }));
 
-  // Add from EXPANDED_CATALOG
-  for (const item of EXPANDED_CATALOG) {
-    if (item.mediaType !== 'tv' && item.id && item.title) {
-      if (!movieMap.has(item.id)) {
-        movieMap.set(item.id, {
-          id: item.id,
-          title: item.title,
-          releaseDate: item.releaseDate
-        });
-      }
-    }
-  }
-
-  // Record-level validation for Movies:
-  // - Verify Spider-Man: Homecoming has ID 315635
-  movieMap.set(315635, {
-    id: 315635,
-    title: 'Spider-Man: Homecoming',
-    releaseDate: '2017-07-05'
-  });
-
-  // - Validate every movie entry: must have positive integer ID and valid title
-  for (const [id, m] of Array.from(movieMap.entries())) {
-    if (!id || id <= 0 || !m.title) {
-      movieMap.delete(id);
-      continue;
-    }
-    // Prevent corrupted cross-object match: Spider-Man Homecoming must NEVER have id 28
-    if (m.title.toLowerCase().includes('homecoming') && id !== 315635) {
-      movieMap.delete(id);
-    }
-    // Note: Legitimate movie with ID 28 (if not Homecoming) is preserved.
-  }
-
-  const movieEntries: SitemapUrlEntry[] = Array.from(movieMap.values()).map(m => {
-    const slug = createMediaSlug(m.title, m.id);
-    const lastmod = formatDate(m.releaseDate);
-    return {
-      url: `${DOMAIN}/movie/${slug}`,
-      ...(lastmod ? { lastmod } : {}),
-      changefreq: 'weekly',
-      priority: '0.9'
-    };
-  });
-
-  // 2. Gather TV Shows from structured data
-  const tvMap = new Map<number, { id: number; title: string; firstAirDate?: string }>();
-
-  // Add from DETAILED_TV_SHOWS
-  for (const show of DETAILED_TV_SHOWS) {
-    const title = (show as any).name || show.title;
-    if (show.id && title) {
-      tvMap.set(show.id, {
-        id: show.id,
-        title,
-        firstAirDate: (show as any).firstAirDate || show.releaseDate
-      });
-    }
-  }
-
-  // Add from EXPANDED_CATALOG
-  for (const item of EXPANDED_CATALOG) {
-    if (item.mediaType === 'tv' && item.id) {
-      const title = item.title || (item as any).name;
-      if (title && !tvMap.has(item.id)) {
-        tvMap.set(item.id, {
-          id: item.id,
-          title,
-          firstAirDate: item.releaseDate || (item as any).firstAirDate
-        });
-      }
-    }
-  }
-
-  // Record-level validation for TV Shows
-  for (const [id, t] of Array.from(tvMap.entries())) {
-    if (!id || id <= 0 || !t.title) {
-      tvMap.delete(id);
-    }
-  }
-
-  const tvEntries: SitemapUrlEntry[] = Array.from(tvMap.values()).map(t => {
-    const slug = createMediaSlug(t.title, t.id);
-    const lastmod = formatDate(t.firstAirDate);
-    return {
-      url: `${DOMAIN}/tv/${slug}`,
-      ...(lastmod ? { lastmod } : {}),
-      changefreq: 'weekly',
-      priority: '0.9'
-    };
-  });
-
-  // 3. Main Pages
+  // 4. Main Pages (Hubs + Canonical Kebab Tags + Populated Genres + Populated Platforms + Populated A-Z)
   const mainEntries: SitemapUrlEntry[] = [
     { url: `${DOMAIN}/`, changefreq: 'daily', priority: '1.0' },
     { url: `${DOMAIN}/movies`, changefreq: 'daily', priority: '0.9' },
@@ -273,28 +187,33 @@ export async function generateSitemaps(isDryRun = false) {
     { url: `${DOMAIN}/tags`, changefreq: 'weekly', priority: '0.7' }
   ];
 
-  // Valuable tag pages with confirmed matching catalog content
-  for (const tag of POPULAR_TAGS) {
-    if (tag.name) {
-      const clean = tag.name.toLowerCase().trim();
-      const matches = getMatchingCatalogForTag(clean);
-      // Only include tags that actually have catalog titles to prevent thin-content indexing
-      if (matches.length > 0) {
-        mainEntries.push({
-          url: `${DOMAIN}/tags/${encodeURIComponent(clean)}`,
-          changefreq: 'weekly',
-          priority: '0.7'
-        });
-      }
+  // Canonical kebab-case tags with verified catalog matches
+  for (const tagEntry of getTagInventory()) {
+    mainEntries.push({
+      url: tagEntry.canonicalUrl,
+      changefreq: 'weekly',
+      priority: '0.7'
+    });
+  }
+
+  // Real Genre landing pages (indexable only when populated)
+  const genreInventory = await getGenreInventory();
+  for (const genreEntry of genreInventory) {
+    if (genreEntry.indexable) {
+      mainEntries.push({
+        url: genreEntry.canonicalUrl,
+        changefreq: 'weekly',
+        priority: '0.8'
+      });
     }
   }
 
   // OTT Platform Hubs: only include platforms with verified or live titles
-  for (const plat of PLATFORM_CONFIGS) {
-    const platData = await fetchServerPlatformMedia(plat, 1).catch(() => ({ items: [] }));
-    if (platData.items.length > 0) {
+  const platformInventory = await getPlatformInventory();
+  for (const platEntry of platformInventory) {
+    if (platEntry.indexable) {
       mainEntries.push({
-        url: `${DOMAIN}/platform/${plat.id}`,
+        url: platEntry.canonicalUrl,
         changefreq: 'weekly',
         priority: '0.7'
       });
@@ -302,71 +221,89 @@ export async function generateSitemaps(isDryRun = false) {
   }
 
   // A-Z Directory: Only include letters that actually have catalog entries
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  for (const letter of alphabet) {
-    const matching = getMatchingCatalogForLetter(letter);
-    if (matching.length > 0) {
-      mainEntries.push({
-        url: `${DOMAIN}/az/${letter}`,
-        changefreq: 'monthly',
-        priority: '0.6'
-      });
-    }
+  for (const azEntry of getAzInventory()) {
+    mainEntries.push({
+      url: azEntry.canonicalUrl,
+      changefreq: 'monthly',
+      priority: '0.6'
+    });
   }
 
-  // 4. Build XML Strings
-  const sitemapIndexXml = `<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap>
-    <loc>${DOMAIN}/sitemap-main.xml</loc>
-  </sitemap>
-  <sitemap>
-    <loc>${DOMAIN}/sitemap-movies.xml</loc>
-  </sitemap>
-  <sitemap>
-    <loc>${DOMAIN}/sitemap-tv.xml</loc>
-  </sitemap>
-</sitemapindex>
-`;
+  // 5. Build XML Strings (omit empty sitemap-episodes.xml if 0 indexable episodes exist)
+  const hasEpisodes = episodeEntries.length > 0;
+  const sitemapEntriesXml = [
+    `  <sitemap>\n    <loc>${DOMAIN}/sitemap-main.xml</loc>\n  </sitemap>`,
+    `  <sitemap>\n    <loc>${DOMAIN}/sitemap-movies.xml</loc>\n  </sitemap>`,
+    `  <sitemap>\n    <loc>${DOMAIN}/sitemap-tv.xml</loc>\n  </sitemap>`,
+    ...(hasEpisodes ? [`  <sitemap>\n    <loc>${DOMAIN}/sitemap-episodes.xml</loc>\n  </sitemap>`] : [])
+  ].join('\n');
+
+  const sitemapIndexXml = `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${sitemapEntriesXml}\n</sitemapindex>\n`;
 
   const mainXml = buildXmlUrlset(mainEntries);
   const moviesXml = buildXmlUrlset(movieEntries);
   const tvXml = buildXmlUrlset(tvEntries);
+  const episodesXml = hasEpisodes ? buildXmlUrlset(episodeEntries) : null;
 
-  // 5. Validation Step
+  // 6. Validation Step
   const mainVal = validateSitemapXml(mainXml, 'sitemap-main.xml');
   const moviesVal = validateSitemapXml(moviesXml, 'sitemap-movies.xml');
   const tvVal = validateSitemapXml(tvXml, 'sitemap-tv.xml');
+  const epVal = episodesXml ? validateSitemapXml(episodesXml, 'sitemap-episodes.xml') : { valid: true, count: 0, urls: [] };
 
   console.log(`[Validation PASSED]`);
   console.log(`- sitemap-main.xml: ${mainVal.count} valid URLs`);
   console.log(`- sitemap-movies.xml: ${moviesVal.count} valid movie URLs`);
   console.log(`- sitemap-tv.xml: ${tvVal.count} valid TV series URLs`);
+  if (hasEpisodes) {
+    console.log(`- sitemap-episodes.xml: ${epVal.count} verified episode URLs`);
+  }
+
+  const summary: SitemapGenerationResult = {
+    mainCount: mainVal.count,
+    moviesCount: moviesVal.count,
+    tvCount: tvVal.count,
+    episodesCount: epVal.count,
+    totalCount: mainVal.count + moviesVal.count + tvVal.count + epVal.count,
+    sitemapIndexXml,
+    mainXml,
+    moviesXml,
+    tvXml,
+    episodesXml
+  };
 
   if (isDryRun) {
     console.log('[DRY RUN] Finished without writing files.');
-    return;
+    return summary;
   }
 
-  // 6. Write Sitemaps to public/
-  if (!fs.existsSync(PUBLIC_DIR)) {
-    fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+  const writeSitemapsToDir = (targetDir: string) => {
+    fs.writeFileSync(path.join(targetDir, 'sitemap.xml'), sitemapIndexXml, 'utf8');
+    fs.writeFileSync(path.join(targetDir, 'sitemap-main.xml'), mainXml, 'utf8');
+    fs.writeFileSync(path.join(targetDir, 'sitemap-movies.xml'), moviesXml, 'utf8');
+    fs.writeFileSync(path.join(targetDir, 'sitemap-tv.xml'), tvXml, 'utf8');
+    const epPath = path.join(targetDir, 'sitemap-episodes.xml');
+    if (episodesXml) {
+      fs.writeFileSync(epPath, episodesXml, 'utf8');
+    } else if (fs.existsSync(epPath)) {
+      fs.unlinkSync(epPath);
+    }
+  };
+
+  // 7. Write Sitemaps to public/
+  if (!fs.existsSync(publicDir)) {
+    fs.mkdirSync(publicDir, { recursive: true });
+  }
+  writeSitemapsToDir(publicDir);
+  console.log(`Wrote sitemaps to ${publicDir}`);
+
+  // 8. Write Sitemaps to dist/ if it exists
+  if (fs.existsSync(distDir)) {
+    writeSitemapsToDir(distDir);
+    console.log(`Wrote sitemaps to ${distDir}`);
   }
 
-  fs.writeFileSync(path.join(PUBLIC_DIR, 'sitemap.xml'), sitemapIndexXml, 'utf8');
-  fs.writeFileSync(path.join(PUBLIC_DIR, 'sitemap-main.xml'), mainXml, 'utf8');
-  fs.writeFileSync(path.join(PUBLIC_DIR, 'sitemap-movies.xml'), moviesXml, 'utf8');
-  fs.writeFileSync(path.join(PUBLIC_DIR, 'sitemap-tv.xml'), tvXml, 'utf8');
-  console.log(`Wrote sitemaps to ${PUBLIC_DIR}`);
-
-  // 7. Write Sitemaps to dist/ if it exists
-  if (fs.existsSync(DIST_DIR)) {
-    fs.writeFileSync(path.join(DIST_DIR, 'sitemap.xml'), sitemapIndexXml, 'utf8');
-    fs.writeFileSync(path.join(DIST_DIR, 'sitemap-main.xml'), mainXml, 'utf8');
-    fs.writeFileSync(path.join(DIST_DIR, 'sitemap-movies.xml'), moviesXml, 'utf8');
-    fs.writeFileSync(path.join(DIST_DIR, 'sitemap-tv.xml'), tvXml, 'utf8');
-    console.log(`Wrote sitemaps to ${DIST_DIR}`);
-  }
+  return summary;
 }
 
 // Run if executed directly

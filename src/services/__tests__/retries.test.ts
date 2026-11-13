@@ -70,7 +70,7 @@ async function runTests() {
   let platAttempt = 0;
   const mockPlatFetch = (async () => {
     platAttempt++;
-    if (platAttempt === 1) {
+    if (platAttempt <= 2) {
       return new Response('Rate limited', { status: 429 });
     }
     return new Response(
@@ -110,7 +110,7 @@ async function runTests() {
     return res.results;
   });
   assert(
-    retriedPlat.ok && platAttempt === 3 && retriedPlat.data?.[0]?.title === 'Platform Hit',
+    retriedPlat.ok && platAttempt === 4 && retriedPlat.data?.[0]?.title === 'Platform Hit',
     'Platform retry succeeds cleanly after transient failure'
   );
 

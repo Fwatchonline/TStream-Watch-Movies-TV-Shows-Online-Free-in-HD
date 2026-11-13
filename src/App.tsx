@@ -24,6 +24,8 @@ import { AuthProvider } from './context/AuthContext';
 import { MediaItem, MediaDetail } from './types/media';
 import { createMediaSlug, parseMediaSlug } from './utils/slug';
 import { updateSEO } from './utils/seo';
+import { tagToSlug, slugToTag, isValidTagSlug } from './utils/tags';
+import { genreToSlug, slugToGenre } from './utils/genres';
 import { getPlatformById } from './services/platformData';
 import { recordSiteVisit } from './services/analytics';
 import { auth } from './services/firebase';
@@ -37,6 +39,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedGenreId, setSelectedGenreId] = useState<number | null>(null);
+  const [selectedGenreSlug, setSelectedGenreSlug] = useState<string | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
   const [selectedLetter, setSelectedLetter] = useState<string>('A');
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
@@ -50,7 +53,7 @@ export default function App() {
   useEffect(() => {
     const handleLocation = () => {
       setNavKey(k => k + 1);
-      const path = window.location.pathname.replace(/^\//, '');
+      const path = window.location.pathname.replace(/^\/+|\/+$/g, '');
       const params = new URLSearchParams(window.location.search);
 
       if (params.has('genreId')) {
@@ -59,6 +62,7 @@ export default function App() {
       } else {
         setSelectedGenreId(null);
       }
+      setSelectedGenreSlug(null);
 
       if (path === '' || path === 'index.html') {
         setCurrentView('home');
@@ -74,6 +78,19 @@ export default function App() {
         setCurrentView('new-episodes');
       } else if (path === 'collections') {
         setCurrentView('collections');
+      } else if (path.startsWith('genre/')) {
+        const parts = path.split('/');
+        const genreMeta = parts.length === 2 && parts[1] ? slugToGenre(parts[1]) : undefined;
+        if (genreMeta) {
+          setSelectedGenreId(genreMeta.id);
+          setSelectedGenreSlug(genreMeta.slug);
+          setCurrentView('genre');
+          if (parts[1].toLowerCase() !== genreMeta.slug) {
+            window.history.replaceState({}, '', `/genre/${genreMeta.slug}${window.location.search}`);
+          }
+        } else {
+          setCurrentView('notfound');
+        }
       } else if (path.startsWith('platform/')) {
         const parts = path.split('/');
         const plat = parts.length === 2 ? getPlatformById(parts[1]) : undefined;
@@ -108,31 +125,24 @@ export default function App() {
         } else {
           setCurrentView('notfound');
         }
-      } else if (path.startsWith('tags/')) {
+      } else if (path.startsWith('tags/') || path.startsWith('tag/')) {
         const parts = path.split('/');
-        if (parts.length === 2 && parts[1]) {
-          const clean = decodeURIComponent(parts[1]).replace(/^#/, '').toLowerCase();
-          setSelectedTag(clean);
+        if (parts.length === 2 && parts[1] && isValidTagSlug(parts[1])) {
+          const slug = tagToSlug(parts[1]);
+          setSelectedTag(slug);
           setCurrentView('tags');
-        } else {
-          setCurrentView('notfound');
-        }
-      } else if (path.startsWith('tag/')) {
-        const parts = path.split('/');
-        if (parts.length === 2 && parts[1]) {
-          const clean = decodeURIComponent(parts[1]).replace(/^#/, '').toLowerCase();
-          setSelectedTag(clean);
-          setCurrentView('tags');
-          window.history.replaceState({}, '', `/tags/${clean}`);
+          if (parts[0] === 'tag' || parts[1] !== slug) {
+            window.history.replaceState({}, '', `/tags/${slug}${window.location.search}`);
+          }
         } else {
           setCurrentView('notfound');
         }
       } else if (path === 'tags') {
         setCurrentView('tags');
-        if (params.get('tag')) {
-          const clean = decodeURIComponent(params.get('tag')!).replace(/^#/, '').toLowerCase();
-          setSelectedTag(clean);
-          window.history.replaceState({}, '', `/tags/${clean}`);
+        if (params.get('tag') && isValidTagSlug(params.get('tag')!)) {
+          const slug = tagToSlug(params.get('tag')!);
+          setSelectedTag(slug);
+          window.history.replaceState({}, '', `/tags/${slug}`);
         } else {
           setSelectedTag(null);
         }
@@ -258,13 +268,23 @@ export default function App() {
         description: `Browse movies and TV shows alphabetically starting with letter ${selectedLetter} on T Stream.`,
         url: `/az/${selectedLetter || 'A'}`
       });
+    } else if (currentView === 'genre') {
+      const gMeta = slugToGenre(selectedGenreSlug || '');
+      const genreSlug = gMeta?.slug || selectedGenreSlug || 'action';
+      const genreName = gMeta?.name || 'Action';
+      updateSEO({
+        title: `${genreName} Movies & TV Shows Free HD`,
+        description: gMeta?.description || `Stream ${genreName} movies and TV series free in HD on T Stream.`,
+        url: urlWithQuery.startsWith('/genre/') ? urlWithQuery : `/genre/${genreSlug}`
+      });
     } else if (currentView === 'tags') {
       if (selectedTag) {
-        const cleanTag = selectedTag.replace(/^#/, '').toLowerCase();
+        const tagSlug = tagToSlug(selectedTag);
+        const tagPhrase = slugToTag(tagSlug) || selectedTag;
         updateSEO({
-          title: `Movies & TV Shows Tagged #${cleanTag} — Watch Online Free`,
-          description: `Discover top rated and popular movies and TV series tagged with #${cleanTag}. Stream free in 4K and 1080p HD with subtitles on T Stream.`,
-          url: `/tags/${encodeURIComponent(cleanTag)}`
+          title: `Movies & TV Shows Tagged #${tagPhrase} — Watch Online Free`,
+          description: `Discover top rated and popular movies and TV series tagged with #${tagPhrase}. Stream free in 4K and 1080p HD with subtitles on T Stream.`,
+          url: urlWithQuery.startsWith(`/tags/${tagSlug}`) ? urlWithQuery : `/tags/${tagSlug}`
         });
       } else {
         updateSEO({
@@ -326,7 +346,7 @@ export default function App() {
 
     const currentPath = window.location.pathname || '/';
     recordSiteVisit(currentPath, auth.currentUser);
-  }, [currentView, searchQuery, selectedLetter, selectedPlatform, selectedTag]);
+  }, [currentView, searchQuery, selectedLetter, selectedPlatform, selectedTag, selectedGenreSlug]);
 
   const navigateTo = (view: string, extra?: any) => {
     setNavKey(k => k + 1);
@@ -388,16 +408,33 @@ export default function App() {
       setSelectedLetter(letter);
       newPath = letter === 'ALL' ? '/movies' : `/az/${letter}`;
       setSelectedGenreId(null);
+    } else if (view === 'genre') {
+      const candidateSlug =
+        extra?.genreSlug ||
+        (extra?.genreId ? genreToSlug(extra.genreId) : '') ||
+        (extra?.genreName ? genreToSlug(extra.genreName) : '') ||
+        selectedGenreSlug ||
+        'action';
+      const gMeta = slugToGenre(candidateSlug);
+      if (gMeta) {
+        setSelectedGenreSlug(gMeta.slug);
+        setSelectedGenreId(gMeta.id);
+        newPath = `/genre/${gMeta.slug}`;
+      } else {
+        setCurrentView('notfound');
+        newPath = '/404';
+      }
     } else if (view === 'tags') {
       if (extra?.tag) {
-        const clean = encodeURIComponent(extra.tag.replace(/^#/, '').toLowerCase());
-        newPath = `/tags/${clean}`;
-        setSelectedTag(extra.tag.replace(/^#/, '').toLowerCase());
+        const slug = tagToSlug(extra.tag);
+        newPath = slug ? `/tags/${slug}` : '/tags';
+        setSelectedTag(slug || null);
       } else {
         newPath = '/tags';
         setSelectedTag(null);
       }
       setSelectedGenreId(null);
+      setSelectedGenreSlug(null);
     } else if (view === 'search') {
       newPath = extra?.query ? `/search?q=${encodeURIComponent(extra.query)}` : '/search';
       if (extra?.query) setSearchQuery(extra.query);
@@ -473,7 +510,9 @@ export default function App() {
         onNavigate={navigateTo}
         onSearch={handleSearch}
         onSelectMedia={handleSelectMedia}
-        onSelectGenre={(genreId) => navigateTo('movies', { genreId })}
+        onSelectGenre={(genreId, genreName) =>
+          navigateTo('genre', { genreId, genreName, genreSlug: genreToSlug(genreId || genreName) })
+        }
         onSurpriseMe={() => navigateTo('random')}
         onOpenFilter={() => navigateTo('movies')}
         onWatchEpisode={(showId, showTitle, season, episode, posterPath) => {
@@ -501,7 +540,9 @@ export default function App() {
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onNavigate={navigateTo}
-        onSelectGenre={(genreId) => navigateTo('movies', { genreId })}
+        onSelectGenre={(genreId, genreName) =>
+          navigateTo('genre', { genreId, genreName, genreSlug: genreToSlug(genreId || genreName) })
+        }
         selectedGenreId={selectedGenreId}
         onSelectPlatform={(platId) => navigateTo('platform', { platform: platId })}
         selectedPlatform={selectedPlatform || undefined}
@@ -536,7 +577,9 @@ export default function App() {
             onSelectMedia={handleSelectMedia}
             onSelectPerson={handleSelectPerson}
             onSelectTag={(tag) => navigateTo('tags', { tag })}
-            onSelectGenre={(genreId) => navigateTo('movies', { genreId })}
+            onSelectGenre={(genreId, genreName) =>
+              navigateTo('genre', { genreId, genreName, genreSlug: genreToSlug(genreId || genreName) })
+            }
             onNavigateCollections={() => navigateTo('collections')}
             onSelectPlatform={(platId) => navigateTo('platform', { platform: platId })}
           />
@@ -579,6 +622,17 @@ export default function App() {
               }
             }}
             onSelectMedia={handleSelectMedia}
+          />
+        )}
+
+        {currentView === 'genre' && (
+          <CatalogPage
+            key={`genre-${navKey}-${selectedGenreSlug || selectedGenreId || ''}`}
+            category="genre"
+            initialGenreSlug={selectedGenreSlug || undefined}
+            initialGenreId={selectedGenreId || undefined}
+            onSelectMedia={handleSelectMedia}
+            onWatchMedia={handleWatchMedia}
           />
         )}
 

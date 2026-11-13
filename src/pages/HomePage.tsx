@@ -27,6 +27,7 @@ import { LandscapeMediaCard } from '../components/home/LandscapeMediaCard';
 import { CollectionCard } from '../components/home/CollectionCard';
 import { PlatformSection } from '../components/home/PlatformSection';
 import { GenreCard, POPULAR_GENRES } from '../components/home/GenreCard';
+import { genreToSlug } from '../utils/genres';
 import { PageLoadingIndicator } from '../components/PageLoadingIndicator';
 
 interface HomePageProps {
@@ -522,7 +523,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             <GenreCard
               key={genre.id}
               genre={genre}
-              onClick={(genreId) => onNavigate('movies', { genreId })}
+              onClick={(genreId) => onNavigate('genre', { genreId, genreSlug: genreToSlug(genreId) })}
             />
           ))}
         </HomeCarousel>

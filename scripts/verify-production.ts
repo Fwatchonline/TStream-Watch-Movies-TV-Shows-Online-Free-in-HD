@@ -3,8 +3,11 @@
  *
  * Usage:
  *   npx tsx scripts/verify-production.ts
- *   npx tsx scripts/verify-production.ts --base-url=http://127.0.0.1:3000
+ *   npx tsx scripts/verify-production.ts --base-url=http://127.0.0.1:3099
  */
+
+import fs from 'fs';
+import path from 'path';
 
 const GOOGLEBOT_UA =
   'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
@@ -26,6 +29,11 @@ function getBaseUrl(): string {
 function getExpectedCommit(): string {
   const arg = process.argv.find(a => a.startsWith('--expected-commit='));
   return (arg ? arg.split('=')[1] : process.env.APP_COMMIT_SHA || '').trim();
+}
+
+function shouldCheckLocalDist(): boolean {
+  if (process.argv.includes('--skip-dist')) return false;
+  return fs.existsSync(path.resolve(process.cwd(), 'dist', 'prerender-report.json'));
 }
 
 function extractCanonical(html: string): { count: number; href: string | null } {
@@ -80,9 +88,29 @@ async function fetchHtml(baseUrl: string, route: string, ua: string, method: 'GE
   return { status: res.status, headers: res.headers, body };
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const runWorker = async () => {
+    while (nextIndex < items.length) {
+      const idx = nextIndex++;
+      results[idx] = await worker(items[idx]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => runWorker()));
+  return results;
+}
+
 async function run() {
   const baseUrl = getBaseUrl();
-  console.log(`=== TStream Production SEO & Server Verification: ${baseUrl} ===\n`);
+  const checkDist = shouldCheckLocalDist();
+  const distDir = path.resolve(process.cwd(), 'dist');
+
+  console.log(`=== TStream Production SEO & Server Verification: ${baseUrl} (dist parity: ${checkDist}) ===\n`);
   const results: CheckResult[] = [];
 
   const record = (name: string, ok: boolean, detail: string) => {
@@ -142,21 +170,36 @@ async function run() {
   let mainSitemapUrls: string[] = [];
   let moviesSitemapUrls: string[] = [];
   let tvSitemapUrls: string[] = [];
+  let episodesSitemapUrls: string[] = [];
   try {
     const robotsRes = await fetch(`${baseUrl}/robots.txt`);
     const robotsTxt = await robotsRes.text();
     record(
       'Static /robots.txt',
-      robotsRes.status === 200 && robotsTxt.includes('Sitemap: https://tstream.online/sitemap.xml'),
+      robotsRes.status === 200 &&
+        robotsTxt.includes('Sitemap: https://tstream.online/sitemap.xml') &&
+        robotsTxt.includes('Allow: /genre/') &&
+        robotsTxt.includes('Allow: /tags/'),
       `HTTP ${robotsRes.status}, bytes=${robotsTxt.length}`
     );
 
-    const sitemapFiles = [
-      { path: '/sitemap.xml', required: '<sitemapindex' },
+    const idxRes = await fetch(`${baseUrl}/sitemap.xml`);
+    const idxXml = await idxRes.text();
+    const idxLocs = Array.from(idxXml.matchAll(/<loc>([^<]+)<\/loc>/g)).map(m => m[1]);
+    record(
+      'Sitemap /sitemap.xml',
+      idxRes.status === 200 && idxXml.includes('<sitemapindex') && idxLocs.length >= 3,
+      `HTTP ${idxRes.status}, children=${idxLocs.length}`
+    );
+
+    const sitemapFiles: Array<{ path: string; required: string }> = [
       { path: '/sitemap-main.xml', required: '<urlset' },
       { path: '/sitemap-movies.xml', required: '<urlset' },
       { path: '/sitemap-tv.xml', required: '<urlset' }
     ];
+    if (idxLocs.some(u => u.endsWith('/sitemap-episodes.xml'))) {
+      sitemapFiles.push({ path: '/sitemap-episodes.xml', required: '<urlset' });
+    }
 
     for (const sm of sitemapFiles) {
       const r = await fetch(`${baseUrl}${sm.path}`);
@@ -165,6 +208,8 @@ async function run() {
       const uniqueLocs = new Set(locs);
       const validOrigin = locs.every(u => u.startsWith('https://tstream.online/'));
       const noDupWatch = locs.every(u => !u.includes('/watch/movie/'));
+      const noBadTags = locs.every(u => !u.includes('/tags/') || (!u.includes('%20') && !/[A-Z]/.test(u)));
+      const noFakeLastmod = !/<lastmod>/i.test(xml);
       const noCorrupt = locs.every(
         u => !u.includes('spider-man-homecoming-28') && !u.includes('undefined') && !u.includes('null') && !u.includes('NaN')
       );
@@ -179,6 +224,7 @@ async function run() {
       if (sm.path === '/sitemap-main.xml') mainSitemapUrls = locs;
       if (sm.path === '/sitemap-movies.xml') moviesSitemapUrls = locs;
       if (sm.path === '/sitemap-tv.xml') tvSitemapUrls = locs;
+      if (sm.path === '/sitemap-episodes.xml') episodesSitemapUrls = locs;
 
       const ok =
         r.status === 200 &&
@@ -188,13 +234,20 @@ async function run() {
         locs.length === uniqueLocs.size &&
         validOrigin &&
         noDupWatch &&
+        noBadTags &&
+        noFakeLastmod &&
         noCorrupt &&
         noUtility;
 
-      record(`Sitemap ${sm.path}`, ok, `HTTP ${r.status}, urls=${locs.length}, unique=${uniqueLocs.size}`);
+      record(
+        `Sitemap ${sm.path}`,
+        ok,
+        `HTTP ${r.status}, urls=${locs.length}, unique=${uniqueLocs.size}, noFakeLastmod=${noFakeLastmod}`
+      );
     }
 
-    const totalContentUrls = mainSitemapUrls.length + moviesSitemapUrls.length + tvSitemapUrls.length;
+    const totalContentUrls =
+      mainSitemapUrls.length + moviesSitemapUrls.length + tvSitemapUrls.length + episodesSitemapUrls.length;
     record('Combined sitemap entries populated', totalContentUrls > 20, `total=${totalContentUrls}`);
   } catch (err: any) {
     record('Robots & Sitemaps suite', false, err.message);
@@ -210,20 +263,38 @@ async function run() {
     }
   }
 
-  // 5. Indexable 200 Routes + Googlebot vs Browser Parity + JSON-LD + Semantic Body
-  const indexableChecks: Array<{ path: string; expectedCanonical: string; expectedJsonLdType?: string }> = [
+  // 5. Indexable 200 Routes + Googlebot vs Browser Parity + JSON-LD + Semantic Body + Multiword Tags + Real Genres
+  const indexableChecks: Array<{
+    path: string;
+    expectedCanonical: string;
+    expectedJsonLdType?: string;
+    requireCards?: boolean;
+    distHtmlRel?: string;
+  }> = [
     { path: '/', expectedCanonical: 'https://tstream.online/' },
-    { path: '/movies', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/movies?page=2', expectedCanonical: 'https://tstream.online/movies?page=2' },
-    { path: '/tv-shows', expectedCanonical: 'https://tstream.online/tv-shows' },
-    { path: '/trending', expectedCanonical: 'https://tstream.online/trending' },
-    { path: '/top-rated', expectedCanonical: 'https://tstream.online/top-rated' },
-    { path: '/collections', expectedCanonical: 'https://tstream.online/collections' },
+    { path: '/movies', expectedCanonical: 'https://tstream.online/movies', requireCards: true },
+    { path: '/movies?page=2', expectedCanonical: 'https://tstream.online/movies?page=2', requireCards: true },
+    { path: '/tv-shows', expectedCanonical: 'https://tstream.online/tv-shows', requireCards: true },
+    { path: '/trending', expectedCanonical: 'https://tstream.online/trending', requireCards: true },
+    { path: '/top-rated', expectedCanonical: 'https://tstream.online/top-rated', requireCards: true },
+    { path: '/collections', expectedCanonical: 'https://tstream.online/collections', expectedJsonLdType: 'CollectionPage', distHtmlRel: 'collections/index.html' },
     { path: '/tags', expectedCanonical: 'https://tstream.online/tags' },
-    { path: '/tags/revenge', expectedCanonical: 'https://tstream.online/tags/revenge' },
-    { path: '/platform/netflix', expectedCanonical: 'https://tstream.online/platform/netflix' },
-    { path: '/platform/max', expectedCanonical: 'https://tstream.online/platform/max' },
-    { path: '/az/S', expectedCanonical: 'https://tstream.online/az/S' },
+    { path: '/tags/revenge', expectedCanonical: 'https://tstream.online/tags/revenge', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'tags/revenge/index.html' },
+    { path: '/tags/friendship', expectedCanonical: 'https://tstream.online/tags/friendship', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'tags/friendship/index.html' },
+    { path: '/tags/magic', expectedCanonical: 'https://tstream.online/tags/magic', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'tags/magic/index.html' },
+    { path: '/tags/time-travel', expectedCanonical: 'https://tstream.online/tags/time-travel', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'tags/time-travel/index.html' },
+    { path: '/tags/based-on-novel-or-book', expectedCanonical: 'https://tstream.online/tags/based-on-novel-or-book', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'tags/based-on-novel-or-book/index.html' },
+    { path: '/tags/coming-of-age', expectedCanonical: 'https://tstream.online/tags/coming-of-age', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'tags/coming-of-age/index.html' },
+    { path: '/tags/school-friend', expectedCanonical: 'https://tstream.online/tags/school-friend', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'tags/school-friend/index.html' },
+    { path: '/tags/based-on-comic-book', expectedCanonical: 'https://tstream.online/tags/based-on-comic-book', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'tags/based-on-comic-book/index.html' },
+    { path: '/genre/action', expectedCanonical: 'https://tstream.online/genre/action', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/action/index.html' },
+    { path: '/genre/comedy', expectedCanonical: 'https://tstream.online/genre/comedy', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/comedy/index.html' },
+    { path: '/genre/drama', expectedCanonical: 'https://tstream.online/genre/drama', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/drama/index.html' },
+    { path: '/genre/science-fiction', expectedCanonical: 'https://tstream.online/genre/science-fiction', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/science-fiction/index.html' },
+    { path: '/genre/thriller', expectedCanonical: 'https://tstream.online/genre/thriller', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'genre/thriller/index.html' },
+    { path: '/platform/netflix', expectedCanonical: 'https://tstream.online/platform/netflix', requireCards: true },
+    { path: '/platform/max', expectedCanonical: 'https://tstream.online/platform/max', requireCards: true },
+    { path: '/az/S', expectedCanonical: 'https://tstream.online/az/S', requireCards: true },
     { path: '/movie/spider-man-homecoming-315635', expectedCanonical: 'https://tstream.online/movie/spider-man-homecoming-315635', expectedJsonLdType: 'Movie' },
     { path: '/watch/movie/spider-man-homecoming-315635', expectedCanonical: 'https://tstream.online/movie/spider-man-homecoming-315635', expectedJsonLdType: 'Movie' },
     { path: '/tv/breaking-bad-1396', expectedCanonical: 'https://tstream.online/tv/breaking-bad-1396', expectedJsonLdType: 'TVSeries' },
@@ -246,14 +317,15 @@ async function run() {
       const titleUser = extractTitle(user.body);
       const descBot = extractDescription(bot.body);
       const jsonLd = extractJsonLd(bot.body);
+      const cards = extractCardTitles(bot.body);
       const hasH1 = /<h1[^>]*>[\s\S]+?<\/h1>/i.test(bot.body);
       const hasContent = bot.body.includes('id="seo-prerender"');
       const jsonLdOk =
         Boolean(jsonLd && jsonLd['@context'] === 'https://schema.org') &&
         (!item.expectedJsonLdType || jsonLd?.['@type'] === item.expectedJsonLdType);
 
-      if (item.path === '/movies') moviesP1Cards = extractCardTitles(bot.body);
-      if (item.path === '/movies?page=2') moviesP2Cards = extractCardTitles(bot.body);
+      if (item.path === '/movies') moviesP1Cards = cards;
+      if (item.path === '/movies?page=2') moviesP2Cards = cards;
       if (item.path === '/top-rated') {
         const hasMovieLink = /href="\/movie\//i.test(bot.body);
         const hasTvLink = /href="\/tv\//i.test(bot.body);
@@ -263,9 +335,37 @@ async function run() {
           `hasMovieLink=${hasMovieLink}, hasTvLink=${hasTvLink}`
         );
       }
+      if (item.path === '/collections') {
+        const collectionHeadings = (bot.body.match(/<h2[^>]*>[\s\S]*?<\/h2>/gi) || []).length;
+        const collectionLinks = (bot.body.match(/href="\/movie\//gi) || []).length;
+        record(
+          'Franchises /collections renders real collection cards and movie links',
+          collectionHeadings >= 4 && collectionLinks >= 10,
+          `collections=${collectionHeadings}, movieLinks=${collectionLinks}`
+        );
+      }
       if (item.path === '/platform/netflix') {
         const hasRegionScope = bot.body.includes('(US)') || bot.body.includes('region US');
         record('Platform /platform/netflix declares default watch region US', hasRegionScope, `hasRegionScope=${hasRegionScope}`);
+      }
+      if (item.path === '/watch/tv/breaking-bad-1396/1/1') {
+        const leakedParentRating =
+          jsonLd?.aggregateRating?.ratingValue === 8.9 && jsonLd?.aggregateRating?.ratingCount === 13500;
+        record(
+          'TVEpisode /watch/tv/breaking-bad-1396/1/1 does NOT inherit parent series aggregateRating',
+          Boolean(jsonLd && jsonLd['@type'] === 'TVEpisode' && !leakedParentRating),
+          `hasAggregateRating=${Boolean(jsonLd?.aggregateRating)}, leakedParent=${leakedParentRating}`
+        );
+      }
+      if (checkDist && item.distHtmlRel) {
+        const diskPath = path.join(distDir, item.distHtmlRel);
+        const diskExists = fs.existsSync(diskPath);
+        const diskCan = diskExists ? extractCanonical(fs.readFileSync(diskPath, 'utf8')).href : null;
+        record(
+          `Dist disk parity ${item.distHtmlRel}`,
+          diskExists && diskCan === item.expectedCanonical,
+          `exists=${diskExists}, canonical=${diskCan}`
+        );
       }
 
       const ok =
@@ -280,12 +380,13 @@ async function run() {
         titleBot === titleUser &&
         hasH1 &&
         hasContent &&
-        jsonLdOk;
+        jsonLdOk &&
+        (!item.requireCards || cards.length > 0);
 
       record(
         `Indexable ${item.path}`,
         ok,
-        `HTTP=${bot.status}/${user.status}, canonical=${canBot.href} (count=${canBot.count}), jsonld=${jsonLd?.['@type'] || 'none'}`
+        `HTTP=${bot.status}/${user.status}, canonical=${canBot.href}, cards=${cards.length}, jsonld=${jsonLd?.['@type'] || 'none'}`
       );
     } catch (err: any) {
       record(`Indexable ${item.path}`, false, err.message);
@@ -303,20 +404,23 @@ async function run() {
     `p1[0]="${moviesP1Cards[0] || 'none'}", p2[0]="${moviesP2Cards[0] || 'none'}"`
   );
 
-  // 6. Query Parameter Policy, Filters, Search, Empty A-Z, Platform Alias, Utility -> 200 + noindex
-  const noindexChecks: Array<{ path: string; expectedCanonical: string }> = [
-    { path: '/movies?genreId=28&year=2024', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/movies?sortBy=vote_average.desc', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/movies?country=US', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/movies?mediaType=movie', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/movies?unknownParam=foo', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/movies?page=0', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/movies?page=9999', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/movies?page=1&utm_source=test', expectedCanonical: 'https://tstream.online/movies' },
-    { path: '/platform/hbo', expectedCanonical: 'https://tstream.online/platform/max' },
-    { path: '/search?q=batman', expectedCanonical: 'https://tstream.online/search' },
-    { path: '/random', expectedCanonical: 'https://tstream.online/random' },
-    { path: '/az/Q', expectedCanonical: 'https://tstream.online/az/Q' }
+  // 6. Query Parameter Policy, Filters, Legacy Aliases, Search, Empty A-Z, Utility -> 200 + noindex
+  const noindexChecks: Array<{ path: string; expectedCanonical: string; expectNoindex: boolean }> = [
+    { path: '/movies?genreId=28&year=2024', expectedCanonical: 'https://tstream.online/movies', expectNoindex: true },
+    { path: '/movies?sortBy=vote_average.desc', expectedCanonical: 'https://tstream.online/movies', expectNoindex: true },
+    { path: '/movies?country=US', expectedCanonical: 'https://tstream.online/movies', expectNoindex: true },
+    { path: '/movies?mediaType=movie', expectedCanonical: 'https://tstream.online/movies', expectNoindex: true },
+    { path: '/movies?unknownParam=foo', expectedCanonical: 'https://tstream.online/movies', expectNoindex: true },
+    { path: '/movies?page=0', expectedCanonical: 'https://tstream.online/movies', expectNoindex: true },
+    { path: '/movies?page=9999', expectedCanonical: 'https://tstream.online/movies', expectNoindex: true },
+    { path: '/movies?page=1&utm_source=test', expectedCanonical: 'https://tstream.online/movies', expectNoindex: false },
+    { path: '/tag/revenge', expectedCanonical: 'https://tstream.online/tags/revenge', expectNoindex: true },
+    { path: '/tags/time%20travel', expectedCanonical: 'https://tstream.online/tags/time-travel', expectNoindex: true },
+    { path: '/genre/sci-fi', expectedCanonical: 'https://tstream.online/genre/science-fiction', expectNoindex: true },
+    { path: '/platform/hbo', expectedCanonical: 'https://tstream.online/platform/max', expectNoindex: true },
+    { path: '/search?q=batman', expectedCanonical: 'https://tstream.online/search', expectNoindex: true },
+    { path: '/random', expectedCanonical: 'https://tstream.online/random', expectNoindex: true },
+    { path: '/az/Q', expectedCanonical: 'https://tstream.online/az/Q', expectNoindex: true }
   ];
 
   for (const item of noindexChecks) {
@@ -324,11 +428,9 @@ async function run() {
       const res = await fetchHtml(baseUrl, item.path, GOOGLEBOT_UA);
       const can = extractCanonical(res.body);
       const robots = extractRobots(res.body);
-      // Note: /movies?page=1&utm_source=test strips ?page=1 & utm_source and stays indexable with clean /movies canonical
-      const expectNoindex = !item.path.startsWith('/movies?page=1&');
       const ok =
         res.status === 200 &&
-        (expectNoindex ? robots.includes('noindex') : !robots.includes('noindex')) &&
+        (item.expectNoindex ? robots.includes('noindex') : !robots.includes('noindex')) &&
         can.count === 1 &&
         can.href === item.expectedCanonical;
       record(
@@ -341,22 +443,26 @@ async function run() {
     }
   }
 
-  // Platform with no offline data (Crunchyroll) — verify noindex parity with sitemap
-  try {
-    const crRes = await fetchHtml(baseUrl, '/platform/crunchyroll', GOOGLEBOT_UA);
-    const crRobots = extractRobots(crRes.body);
-    const inSitemap = mainSitemapUrls.includes('https://tstream.online/platform/crunchyroll');
-    const isNoindex = crRobots.includes('noindex');
-    const crHasCards = extractCardTitles(crRes.body).length > 0;
-    // Consistency rule: either populated (indexed & not claiming unrelated titles) OR empty (noindex & excluded from sitemap)
-    const ok = crRes.status === 200 && (!inSitemap ? isNoindex && !crHasCards : !isNoindex && crHasCards);
-    record(
-      'Platform /platform/crunchyroll sitemap-indexability parity',
-      ok,
-      `HTTP=${crRes.status}, inSitemap=${inSitemap}, noindex=${isNoindex}, cards=${crHasCards}`
-    );
-  } catch (err: any) {
-    record('Platform /platform/crunchyroll sitemap-indexability parity', false, err.message);
+  // Parity checks for offline-empty platform (Crunchyroll) & offline-empty genre (Western)
+  for (const parityRoute of [
+    { url: '/platform/crunchyroll', fullUrl: 'https://tstream.online/platform/crunchyroll', label: 'Platform /platform/crunchyroll' },
+    { url: '/genre/western', fullUrl: 'https://tstream.online/genre/western', label: 'Genre /genre/western' }
+  ]) {
+    try {
+      const res = await fetchHtml(baseUrl, parityRoute.url, GOOGLEBOT_UA);
+      const robots = extractRobots(res.body);
+      const inSitemap = mainSitemapUrls.includes(parityRoute.fullUrl);
+      const isNoindex = robots.includes('noindex');
+      const hasCards = extractCardTitles(res.body).length > 0;
+      const ok = res.status === 200 && (!inSitemap ? isNoindex && !hasCards : !isNoindex && hasCards);
+      record(
+        `${parityRoute.label} sitemap-indexability parity`,
+        ok,
+        `HTTP=${res.status}, inSitemap=${inSitemap}, noindex=${isNoindex}, cards=${hasCards}`
+      );
+    } catch (err: any) {
+      record(`${parityRoute.label} sitemap-indexability parity`, false, err.message);
+    }
   }
 
   // 7. Genuine 404 routes -> MUST return HTTP 404 (not 200!)
@@ -364,7 +470,10 @@ async function run() {
     '/movie/999999999-nonexistent-movie',
     '/tv/999999999-nonexistent-show',
     '/tags/nonexistent-tag-xyz-999',
+    '/genre/nonexistent-genre',
     '/watch/tv/breaking-bad-1396/99/99',
+    '/watch/tv/breaking-bad-1396/2/99',
+    '/watch/tv/breaking-bad-1396/1/999',
     '/platform/nonexistent-platform-xyz',
     '/nonexistent-page-xyz',
     '/assets/nonexistent-chunk-xyz.js'
@@ -397,6 +506,47 @@ async function run() {
       }
     }
   }
+
+  // 9. Bounded-Concurrency Sitemap URL Verification (all main + all episodes + sample/all movies & TV)
+  const samplePool = [
+    ...mainSitemapUrls,
+    ...episodesSitemapUrls,
+    ...moviesSitemapUrls.slice(0, 30),
+    ...tvSitemapUrls.slice(0, 20)
+  ];
+  const uniqueSample = Array.from(new Set(samplePool));
+  const crawlFailures: string[] = [];
+  let server5xxCount = 0;
+
+  await mapWithConcurrency(uniqueSample, 4, async fullUrl => {
+    const pathname = new URL(fullUrl).pathname;
+    try {
+      const res = await fetchHtml(baseUrl, pathname, GOOGLEBOT_UA);
+      if (res.status >= 500) server5xxCount++;
+      const can = extractCanonical(res.body);
+      const robots = extractRobots(res.body);
+      const title = extractTitle(res.body);
+      const hasH1 = /<h1[^>]*>[\s\S]+?<\/h1>/i.test(res.body);
+      if (
+        res.status !== 200 ||
+        can.count !== 1 ||
+        can.href !== fullUrl ||
+        robots.includes('noindex') ||
+        !title ||
+        !hasH1
+      ) {
+        crawlFailures.push(`${pathname} (HTTP=${res.status}, can=${can.href}, robots=${robots})`);
+      }
+    } catch (err: any) {
+      crawlFailures.push(`${pathname} (${err.message})`);
+    }
+  });
+
+  record(
+    'Bounded-concurrency sitemap URL verification',
+    crawlFailures.length === 0 && server5xxCount === 0 && uniqueSample.length > 20,
+    `checked=${uniqueSample.length}, 5xx=${server5xxCount}, failures=${crawlFailures.length}${crawlFailures.length ? ` [${crawlFailures.slice(0, 3).join('; ')}]` : ''}`
+  );
 
   const failed = results.filter(r => !r.ok);
   console.log(`\n=== Summary: ${results.length - failed.length}/${results.length} checks passed ===`);

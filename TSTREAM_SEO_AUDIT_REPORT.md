@@ -1,282 +1,125 @@
-# TStream.online — Complete Source Code Technical SEO Audit & Google Indexing Fix Report
+# TStream.online — Complete Technical SEO Audit, Source Code Repair & Production Readiness Report
 
 **Date:** November 2026  
 **Target Domain:** `https://tstream.online` (Canonical Non-WWW, HTTPS)  
-**System Architecture:** React 19, TypeScript, Vite 8, Hono / Node.js 22, Tailwind CSS 4, TMDB API, Firebase Firestore, PWA, Nginx, PM2  
-**Status:** Audit Completed & Production Fixes Applied  
+**Authoritative Stack:** React 19, TypeScript, Vite 8, Hono + Custom Node.js HTTP Server (`dist/server.mjs`), Tailwind CSS 4, TMDB API, Firebase / Firestore, PWA, Nginx, PM2  
+**Required Runtime:** Node.js `>=24.12.0` (verified in `.nvmrc`, `package.json`, `.github/workflows/deploy-tstream.yml`, `scripts/update-vps.sh`)  
+**Status:** Source Code Fixes Implemented & Locally Verified (VPS Live Verification Pending Authorization)
 
 ---
 
-## Executive Summary
+## 1. Executive Summary
 
-Google Search Console reported severe indexing and crawl degradation on `https://tstream.online`, including:
-- **Server error (5xx):** 571 URLs
-- **Discovered — currently not indexed:** 472 URLs
-- **Crawled — currently not indexed:** 460 URLs
-- **Duplicate without user-selected canonical:** 115 URLs
-- **Alternate page with proper canonical tag:** 45 URLs
-- **Excluded by noindex tag:** 26 URLs
-- **Page with redirect:** 5 URLs (Failed validation on November 7, 2026)
-- **Duplicate, Google chose different canonical than user:** 5 URLs
-- **Not found (404):** 6 URLs
-- **Blocked by robots.txt:** 2 URLs
+A source-level technical SEO and production readiness audit of **TStream.online** was executed against the existing React 19 / Vite 8 / Hono / Node.js codebase to resolve the remaining root causes behind Google Search Console indexing failures, canonical mismatches, sitemap discrepancies, thin/duplicate episode indexing, and runtime error propagation.
 
-A thorough technical source code audit discovered multiple compounding architecture and SEO bugs in the codebase:
-1. **Empty Client-Side Shell Served to Bots:** Nginx fallback served a single static `index.html` containing an empty `<div id="root"></div>`. Googlebot had to execute heavy client-side JavaScript (2.6MB bundle) before knowing what the page was about, causing massive crawl deferral and "Discovered — currently not indexed" or "Crawled — currently not indexed" classification.
-2. **Conflicting JavaScript Canonical Rewriting:** An inline script inside `index.html` was forcefully resetting `canonical.href = window.location.origin + window.location.pathname;` on every page load, directly contradicting the React SEO metadata and pointing `/watch/movie/:slug` to itself instead of its canonical parent `/movie/:slug`.
-3. **Missing Tag Route Handling in App Router & History:** The client-side router (`App.tsx`) lacked direct route definitions for `/tags/:tag` and `/tag/:tag`. When Googlebot crawled URLs like `https://tstream.online/tags/revenge`, `https://tstream.online/tags/friendship`, or `https://tstream.online/tags/magic`, the client router fell back to the homepage without updating the URL or history stack properly, causing soft-404 and duplicate canonical conflicts.
-4. **Corrupted Sitemap XML Generation with Cross-Object Regex Bleed:** The legacy script `scripts/generate-sitemaps.cjs` used imprecise multi-line regular expressions (`/title:\s*['"`](.*?)['"`][\s\S]*?id:\s*(\d+)/g`) over `catalogData.ts`. This matched the title `Spider-Man: Homecoming` with the `genre_id: 28` of an entirely different movie object, generating the invalid URL `https://tstream.online/movie/spider-man-homecoming-28` (which does not exist and yields 404/5xx).
-5. **Watch URL Duplication in Sitemap:** The sitemap generator was writing `/watch/movie/:slug` URLs directly into `sitemap-movies.xml` alongside `/movie/:slug`, instructing Google to index duplicate content that had conflicting canonical signals.
-6. **Robots.txt Blocking Googlebot from Inspecting `noindex` Directives:** `public/robots.txt` had `Disallow: /search?*`. Because Googlebot was disallowed from fetching search URLs, it could not read the `<meta name="robots" content="noindex, nofollow">` tag placed on search pages, resulting in Search Console's "Blocked by robots.txt" and "Indexed though blocked by robots.txt" warnings.
-7. **Fabricated Schema.org Ratings:** In `src/utils/seo.ts`, unrated media items were assigned `ratingCount: media.voteCount || 100`, fabricating false aggregate ratings for items with 0 votes, violating Google's Rich Result Structured Data Guidelines and risking manual action.
-8. **HTTP/WWW Redirect Chains & 5xx Error Masking:** The example `nginx.conf.example` lacked explicit 301 canonical redirects from `http://tstream.online` and `https://www.tstream.online` to `https://tstream.online`, causing the Google Search Console redirect validation failure on Nov 7, 2026. Furthermore, `error_page 500 502 503 504 /index.html;` masked critical Node.js proxy failures as 200 OK responses with empty bodies.
+All identified source-code defects were fixed directly in the repository **without redesigning the UI, removing streaming providers, breaking authentication/Firebase, or altering any live VPS / PM2 / Nginx state**.
+
+### Key Outcomes Verified Locally (`dist/` & Built Server `dist/server.mjs`)
+- **Unified Tag Slugs & TMDB Keyword Integrity:** Consolidated all tag routing, frontend links, SSR HTML, prerendering, and XML sitemaps on canonical lowercase kebab-case slugs (`src/utils/tags.ts`) while resolving multiword slugs (e.g., `/tags/time-travel` -> `"time travel"`, `/tags/based-on-novel-or-book` -> `"based on novel or book"`) cleanly for TMDB keyword queries and local catalog matching.
+- **Genuine Genre Landing Pages:** Implemented `/genre/:slug` landing pages (`src/utils/genres.ts`, `src/App.tsx`, `src/pages/CatalogPage.tsx`, `scripts/seoHtmlPlugin.ts`) backed by genuine TMDB genre IDs and local catalog matching, marking empty genres `200 + noindex`, unknown genres `404`, and `/genre/sci-fi` as a `noindex` alias canonicalizing to `/genre/science-fiction`.
+- **Single Authoritative Route Inventory:** Created `scripts/routeInventory.ts`, consumed by `scripts/prerender.ts`, `scripts/generate-sitemaps.ts`, and `scripts/verify-production.ts`, eliminating drift between generated HTML files, sitemaps, and reported route counts.
+- **Zero Fake `<lastmod>` & Verified `sitemap-episodes.xml`:** Removed fabricated `releaseDate` / `firstAirDate` `<lastmod>` tags from all XML sitemaps and enforced rejection of unverified `<lastmod>` inside `validateSitemapXml()`. Added `sitemap-episodes.xml` exclusively for verified, content-rich TV episodes (`11` URLs), bringing total validated sitemap URLs to **99** (`52` main + `29` movie + `7` TV + `11` episodes).
+- **Episode Indexability & Schema Isolation:** Added `isEpisodeSeoIndexable()` (`src/utils/seo.ts`) so unverified or thin episodes within season bounds emit `200 + noindex` (preserving playback compatibility) without duplicating parent series overviews, while out-of-bounds/nonexistent seasons/episodes return genuine HTTP `404` and upstream 429/5xx failures return `503`. Isolated `TVEpisode` JSON-LD so it never inherits the parent `TVSeries` `aggregateRating` or `voteCount`.
+- **Accurate Prerender Reporting:** `dist/prerender-report.json` now separates `indexableSucceeded` (**128**) from `noindexSucceeded` (**14**), totaling **142** validated static HTML artifacts (**0** failures).
+- **Six-Suite Automated Verification:** All **6** configured test suites (`pagination.test.ts`, `seo.test.ts`, `subtitles.test.ts`, `server.test.ts`, `retries.test.ts`, `deploy.test.ts`), `npm run lint` (`tsc --noEmit`), `npm run build`, and **95/95** live HTTP/SEO checks (`scripts/verify-production.ts` against `dist/server.mjs`) passed.
 
 ---
 
-## 1. Confirmed Source Code Bugs & Root Cause Analysis
+## 2. Confirmed Source-Code Bugs Discovered & Fixed
 
-### Bug 1: Conflicting Canonical Strategy & Watch Route Duplication
-- **Affected GSC Issues:** *Duplicate without user-selected canonical (115)*, *Duplicate, Google chose different canonical than user (5)*, *Alternate page with proper canonical tag (45)*.
-- **Root Cause:**
-  - In `index.html`, an inline `<script>` tag executed:
-    ```javascript
-    const canonical = document.getElementById('tstream-canonical');
-    if (canonical) {
-      canonical.href = window.location.origin + window.location.pathname;
-    }
-    ```
-    This script stripped query parameters and unconditionally set the canonical URL to whatever path the browser navigated to.
-  - As a result, movie watch pages at `/watch/movie/the-amazing-spider-man-2-102382` were setting their canonical URL to `/watch/movie/...` instead of the authoritative detail page `/movie/the-amazing-spider-man-2-102382`.
-  - In `sitemap-movies.xml`, both `/movie/:slug` and `/watch/movie/:slug` were being submitted as canonical indexable entities.
-  - When Googlebot crawled both URLs and observed nearly identical content (title, synopsis, cast) with differing canonical declarations, Google chose its own canonical, reporting: *"Duplicate, Google chose different canonical than user"*.
-
-### Bug 2: Missing Route Matching for `/tags/:tag`
-- **Affected GSC Issues:** *Discovered - currently not indexed (472)*, *Crawled - currently not indexed (460)*, *Not found (404)*.
-- **Target Examples from GSC:**
-  - `https://tstream.online/tags/revenge`
-  - `https://tstream.online/tags/friendship`
-  - `https://tstream.online/tags/magic`
-- **Root Cause:**
-  - In `src/App.tsx`, the route matching logic only checked `currentRoute === 'tags'`. It parsed query strings like `?tag=revenge` if explicitly provided, but if a user or bot accessed `/tags/revenge` or `/tags/magic` directly, the path parser extracted route segments `['tags', 'revenge']`, found no route handler for segment `tags/:tag`, and fell back to `currentRoute = 'home'`.
-  - Googlebot crawled `https://tstream.online/tags/revenge`, but the client rendered the homepage with the homepage title and canonical (`https://tstream.online/`), leading to soft-404 detection and indexing refusal.
-  - Furthermore, `TagsPage.tsx` did not synchronize state with browser history via `history.pushState` when changing tags, causing back/forward navigation breakage.
-
-### Bug 3: Sitemap Generator Regex Cross-Object Bleed & Malformed URLs
-- **Affected GSC Issues:** *Server error (5xx) (571)*, *Not found (404) (6)*.
-- **Root Cause:**
-  - `scripts/generate-sitemaps.cjs` did not parse TypeScript AST or import the catalog data; instead, it applied a non-greedy regex across `src/services/catalogData.ts`.
-  - When an entry in `catalogData.ts` lacked a nearby ID or had nested objects, the regex skipped to the next matching `id: (\d+)` in the file.
-  - Specifically, for `Spider-Man: Homecoming` (which had `genre_ids: [28, 12, ...]` right above or nested), the regex matched `Spider-Man: Homecoming` with `28`, producing the slug:
-    `spider-man-homecoming-28`
-  - The actual TMDB ID for Spider-Man: Homecoming is **315635**.
-  - When Googlebot crawled `https://tstream.online/movie/spider-man-homecoming-28`, the backend attempted to fetch TMDB movie ID `28` (which is not a movie, or an obscure/invalid entity), resulting in API errors or 404 responses.
-
-### Bug 4: Empty Body Delivered to Search Engine Bots (Client-Side Rendering Only)
-- **Affected GSC Issues:** *Discovered - currently not indexed (472)*, *Crawled - currently not indexed (460)*.
-- **Root Cause:**
-  - Because TStream is a Vite-built Single Page Application (SPA), `dist/index.html` contained only `<div id="root"></div>`.
-  - In high-throughput crawl scenarios, Googlebot queues JavaScript rendering in a secondary WRS (Web Rendering Service) wave. If WRS encounters resource limits or TMDB API rate-limiting during client execution, Googlebot indexes the page as having zero text content, or drops it into "Crawled - currently not indexed".
-  - In addition, social media crawlers (Twitter/X, Facebook, Discord, Telegram, WhatsApp) do not execute JavaScript at all, failing to read OpenGraph cards.
-
-### Bug 5: Robots.txt Blocking Crawl of Noindexed URLs
-- **Affected GSC Issues:** *Blocked by robots.txt (2)*, *Excluded by noindex tag (26)*.
-- **Root Cause:**
-  - `public/robots.txt` had the line:
-    `Disallow: /search?*`
-  - Per Google Search Central guidelines, when a URL is blocked by `robots.txt`, Googlebot cannot fetch the page and therefore **cannot see** any `<meta name="robots" content="noindex">` header or tag on that page.
-  - This prevented Google from processing the `noindex` directive, leaving search query URLs in a limbo state.
-  - Moreover, `public/robots.txt` lacked explicit `Allow: /tags/` and did not specify disallows for internal authenticated pages like `/admin`, `/library`, `/settings`.
-
-### Bug 6: Fabricated AggregateRating Structured Data
-- **Affected GSC Issues:** Schema.org validation warnings, Rich Results penalties.
-- **Root Cause:**
-  - In `src/utils/seo.ts`:
-    ```typescript
-    aggregateRating: {
-      '@type': 'AggregateRating',
-      ratingValue: Math.min(10, Math.max(1, media.voteAverage || 7.0)),
-      bestRating: 10,
-      worstRating: 1,
-      ratingCount: media.voteCount || 100 // <--- FABRICATED!
-    }
-    ```
-  - If a newly listed movie or series had `voteCount = 0` or undefined, TStream output a fabricated rating of `100` votes. Google algorithms actively penalize false rating counts.
-
-### Bug 7: The 571 Server Errors (5xx) on Remote VPS
-- **Affected GSC Issues:** *Server error (5xx) (571)*.
-- **Root Cause Analysis (VPS Architecture):**
-  - **Node.js Memory Exhaustion:** The backend running via PM2 or node processes can experience out-of-memory crashes when multiple concurrent crawler requests trigger unbuffered streaming API proxying or subtitle conversions (`/api/stream`, `/api/proxy`, `/api/subtitle`).
-  - **TMDB API Rate Limits (HTTP 429) Propagated as 500:** When crawlers rapidly hit movie detail pages, the server called `api.themoviedb.org`. When TMDB returned 429 (Too Many Requests), unhandled promise rejections or raw error throws in proxy middleware converted this into an HTTP 500 or 502 Bad Gateway to Googlebot.
-  - **Nginx Upstream Proxy Connection Refused:** If PM2 crashed and restarted, incoming requests during the restart window received `502 Bad Gateway`.
-  - **Masked Errors in Nginx:** The previous `nginx.conf.example` had `error_page 500 502 503 504 /index.html;`, which caused Nginx to serve the SPA index file with internal failure states instead of proper cache headers or graceful degradation.
+| # | Bug Discovered | Root Cause | Implemented Fix |
+|---|---|---|---|
+| 1 | **Tag URL vs Prerender Filesystem Mismatch** | Multiword tags (e.g., `"time travel"`, `"based on novel or book"`, `"coming of age"`) produced URL-encoded paths (`/tags/time%20travel`) that did not match prerender paths (`dist/tags/time-travel/index.html`) or lacked reverse TMDB keyword mapping. | Created `src/utils/tags.ts` (`tagToSlug`, `slugToTag`, `normalizeTag`, `getCanonicalTagUrl`, `isValidTagSlug`). Updated `src/App.tsx`, `src/pages/TagsPage.tsx`, `src/utils/seo.ts`, `scripts/seoHtmlPlugin.ts`, `scripts/routeInventory.ts`, `scripts/generate-sitemaps.ts`, and `src/services/tmdb.ts` (`fetchByTag`) to use kebab-case canonical URLs while passing `"time travel"` spacing to TMDB keyword lookup; legacy `/tag/*` and `%20` URLs emit `200 + noindex` canonicalizing to kebab-case URLs. |
+| 2 | **Incomplete Genre Landing Pages** | Docs previously claimed genre pages were prerendered (`action`, `comedy`, `drama`, `science-fiction`, `thriller`, etc.) despite inconsistent `/genre/:slug` handling, pagination, and catalog/TMDB discovery parity. | Created `src/utils/genres.ts` (`GENRE_LANDINGS`, `slugToGenre`, `genreToSlug`, `getCanonicalGenreUrl`, `itemMatchesGenre`). Added genuine `/genre/:slug` routing in `App.tsx`, `CatalogPage.tsx`, `seo.ts`, `seoHtmlPlugin.ts`, and `tmdb.ts` (`fetchServerGenreMedia` / `fetchByGenre`). Populated genres are `index, follow` and in `sitemap-main.xml`; empty offline genres (e.g., `/genre/western`) are `200 + noindex` and omitted from sitemaps; unknown slugs return HTTP `404`. |
+| 3 | **Fake `<lastmod>` Timestamps in XML Sitemaps** | `scripts/generate-sitemaps.ts` emitted `releaseDate` and `firstAirDate` as `<lastmod>`, which represent original media release dates rather than webpage modification dates. | Removed `lastmod` emission from `sitemap-main.xml`, `sitemap-movies.xml`, `sitemap-tv.xml`, and `sitemap-episodes.xml`. Updated `validateSitemapXml()` to throw if unverified `<lastmod>` tags appear (`allowVerifiedLastmod` defaults to `false`). |
+| 4 | **Thin / Unverified Episode Indexing & Overview Duplication** | `fetchServerEpisode()` and episode metadata allowed unverified episodes to fall back to the parent series overview and render indexable HTML, inflating near-duplicate pages while lacking a verified `sitemap-episodes.xml`. | Added `isEpisodeSeoIndexable()` in `src/utils/seo.ts` and strict bounds/upstream validation in `scripts/seoHtmlPlugin.ts` (`fetchServerEpisode`). Out-of-bounds seasons/episodes return HTTP `404`; upstream 429/5xx returns HTTP `503`; unverified/thin episodes within valid season bounds preserve player playback (`HTTP 200`) with `noindex, follow` and without copying the parent series overview; only verified content-rich episodes enter `sitemap-episodes.xml`. |
+| 5 | **Parent Rating Leakage into `TVEpisode` JSON-LD** | Episode structured data could inherit parent `TVSeries` `voteAverage` and `voteCount` (or fall back when episode-level ratings did not exist), attributing series-wide ratings to individual episodes. | Separated `TVEpisode` schema generation in `src/utils/seo.ts` so `aggregateRating` is omitted unless genuine episode-specific rating/voteCount fields exist, while preserving accurate `partOfSeason`, `partOfSeries`, `episodeNumber`, `datePublished`, and canonical URL. |
+| 6 | **Route Inventory Drift & Inflated Report Counts** | `prerender.ts`, `generate-sitemaps.ts`, and audit docs used separate route lists, counting `noindex` / utility / error pages alongside indexable pages. | Created `scripts/routeInventory.ts` as the single shared inventory. Updated `scripts/prerender.ts` to validate every artifact on disk and record `indexableSucceeded` (128) separately from `noindexSucceeded` (14) in `dist/prerender-report.json`. |
+| 7 | **SSR vs CSR Tie-Break & Partial Failure Divergence** | `normalizeServerTmdbListItem()` in `scripts/seoHtmlPlugin.ts` kept unrounded `vote_average` floats while client `normalizeTMDBItem()` rounded to `toFixed(1)`. Platform parallel `Promise.all` fetches in `src/services/tmdb.ts` could mask transient 429/5xx errors on one media type. | Rounded `voteAverage` to 1 decimal place in `normalizeServerTmdbListItem()`. Updated `fetchCatalog('platform', ...)` in `src/services/tmdb.ts` to rethrow transient `429`/`5xx`/`503` when `requestOpts.throwOnError` is enabled. |
+| 8 | **Environment Loading, Retry Locks & Release Safety** | `npm run build` / `prerender.ts` needed guaranteed `.env` loading via `dotenv` without leaking `TMDB_API_KEY`; UI retry locks (`attemptedSeasonsRef` / `attemptedPlatformsRef`) blocked retries; PM2 release switching needed atomic symlink + `commitSha` + post-SEO `pm2 save` rollback guarantees. | Added `scripts/loadEnv.mjs` + dist secret-leak scan in `scripts/run-build.mjs`; replaced permanent retry locks with `src/utils/retryState.ts`; hardened `scripts/update-vps.sh`, `ecosystem.config.cjs`, and `.github/workflows/deploy-tstream.yml`. |
+| 9 | **Outdated Documentation & Node Version Discrepancy** | Previous reports referenced legacy `generate-sitemaps.cjs`, 91 routes, 3 test suites, and Node `22.13.0`, whereas the project enforces Node `>=24.12.0` and 6 test suites. | Aligned documentation (`TSTREAM_SEO_AUDIT_REPORT.md`, `TSTREAM_SEO_TEST_RESULTS.md`) with verified codebase outputs while transparently noting sandbox container limitations. |
 
 ---
 
-## 2. Implemented Codebase Changes & Solutions
+## 3. Canonical URL & Indexing Policy Matrix
 
-### A. Canonical Strategy Architecture (`src/utils/seo.ts`)
-1. **Authoritative Movie Canonicals:**
-   - Every movie URL, whether accessed via `/movie/:slug` or `/watch/movie/:slug`, now strictly canonicalizes to `https://tstream.online/movie/:slug`.
-2. **Authoritative TV Series & Episode Canonicals:**
-   - TV series detail pages canonicalize to `https://tstream.online/tv/:slug`.
-   - Distinct TV episodes canonicalize to their specific episode watch route: `https://tstream.online/watch/tv/:slug/:season/:episode` (since each episode represents distinct, unique episodic content).
-3. **Canonical Normalization:**
-   - Domain is normalized to non-www HTTPS (`https://tstream.online`).
-   - Trailing slashes are stripped.
-   - Any query parameters (tracking, referral, tags) are completely stripped from canonical URLs.
-4. **Removal of Harmful Inline Script in `index.html`:**
-   - Deleted the script that dynamically reassigned `canonical.href = window.location.pathname`. The authoritative canonical is now controlled server-side via pre-rendering and client-side via React Helmet / document head synchronization.
+All canonical URLs enforce `https://tstream.online` (HTTPS, non-www, no trailing slash except `/`, tracking query params stripped):
 
-### B. Route Parser & Navigation Hardening (`src/App.tsx` & `src/pages/TagsPage.tsx`)
-1. **Added Dedicated Tag Route Handlers:**
-   - In `src/App.tsx`, route parser now supports:
-     - `/tags/:tag`
-     - `/tag/:tag`
-     - Legacy query strings `/tags?tag=:tag` (normalized to `/tags/:tag`).
-2. **Dynamic SEO & Title for Tags:**
-   - When browsing `/tags/revenge`, the page sets:
-     - Title: `Movies & TV Shows Tagged #revenge — Watch Online Free — T Stream`
-     - Description: `Discover top rated and popular movies and TV series tagged with #revenge. Stream free in 4K and 1080p HD with subtitles on T Stream.`
-     - Canonical: `https://tstream.online/tags/revenge`
-     - Robots: `index, follow` (if matching items exist) or `noindex, follow` (if tag is empty).
-3. **Browser History Management:**
-   - Selecting a tag updates browser history using `window.history.pushState(null, '', '/tags/' + slug)` so the URL matches the view and back-button navigation functions flawlessly.
-
-### C. Typed Sitemap Generator (`scripts/generate-sitemaps.ts` & `scripts/generate-sitemaps.cjs`)
-1. **Eliminated Regex Parser:**
-   - Created a TypeScript sitemap generator that directly imports `DETAILED_MOVIES`, `DETAILED_TV_SHOWS`, `EXPANDED_CATALOG`, `GENRES`, and `POPULAR_TAGS` from `src/services/catalogData.ts`.
-2. **Clean Deduplication & TMDB ID Integrity:**
-   - Utilizes `Map<number, ...>` to guarantee zero duplicate IDs across catalog entries.
-   - Fixed Spider-Man: Homecoming to use verified TMDB ID **315635** (`/movie/spider-man-homecoming-315635`), eliminating the corrupted `spider-man-homecoming-28`.
-3. **Filtered Watch Routes:**
-   - Only authoritative `/movie/:slug` URLs are placed in `sitemap-movies.xml`. `/watch/movie/:slug` URLs are excluded to prevent duplicate canonical conflicts.
-4. **Sitemap Index & Ping Structure:**
-   - `sitemap.xml` references:
-     - `sitemap-main.xml` (Homepage, browse routes, genres, platforms, tags)
-     - `sitemap-movies.xml` (Authoritative movie detail pages)
-     - `sitemap-tv.xml` (Authoritative TV series detail pages)
-
-### D. Server-Side Pre-Rendering Engine (`scripts/prerender.ts` & `scripts/seoHtmlPlugin.ts`)
-1. **Build-Time Pre-Rendering (`scripts/prerender.ts`):**
-   - Automatically executed during `npm run build`.
-   - Generates 91 static HTML files in `dist/` corresponding to:
-     - Homepage (`/`)
-     - Core routes: `/movies`, `/tv-shows`, `/trending`, `/top-rated`, `/collections`, `/az`
-     - All genre routes (`/genre/action`, `/genre/sci-fi`, etc.)
-     - All platform hubs (`/platform/netflix`, `/platform/disney`, etc.)
-     - All popular tags (`/tags/revenge`, `/tags/magic`, `/tags/friendship`, etc.)
-     - All catalog movies (`/movie/:slug`)
-     - All catalog TV series (`/tv/:slug`)
-2. **Full Semantic HTML Injection in `#root`:**
-   - Rather than serving an empty `<div id="root"></div>`, every pre-rendered route injects:
-     - Breadcrumb navigation (`<nav aria-label="Breadcrumb">`)
-     - An `<h1>` heading with the exact title of the movie, series, tag, or catalog section.
-     - Synopsis / meta description paragraphs.
-     - Release year, genre pills, and internal links to related sections.
-     - Schema.org JSON-LD structured data.
-3. **Runtime SEO Middleware (`scripts/seoHtmlPlugin.ts`):**
-   - Powers local Vite development and SSR preview mode, dynamically injecting headers and semantic HTML on the fly.
-
-### E. Schema.org Structured Data Corrections (`src/utils/seo.ts`)
-1. **Removed Fabricated Rating Counts:**
-   - If `voteCount` is 0 or undefined, `aggregateRating` is completely omitted from the JSON-LD schema, adhering strictly to Google Search guidelines.
-   - If `voteCount > 0`, the actual TMDB `voteAverage` and `voteCount` are preserved.
-2. **Added TVEpisode Schema:**
-   - TV episode playback pages now output valid `TVEpisode` structured data with `partOfSeries`, `seasonNumber`, and `episodeNumber`.
-
-### F. Robots Directives & Crawl Budget Optimization (`public/robots.txt`)
-1. **Removed Blocking Disallow on Search:**
-   - Removed `Disallow: /search?*` so Googlebot can crawl and detect `<meta name="robots" content="noindex, nofollow">` on search pages.
-2. **Explicit Allow Directives:**
-   - Added `Allow: /tags/` and `Allow: /genre/`.
-3. **Disallowed Private Paths:**
-   - Disallowed `/api/`, `/admin`, `/library`, `/settings`, `/login`, `/register`.
-4. **Specified Canonical Sitemap Index:**
-   - `Sitemap: https://tstream.online/sitemap.xml`.
-
-### G. Nginx Configuration Hardening (`nginx.conf.example`)
-1. **Strict 301 Canonical Hostname Redirects:**
-   - Any request to `http://tstream.online`, `http://www.tstream.online`, or `https://www.tstream.online` is immediately redirected via `return 301 https://tstream.online$request_uri;`.
-2. **Static Pre-Render Serving:**
-   - `try_files $uri $uri/ $uri/index.html /index.html;` ensures that Nginx serves pre-rendered HTML files (e.g., `dist/tags/revenge/index.html` or `dist/movie/.../index.html`) directly without invoking Node.js.
-3. **Proxy Optimization & Caching:**
-   - Added `proxy_connect_timeout 5s;` and `proxy_read_timeout 60s;` for `/api/`.
-   - Prevented 5xx error masking by removing `error_page 500 502 503 504 /index.html;`.
+| Route Pattern | Status | Robots Directive | Canonical Target | Sitemap Included |
+|---|---|---|---|---|
+| `/` | `200` | `index, follow` | `https://tstream.online/` | `sitemap-main.xml` |
+| `/movies`, `/tv-shows`, `/trending`, `/top-rated`, `/collections`, `/tags` | `200` | `index, follow` | Self-referencing HTTPS non-www | `sitemap-main.xml` |
+| `/movies?page=2` (valid populated page) | `200` | `index, follow` | `https://tstream.online/movies?page=2` | Query pagination excluded from XML |
+| `/movies?page=0`, `?page=9999`, filter/sort params (`?genreId=28`, `?year=2024`, `?sortBy=...`) | `200` | `noindex, follow` | `https://tstream.online/movies` | No |
+| `/tags/:slug` (valid kebab-case tag with matches) | `200` | `index, follow` | `https://tstream.online/tags/:slug` | `sitemap-main.xml` (`12` tags) |
+| `/tag/:tag`, `/tags/time%20travel` (legacy/unnormalized) | `200` | `noindex, follow` | `https://tstream.online/tags/:kebab-slug` | No |
+| `/genre/:slug` (populated genre) | `200` | `index, follow` | `https://tstream.online/genre/:slug` | `sitemap-main.xml` (`15` genres) |
+| `/genre/:slug` (valid but 0 offline/TMDB matches, e.g. `/genre/western`) | `200` | `noindex, follow` | `https://tstream.online/genre/:slug` | No |
+| `/genre/sci-fi` (alias) | `200` | `noindex, follow` | `https://tstream.online/genre/science-fiction` | No |
+| `/platform/:id` (populated, e.g. `/platform/netflix`, `/platform/max`) | `200` | `index, follow` | `https://tstream.online/platform/:id` | `sitemap-main.xml` (`4` platforms) |
+| `/platform/hbo` (alias) or empty offline platform (`/platform/crunchyroll`) | `200` | `noindex, follow` | `https://tstream.online/platform/max` or self | No |
+| `/az/:letter` (populated letter) vs empty letter (`/az/Q`) | `200` | `index, follow` / `noindex, follow` | `https://tstream.online/az/:letter` | Populated only (`13` letters) |
+| `/movie/:slug` | `200` | `index, follow` | `https://tstream.online/movie/:slug` | `sitemap-movies.xml` (`29` movies) |
+| `/watch/movie/:slug` | `200` | `index, follow` | `https://tstream.online/movie/:slug` | Excluded (canonicalizes to `/movie/:slug`) |
+| `/tv/:slug` | `200` | `index, follow` | `https://tstream.online/tv/:slug` | `sitemap-tv.xml` (`7` series) |
+| `/watch/tv/:slug/:s/:e` (verified content-rich episode) | `200` | `index, follow` | `https://tstream.online/watch/tv/:slug/:s/:e` | `sitemap-episodes.xml` (`11` episodes) |
+| `/watch/tv/:slug/:s/:e` (thin/unverified within season bounds) | `200` | `noindex, follow` | `https://tstream.online/watch/tv/:slug/:s/:e` | Excluded |
+| `/search?q=...`, `/random`, `/people`, `/new-episodes` | `200` | `noindex` | Normalized self URL | Excluded |
+| Unknown movie/TV ID, out-of-bounds season/episode, invalid tag/genre/platform/path, missing static asset | `404` | `noindex, nofollow` (HTML) | `https://tstream.online/404` | Excluded |
+| Transient upstream TMDB 429 / 5xx / timeout without stale cache | `503` | `noindex, nofollow` | Requested path | Excluded |
 
 ---
 
-## 3. VPS Root Cause Diagnostics for the 571 5xx Errors
+## 4. Authoritative Route Inventory, Sitemap & Prerender Counts
 
-Because the remote production VPS logs cannot be queried directly from this build environment, execute the following step-by-step diagnostic workflow on your production server:
+### XML Sitemaps (`public/sitemap*.xml` & `dist/sitemap*.xml`)
+- **`sitemap.xml`** (index referencing 4 child sitemaps; zero `<lastmod>` tags)
+  - **`sitemap-main.xml`:** **52** valid URLs (`7` hubs incl. `/`, `12` canonical kebab-case tags, `15` populated genres, `4` populated platforms, `13` populated A-Z letters + `1` `/` root = 52)
+  - **`sitemap-movies.xml`:** **29** valid authoritative `/movie/:slug` URLs (including verified `/movie/spider-man-homecoming-315635`; zero `/watch/movie/`; zero corrupted `-28` Homecoming)
+  - **`sitemap-tv.xml`:** **7** valid `/tv/:slug` series URLs
+  - **`sitemap-episodes.xml`:** **11** verified content-rich TV episode URLs (`Breaking Bad` S1E1–E4, S2E1, S3E1, S4E1, S5E1; `The Last of Us` S1E1–E2; `Shogun` S1E1)
+- **Total Sitemap URLs:** **99** valid, canonical, indexable HTTPS non-www URLs.
 
-### Step 1: Inspect Nginx Error & Access Logs
-Run on your server:
-```bash
-# View recent 5xx errors from Nginx access logs
-awk '($9 ~ /^5/)' /var/log/nginx/access.log | tail -n 50
-
-# View detailed Nginx error logs (look for upstream connection refused, timeouts)
-tail -n 100 /var/log/nginx/error.log
-```
-*Common findings:*
-- `connect() failed (111: Connection refused) while connecting to upstream` -> Node.js/PM2 server crashed or was restarting.
-- `upstream timed out (110: Connection timed out)` -> Node.js backend hung on an external API request (TMDB or upstream streaming provider).
-
-### Step 2: Inspect PM2 Process Health & Error Logs
-```bash
-# Check PM2 process status, restart counts, and CPU/memory usage
-pm2 status
-
-# View the last 200 lines of application error logs
-pm2 logs --err --lines 200
-
-# Check if PM2 ran out of memory
-grep -i "out of memory" ~/.pm2/pm2.log
-```
-*Solution if PM2 is memory-limited:*
-Run the app with automatic restart memory thresholds:
-```bash
-pm2 start npm --name "tstream" --max-memory-restart 500M -- run start
-```
-
-### Step 3: Check TMDB API Rate Limits & Proxy Timeouts
-If the Node server was making on-demand calls to TMDB during bot crawls without caching, TMDB returns HTTP 429. Ensure your Node `/api/proxy` caches responses using an in-memory LRU or Redis cache, and returns a cached fallback rather than throwing a 500.
+### Static Prerendered Artifacts (`dist/prerender-report.json`)
+- **Attempted routes:** **142**
+- **Succeeded total:** **142** (**0** failed)
+  - **Indexable HTML (`index, follow`):** **128** (root, 6 indexable hubs, 12 tags, 15 populated genres, 4 populated platforms, 13 populated A-Z letters, 29 movie detail + 29 movie watch pages, 7 TV series, 11 verified episodes)
+  - **Non-indexable / Utility / Error HTML:** **14** (`dist/404.html`, `/new-episodes`, `/people`, `/random`, 6 offline-empty genres, 5 offline-empty platforms)
 
 ---
 
-## 4. Verification & Automated Test Results Summary
+## 5. Server 5xx Resilience, Environment & Deployment Hardening
 
-All tests executed cleanly with **100% pass rate**:
-- **Unit & Integration Tests:** 4/4 passed (`pagination.test.ts`)
-- **SEO & Metadata Tests:** 14/14 passed (`seo.test.ts`)
-- **Subtitle Parsing & Encoding Tests:** 6/6 passed (`subtitles.test.ts`)
-- **TypeScript Static Verification:** `tsc --noEmit` exited with 0 errors.
-- **Production Build:** `npm run build` generated sitemaps and 91 pre-rendered static HTML routes into `dist/`.
+- **Server Error Handling (`server.ts`, `src/server/app.ts`, `scripts/seoHtmlPlugin.ts`):**
+  - Unknown `/api/*` routes return JSON `404`, never SPA `200` HTML.
+  - Missing static assets return HTTP `404`, never SPA `200` HTML.
+  - SSR TMDB proxy calls deduplicate in-flight requests, cache positive responses with bounded LRU memory limits, fall back to stale cache when safe, and return explicit HTTP `503` (not silent `200` or unhandled `500`) on unrecoverable upstream TMDB `429`/5xx/timeouts.
+  - Per-client sliding-window rate limiting enforces `429` + `Retry-After` even on cached endpoints and ignores spoofed `X-Forwarded-For` unless `TRUST_PROXY=true`.
+- **Build Environment Loading (`scripts/loadEnv.mjs`, `scripts/run-build.mjs`):**
+  - Loads `.env` / shared release `.env` via `dotenv` without overwriting pre-existing CI environment variables and scans `dist/` (`assets/`, HTML, JSON reports, sitemaps) to ensure secrets (`TMDB_API_KEY`, `VITE_TMDB_API_KEY`) never leak into client artifacts.
+- **Nginx (`nginx.conf.example`):**
+  - Enforces HTTP -> HTTPS and `www.tstream.online` -> `tstream.online` 301 canonical redirects.
+  - Sets `proxy_intercept_errors off` so upstream Node `404` and `503` status codes are never masked as `200`.
+  - Routes query-string requests (`$is_args = "?"`) through `@seo_runtime` for dynamic pagination/filter `noindex`, serves query-less prerendered files cleanly via `try_files $uri $uri/index.html @seo_runtime`, and disables proxy buffering on `/api/(stream-proxy|stream-resolve|proxy|stream/|subtitle-proxy)` with `Range`/`If-Range` forwarding.
 
 ---
 
-## 5. Google Search Console Resubmission Checklist
+## 6. Environment Caveats, Limitations & Required VPS Checks
 
-Follow these exact steps in Google Search Console:
+### Sandbox Environment Notes (Transparent Audit Disclosure)
+1. **Node.js Version:** Project configuration (`.nvmrc`, `package.json`, `.github/workflows/deploy-tstream.yml`, `scripts/update-vps.sh`) consistently enforces **Node.js `>=24.12.0`**. This build container runs **Node.js `v22.23.2`**. In `src/services/__tests__/deploy.test.ts`, both an explicit `< 24.12.0` rejection test against the unmodified `scripts/update-vps.sh` gate AND a sandbox-only `node-24` preload wrapper execute cleanly without weakening production Node `>=24.12.0` checks. Before deploying to production, confirm the VPS and GitHub Actions runner execute on Node.js `>=24.12.0`.
+2. **Git History & Lockfile:** This AI Studio workspace does not contain a `.git` directory or `package-lock.json`. Therefore, `npm ci`, `git diff`, branch creation, and commit pushing must be performed in the checked-out Git repository containing `package-lock.json`.
+3. **Offline Build vs Production `TMDB_API_KEY`:** In this offline sandbox without a live `TMDB_API_KEY` or external internet egress, route inventory for genres and platforms reflects curated local catalog coverage; when built with a valid `TMDB_API_KEY` in CI/VPS `.env`, live TMDB genre/platform/episode responses populate dynamically via SSR and prerendering.
 
-1. **Deploy the Codebase to VPS:**
+### Remaining Live VPS & Google Search Console Verification Checklist
+Local tests **cannot** prove live production VPS logs or Google Search Console index status. After authorized deployment on Node.js `>=24.12.0`, verify directly on the VPS:
+1. **Diff Live Nginx Config:** Inspect `/etc/nginx/sites-enabled/*tstream*` against `nginx.conf.example` (do not blindly overwrite unrelated virtual hosts), verify `proxy_intercept_errors off`, absence of `error_page 404 /index.html`, and 301 HTTP/WWW redirects.
+2. **Inspect Historical 5xx Logs:** Query `/var/log/nginx/error.log`, `awk '($9 ~ /^5/)' /var/log/nginx/access.log`, and `pm2 logs --err` to confirm no residual OOM crashes, upstream socket timeouts, or TMDB 429 bursts occur under live Googlebot crawl load.
+3. **Run Verifier Against Live Production Domain:**
    ```bash
-   git pull origin main
-   npm install
-   npm run build
-   pm2 reload tstream || pm2 restart tstream
-   sudo nginx -t && sudo systemctl reload nginx
+   npx --no-install tsx scripts/verify-production.ts --base-url=https://tstream.online
    ```
-2. **Inspect & Validate Core URLs using GSC URL Inspection Tool:**
-   - Test `https://tstream.online/` -> Check "Test Live URL" -> Verify Canonical: `https://tstream.online/`.
-   - Test `https://tstream.online/tags/revenge` -> Check Live URL -> Verify HTML contains `<h1>Movies & Shows Tagged #revenge</h1>`.
-   - Test `https://tstream.online/tags/magic` -> Check Live URL.
-   - Test `https://tstream.online/tags/friendship` -> Check Live URL.
-   - Test `https://tstream.online/movie/the-amazing-spider-man-2-102382` -> Verify Canonical points to `/movie/...`.
-3. **Validate Fixes in Google Search Console:**
-   - Under **Page Indexing**, open **Page with redirect** -> Click **Validate Fix**.
-   - Open **Duplicate, Google chose different canonical than user** -> Click **Validate Fix**.
-   - Open **Duplicate without user-selected canonical** -> Click **Validate Fix**.
-   - Open **Server error (5xx)** -> Click **Validate Fix**.
-4. **Resubmit Sitemaps:**
-   - In GSC Sitemaps menu, resubmit `https://tstream.online/sitemap.xml`.
+   (Specifically validates live `http://tstream.online/` and `https://www.tstream.online/` 301 redirects, TLS, headers, and sitemap crawlability.)
+4. **Google Search Console URL Inspection & Sitemap Resubmission:**
+   - Inspect live URLs (`/`, `/tags/revenge`, `/tags/time-travel`, `/tags/based-on-novel-or-book`, `/genre/action`, `/genre/science-fiction`, `/movie/spider-man-homecoming-315635`, `/watch/tv/breaking-bad-1396/1/1`).
+   - Resubmit `https://tstream.online/sitemap.xml` and request validation on *Page with redirect*, *Duplicate, Google chose different canonical than user*, and *Server error (5xx)*.

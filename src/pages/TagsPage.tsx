@@ -13,6 +13,7 @@ import { MediaCard } from '../components/MediaCard';
 import { Pagination } from '../components/Pagination';
 import { fetchByTag } from '../services/tmdb';
 import { updateSEO } from '../utils/seo';
+import { tagToSlug, slugToTag, isValidTagSlug } from '../utils/tags';
 
 interface TagsPageProps {
   onSelectMedia: (item: MediaItem) => void;
@@ -26,8 +27,12 @@ export const TagsPage: React.FC<TagsPageProps> = ({
   initialTag
 }) => {
   const [searchTag, setSearchTag] = useState('');
-  const [activeTag, setActiveTag] = useState<string | null>(initialTag ? initialTag.replace(/^#/, '').toLowerCase() : null);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [activeTag, setActiveTag] = useState<string | null>(initialTag ? tagToSlug(initialTag) : null);
+  const [currentPage, setCurrentPage] = useState(() => {
+    if (typeof window === 'undefined') return 1;
+    const p = parseInt(new URLSearchParams(window.location.search).get('page') || '1', 10);
+    return !isNaN(p) && p >= 1 ? p : 1;
+  });
   const [tagData, setTagData] = useState<PaginatedResponse<MediaItem>>({
     page: 1,
     totalPages: 1,
@@ -36,17 +41,20 @@ export const TagsPage: React.FC<TagsPageProps> = ({
   });
   const [loading, setLoading] = useState(false);
 
+  const activeSlug = activeTag ? tagToSlug(activeTag) : '';
+  const displayTag = activeSlug ? slugToTag(activeSlug) : '';
+
   // Sync prop changes
   useEffect(() => {
     if (initialTag !== undefined) {
-      setActiveTag(initialTag ? initialTag.replace(/^#/, '').toLowerCase() : null);
+      setActiveTag(initialTag ? tagToSlug(initialTag) : null);
     }
   }, [initialTag]);
 
-  // Fetch real matching items from TMDB whenever activeTag or currentPage changes
+  // Fetch real matching items from TMDB whenever activeSlug or currentPage changes
   useEffect(() => {
     let isMounted = true;
-    if (!activeTag) {
+    if (!activeSlug || !displayTag) {
       setTagData({ page: 1, totalPages: 1, totalResults: 0, results: [] });
       updateSEO({
         title: 'Explore Movies & TV Series by Tag & Theme',
@@ -57,34 +65,34 @@ export const TagsPage: React.FC<TagsPageProps> = ({
       return;
     }
 
-    const cleanTag = activeTag.replace(/^#/, '').trim().toLowerCase();
-
-    // Ensure browser URL is clean /tags/:tag
-    const expectedUrl = `/tags/${encodeURIComponent(cleanTag)}`;
-    if (window.location.pathname !== expectedUrl) {
+    // Ensure browser URL is clean canonical kebab-case /tags/:slug (preserving ?page=N when > 1)
+    const expectedUrl = currentPage > 1 ? `/tags/${activeSlug}?page=${currentPage}` : `/tags/${activeSlug}`;
+    const currentFull = `${window.location.pathname}${window.location.search}`;
+    if (currentFull !== expectedUrl) {
       window.history.replaceState({}, '', expectedUrl);
     }
 
     async function loadTagResults() {
       setLoading(true);
       try {
-        const res = await fetchByTag(cleanTag, currentPage);
+        const res = await fetchByTag(displayTag, currentPage);
         if (isMounted) {
           setTagData(res);
           setLoading(false);
 
+          const pageSuffix = currentPage > 1 ? ` — Page ${currentPage}` : '';
           // Update SEO based on whether tag has meaningful content
           if (res.results.length === 0) {
             updateSEO({
-              title: `Movies Tagged #${cleanTag}`,
-              description: `No movies currently found tagged with #${cleanTag} on T Stream.`,
-              url: expectedUrl,
+              title: `Movies Tagged #${displayTag}`,
+              description: `No movies currently found tagged with #${displayTag} on T Stream.`,
+              url: `/tags/${activeSlug}`,
               noindex: true // Prevent thin/empty tag indexing in Google
             });
           } else {
             updateSEO({
-              title: `Movies & TV Shows Tagged #${cleanTag} — Watch Online Free`,
-              description: `Discover top rated and popular movies and TV series tagged with #${cleanTag}. Stream free in 4K and 1080p HD with subtitles on T Stream.`,
+              title: `Movies & TV Shows Tagged #${displayTag} — Watch Online Free${pageSuffix}`,
+              description: `Discover top rated and popular movies and TV series tagged with #${displayTag}. Stream free in 4K and 1080p HD with subtitles on T Stream.`,
               url: expectedUrl,
               noindex: false
             });
@@ -94,9 +102,9 @@ export const TagsPage: React.FC<TagsPageProps> = ({
         if (isMounted) {
           setLoading(false);
           updateSEO({
-            title: `Movies Tagged #${cleanTag}`,
-            description: `Browse titles tagged #${cleanTag} on T Stream.`,
-            url: expectedUrl,
+            title: `Movies Tagged #${displayTag}`,
+            description: `Browse titles tagged #${displayTag} on T Stream.`,
+            url: `/tags/${activeSlug}`,
             noindex: true
           });
         }
@@ -105,24 +113,26 @@ export const TagsPage: React.FC<TagsPageProps> = ({
 
     loadTagResults();
     return () => { isMounted = false; };
-  }, [activeTag, currentPage]);
+  }, [activeSlug, displayTag, currentPage]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (searchTag.trim()) {
-      const clean = searchTag.trim().replace(/^#/, '').toLowerCase();
-      setActiveTag(clean);
+    if (searchTag.trim() && isValidTagSlug(searchTag.trim())) {
+      const slug = tagToSlug(searchTag.trim());
+      if (!slug) return;
+      setActiveTag(slug);
       setCurrentPage(1);
-      window.history.pushState({}, '', `/tags/${encodeURIComponent(clean)}`);
+      window.history.pushState({}, '', `/tags/${slug}`);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
   const handleTagClick = (tag: string) => {
-    const clean = tag.replace(/^#/, '').toLowerCase();
-    setActiveTag(clean);
+    const slug = tagToSlug(tag);
+    if (!slug) return;
+    setActiveTag(slug);
     setCurrentPage(1);
-    window.history.pushState({}, '', `/tags/${encodeURIComponent(clean)}`);
+    window.history.pushState({}, '', `/tags/${slug}`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -136,11 +146,11 @@ export const TagsPage: React.FC<TagsPageProps> = ({
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-          {activeTag ? `Movies & Shows Tagged #${activeTag}` : 'Explore Tags'}
+          {displayTag ? `Movies & Shows Tagged #${displayTag}` : 'Explore Tags'}
         </h1>
         <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-xl">
-          {activeTag
-            ? `Browse movies and television series matching the #${activeTag} theme on T Stream.`
+          {displayTag
+            ? `Browse movies and television series matching the #${displayTag} theme on T Stream.`
             : 'Browse movie keywords, story themes and motifs. Each tag has its own page with matching films.'}
         </p>
       </div>
@@ -166,18 +176,18 @@ export const TagsPage: React.FC<TagsPageProps> = ({
       </form>
 
       {/* Active Tag Results View if a tag is selected */}
-      {activeTag ? (
+      {displayTag ? (
         <div className="mb-12">
           <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/5">
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-2xl font-black text-white">#{activeTag}</span>
+                <span className="text-2xl font-black text-white">#{displayTag}</span>
                 <span className="text-xs font-semibold px-2 py-0.5 rounded bg-[#303035] text-[#F5C400] border border-[#F5C400]/40 font-bold">
                   {tagData.totalResults} matching movies
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Showing live TMDB catalog entries tagged with #{activeTag}
+                Showing live TMDB catalog entries tagged with #{displayTag}
               </p>
             </div>
 
@@ -197,11 +207,11 @@ export const TagsPage: React.FC<TagsPageProps> = ({
           {loading ? (
             <div className="p-12 text-center flex flex-col items-center justify-center">
               <div className="w-8 h-8 border-3 border-[#F5C400] border-t-transparent rounded-full animate-spin mb-3" />
-              <p className="text-xs text-[#A6A6AC]">Fetching movies tagged #{activeTag} from TMDB...</p>
+              <p className="text-xs text-[#A6A6AC]">Fetching movies tagged #{displayTag} from TMDB...</p>
             </div>
           ) : tagData.results.length === 0 ? (
             <div className="p-8 text-center bg-[#141418] rounded-xl border border-white/5 text-slate-400 text-xs">
-              No titles currently indexed with #{activeTag}. Try picking another tag below.
+              No titles currently indexed with #{displayTag}. Try picking another tag below.
             </div>
           ) : (
             <>
@@ -262,7 +272,7 @@ export const TagsPage: React.FC<TagsPageProps> = ({
               key={tag.id}
               onClick={() => handleTagClick(tag.name)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border cursor-pointer ${
-                activeTag === tag.name
+                activeSlug === tagToSlug(tag.name)
                   ? 'bg-[#F5C400] text-black border-[#F5C400] shadow-md font-bold'
                   : 'bg-[#29292D] text-[#A6A6AC] hover:text-white border-[#3A3A40]'
               }`}

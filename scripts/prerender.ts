@@ -1,15 +1,13 @@
 /**
  * Production Build-Time Pre-rendering & Validation Engine for TStream.online
  *
- * Runs after `vite build` to pre-render full-content HTML files into `dist/`
- * for every public route (movies, series, watch routes, TV episodes, tags, hubs).
- *
+ * Uses authoritative routeInventory.ts shared cleanly with generate-sitemaps.ts and verify-production.ts.
  * Enforces strict build validation:
  * - Terminates immediately with non-zero exit if `dist/index.html` is missing or empty.
  * - Rejects HTTP 404 or 503 results from being written/counted as successful routes.
  * - Validates file existence, single exact canonical URL, <title>, <h1>, semantic body,
  *   robots indexability parity, and referenced local `/assets/*` existence.
- * - Writes structured validation output to `dist/prerender-report.json`.
+ * - Reports separate indexableSucceeded & noindexSucceeded counts in `dist/prerender-report.json`.
  */
 
 import fs from 'fs';
@@ -18,25 +16,21 @@ import { loadBuildEnv } from './loadEnv.mjs';
 import {
   renderSeoResult,
   render404Html,
-  getMatchingCatalogForTag,
-  getMatchingCatalogForLetter,
-  getAllCatalogMedia,
   type RenderSeoOptions
 } from './seoHtmlPlugin.ts';
+import {
+  getHubInventory,
+  getTagInventory,
+  getGenreInventory,
+  getPlatformInventory,
+  getAzInventory,
+  getMovieInventory,
+  getTvInventory,
+  getVerifiedEpisodeInventory
+} from './routeInventory.ts';
+import { PRIMARY_ORIGIN } from '../src/utils/seo.ts';
 
 loadBuildEnv();
-import {
-  DETAILED_MOVIES,
-  DETAILED_TV_SHOWS,
-  POPULAR_TAGS,
-  SPIDERMAN_COLLECTION,
-  AVENGERS_COLLECTION,
-  HARRY_POTTER_COLLECTION,
-  PIRATES_COLLECTION
-} from '../src/services/catalogData.ts';
-import { PLATFORM_CONFIGS } from '../src/services/platformConfig.ts';
-import { createMediaSlug } from '../src/utils/slug.ts';
-import { PRIMARY_ORIGIN } from '../src/utils/seo.ts';
 
 const DEFAULT_DIST_DIR = path.resolve(process.cwd(), 'dist');
 
@@ -57,6 +51,8 @@ export interface PrerenderReport {
   generatedAt: string;
   attempted: number;
   succeeded: number;
+  indexableSucceeded: number;
+  noindexSucceeded: number;
   failed: number;
   routes: PrerenderValidationResult[];
 }
@@ -322,136 +318,106 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
   await processRoute('/', distIndex, undefined, `${PRIMARY_ORIGIN}/`, false);
 
   // 3. Main Public Hub & Landing Pages
-  const landingPages = [
-    { url: '/movies', file: 'movies/index.html', can: `${PRIMARY_ORIGIN}/movies`, noindex: false },
-    { url: '/tv-shows', file: 'tv-shows/index.html', can: `${PRIMARY_ORIGIN}/tv-shows`, noindex: false },
-    { url: '/trending', file: 'trending/index.html', can: `${PRIMARY_ORIGIN}/trending`, noindex: false },
-    { url: '/top-rated', file: 'top-rated/index.html', can: `${PRIMARY_ORIGIN}/top-rated`, noindex: false },
-    { url: '/collections', file: 'collections/index.html', can: `${PRIMARY_ORIGIN}/collections`, noindex: false },
-    { url: '/new-episodes', file: 'new-episodes/index.html', can: `${PRIMARY_ORIGIN}/new-episodes`, noindex: true },
-    { url: '/people', file: 'people/index.html', can: `${PRIMARY_ORIGIN}/people`, noindex: true },
-    { url: '/random', file: 'random/index.html', can: `${PRIMARY_ORIGIN}/random`, noindex: true },
-    { url: '/tags', file: 'tags/index.html', can: `${PRIMARY_ORIGIN}/tags`, noindex: false }
-  ];
-
-  for (const p of landingPages) {
+  for (const p of getHubInventory()) {
     await processRoute(p.url, path.join(distDir, p.file), undefined, p.can, p.noindex);
   }
 
-  // 4. Valuable Tag Landing Pages (only prerender tags that have matching catalog items)
-  for (const tag of POPULAR_TAGS) {
-    if (tag.name) {
-      const clean = tag.name.toLowerCase().trim();
-      const matches = getMatchingCatalogForTag(clean);
-      if (matches.length > 0) {
-        const slug = clean.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-        const tagUrl = `/tags/${encodeURIComponent(clean)}`;
-        const tagCan = `${PRIMARY_ORIGIN}/tags/${encodeURIComponent(clean)}`;
-        await processRoute(tagUrl, path.join(distDir, `tags/${slug}/index.html`), undefined, tagCan, false);
-      }
-    }
-  }
-
-  // 5. OTT Platform Hubs (indexable only when genuine matching content exists)
-  for (const plat of PLATFORM_CONFIGS) {
-    const platRes = await renderSeoResult(template, `/platform/${plat.id}`);
+  // 4. Valuable Tag Landing Pages (strictly kebab-case slugs shared with routeInventory)
+  for (const tagEntry of getTagInventory()) {
     await processRoute(
-      `/platform/${plat.id}`,
-      path.join(distDir, `platform/${plat.id}/index.html`),
+      tagEntry.urlPath,
+      path.join(distDir, tagEntry.outputFileRel),
       undefined,
-      `${PRIMARY_ORIGIN}/platform/${plat.id}`,
-      platRes.isNoindex
+      tagEntry.canonicalUrl,
+      false
     );
   }
 
-  // 6. A-Z Directory (only prerender letters with matching catalog entries)
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  for (const letter of alphabet) {
-    if (getMatchingCatalogForLetter(letter).length > 0) {
-      await processRoute(`/az/${letter}`, path.join(distDir, `az/${letter}/index.html`), undefined, `${PRIMARY_ORIGIN}/az/${letter}`, false);
-    }
+  // 5. Real Genre Landing Pages (indexable when populated; noindex when empty)
+  for (const genreEntry of await getGenreInventory()) {
+    await processRoute(
+      genreEntry.urlPath,
+      path.join(distDir, genreEntry.outputFileRel),
+      undefined,
+      genreEntry.canonicalUrl,
+      !genreEntry.indexable
+    );
   }
 
-  // 7. All Movies (Detail Pages + Watch Pages)
-  const movieMap = new Map<number, any>();
-  for (const m of DETAILED_MOVIES) {
-    if (m.id && m.title) movieMap.set(m.id, m);
-  }
-  const collections = [SPIDERMAN_COLLECTION, AVENGERS_COLLECTION, HARRY_POTTER_COLLECTION, PIRATES_COLLECTION];
-  for (const col of collections) {
-    for (const part of col.parts) {
-      const id = part.id || (part as any).tmdbId;
-      if (id && part.title && !movieMap.has(id)) {
-        movieMap.set(id, part);
-      }
-    }
-  }
-  for (const item of getAllCatalogMedia()) {
-    if (item.mediaType !== 'tv' && item.id && item.title && !movieMap.has(item.id)) {
-      movieMap.set(item.id, item);
-    }
+  // 6. OTT Platform Hubs (indexable only when genuine matching content exists)
+  for (const platEntry of await getPlatformInventory()) {
+    await processRoute(
+      platEntry.urlPath,
+      path.join(distDir, platEntry.outputFileRel),
+      undefined,
+      platEntry.canonicalUrl,
+      !platEntry.indexable
+    );
   }
 
-  for (const movie of movieMap.values()) {
-    const slug = createMediaSlug(movie.title, movie.id);
-    const movieCanonical = `${PRIMARY_ORIGIN}/movie/${slug}`;
-
-    // 7A: Authoritative Movie Detail Page
-    const detailUrl = `/movie/${slug}`;
-    const detailFile = path.join(distDir, `movie/${slug}/index.html`);
-    await processRoute(detailUrl, detailFile, movie, movieCanonical, false);
-
-    // 7B: Movie Playback / Watch Page (Canonical MUST point to /movie/:slug)
-    const watchUrl = `/watch/movie/${slug}`;
-    const watchFile = path.join(distDir, `watch/movie/${slug}/index.html`);
-    await processRoute(watchUrl, watchFile, movie, movieCanonical, false);
+  // 7. A-Z Directory (letters with matching catalog entries)
+  for (const azEntry of getAzInventory()) {
+    await processRoute(
+      azEntry.urlPath,
+      path.join(distDir, azEntry.outputFileRel),
+      undefined,
+      azEntry.canonicalUrl,
+      false
+    );
   }
 
-  // 8. All TV Series (Detail Pages + Episode Watch Pages for Detailed Episodes)
-  const tvMap = new Map<number, any>();
-  for (const s of DETAILED_TV_SHOWS) {
-    if (s.id && ((s as any).name || s.title)) tvMap.set(s.id, s);
+  // 8. All Movies (Authoritative Detail Pages + Playback Watch Pages canonicalizing to /movie/:slug)
+  for (const movieEntry of getMovieInventory()) {
+    await processRoute(
+      movieEntry.detailPath,
+      path.join(distDir, `movie/${movieEntry.slug}/index.html`),
+      movieEntry.media,
+      movieEntry.canonicalUrl,
+      false
+    );
+
+    await processRoute(
+      movieEntry.watchPath,
+      path.join(distDir, `watch/movie/${movieEntry.slug}/index.html`),
+      movieEntry.media,
+      movieEntry.canonicalUrl,
+      false
+    );
   }
-  for (const item of getAllCatalogMedia()) {
-    if (item.mediaType === 'tv' && item.id && !tvMap.has(item.id)) {
-      tvMap.set(item.id, item);
-    }
+
+  // 9. All TV Series (Detail Pages) + Verified Content-Rich Episode Watch Pages
+  for (const tvEntry of getTvInventory()) {
+    await processRoute(
+      tvEntry.detailPath,
+      path.join(distDir, `tv/${tvEntry.slug}/index.html`),
+      tvEntry.media,
+      tvEntry.canonicalUrl,
+      false
+    );
   }
 
-  for (const show of tvMap.values()) {
-    const title = show.name || show.title;
-    const slug = createMediaSlug(title, show.id);
-    const tvCanonical = `${PRIMARY_ORIGIN}/tv/${slug}`;
-
-    // 8A: TV Series Detail Page
-    const tvUrl = `/tv/${slug}`;
-    const tvFile = path.join(distDir, `tv/${slug}/index.html`);
-    await processRoute(tvUrl, tvFile, show, tvCanonical, false);
-
-    // 8B: TV Episode Watch Pages for genuine detailed episodes
-    if (Array.isArray(show.seasons)) {
-      for (const season of show.seasons) {
-        if (season && season.seasonNumber && Array.isArray(season.episodes)) {
-          for (const ep of season.episodes) {
-            if (ep && ep.episodeNumber) {
-              const epUrl = `/watch/tv/${slug}/${season.seasonNumber}/${ep.episodeNumber}`;
-              const epFile = path.join(distDir, `watch/tv/${slug}/${season.seasonNumber}/${ep.episodeNumber}/index.html`);
-              const epCanonical = `${PRIMARY_ORIGIN}/watch/tv/${slug}/${season.seasonNumber}/${ep.episodeNumber}`;
-              await processRoute(epUrl, epFile, show, epCanonical, false);
-            }
-          }
-        }
-      }
-    }
+  for (const epEntry of getVerifiedEpisodeInventory()) {
+    await processRoute(
+      epEntry.urlPath,
+      path.join(distDir, epEntry.outputFileRel),
+      epEntry.show,
+      epEntry.canonicalUrl,
+      false
+    );
   }
 
   const succeededList = routeResults.filter(r => r.success);
   const failedList = routeResults.filter(r => !r.success);
+  const indexableSucceeded = succeededList.filter(r => r.indexable === true).length;
+  const noindexSucceeded = succeededList.filter(r => r.indexable === false).length;
+
   const report: PrerenderReport = {
     outputDirectory: distDir,
     generatedAt: new Date().toISOString(),
     attempted: routeResults.length,
     succeeded: succeededList.length,
+    indexableSucceeded,
+    noindexSucceeded,
     failed: failedList.length,
     routes: routeResults
   };
@@ -460,11 +426,13 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
 
   console.log(`--------------------------------------------------`);
   console.log(`[Prerender Summary]`);
-  console.log(`- Attempted routes:  ${report.attempted}`);
-  console.log(`- Succeeded routes:  ${report.succeeded}`);
-  console.log(`- Failed routes:     ${report.failed}`);
-  console.log(`- Output directory:  ${distDir}`);
-  console.log(`- Report written:    ${path.join(distDir, 'prerender-report.json')}`);
+  console.log(`- Attempted routes:   ${report.attempted}`);
+  console.log(`- Succeeded total:    ${report.succeeded}`);
+  console.log(`  - Indexable HTML:   ${report.indexableSucceeded}`);
+  console.log(`  - Noindex/404 HTML: ${report.noindexSucceeded}`);
+  console.log(`- Failed routes:      ${report.failed}`);
+  console.log(`- Output directory:   ${distDir}`);
+  console.log(`- Report written:     ${path.join(distDir, 'prerender-report.json')}`);
   console.log(`--------------------------------------------------`);
 
   if (failedList.length > 0) {

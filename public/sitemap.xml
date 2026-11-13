@@ -9,4 +9,7 @@
   <sitemap>
     <loc>https://tstream.online/sitemap-tv.xml</loc>
   </sitemap>
+  <sitemap>
+    <loc>https://tstream.online/sitemap-episodes.xml</loc>
+  </sitemap>
 </sitemapindex>

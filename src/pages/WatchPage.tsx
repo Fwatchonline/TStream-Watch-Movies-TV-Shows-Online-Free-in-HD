@@ -104,7 +104,22 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       if (isMounted) {
         setDetail(data);
         if (data) {
-          updateMediaSEO(data, { season: currentSeason, episode: currentEpisode, isWatching: true });
+          const initSeasonEps =
+            data.mediaType === 'tv'
+              ? (data as TVDetail).seasons?.find(s => s.seasonNumber === currentSeason)?.episodes || []
+              : [];
+          const initEp = initSeasonEps.find(e => e.episodeNumber === currentEpisode);
+          updateMediaSEO(data, {
+            season: currentSeason,
+            episode: currentEpisode,
+            episodeName: initEp?.name,
+            episodeOverview: initEp?.overview,
+            episodeAirDate: initEp?.airDate,
+            episodeVoteAverage: initEp?.voteAverage,
+            episodeVoteCount: (initEp as any)?.voteCount,
+            isVerifiedEpisode: Boolean(initEp),
+            isWatching: true
+          });
           setInWatchlist(isInWatchlist(data.id));
           const slug = createMediaSlug(data.title || (data as any).name, data.id);
           if (data.mediaType === 'movie') {
@@ -164,6 +179,9 @@ export const WatchPage: React.FC<WatchPageProps> = ({
         episodeName: activeEp?.name,
         episodeOverview: activeEp?.overview,
         episodeAirDate: activeEp?.airDate,
+        episodeVoteAverage: activeEp?.voteAverage,
+        episodeVoteCount: (activeEp as any)?.voteCount,
+        isVerifiedEpisode: Boolean(activeEp),
         isWatching: true
       });
     }

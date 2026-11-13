@@ -59,7 +59,8 @@ export function verifyNoLeakedSecretsInDist(rootDir = process.cwd(), secretValue
     'sitemap.xml',
     'sitemap-main.xml',
     'sitemap-movies.xml',
-    'sitemap-tv.xml'
+    'sitemap-tv.xml',
+    'sitemap-episodes.xml'
   ]) {
     const full = path.join(distDir, rel);
     if (fs.existsSync(full) && fs.statSync(full).isFile()) {
@@ -95,6 +96,14 @@ export function verifyDistArtifacts(rootDir = process.cwd()) {
     'sitemap-tv.xml',
     'prerender-report.json'
   ];
+
+  const sitemapIndexPath = path.join(distDir, 'sitemap.xml');
+  if (fs.existsSync(sitemapIndexPath)) {
+    const sitemapIndexXml = fs.readFileSync(sitemapIndexPath, 'utf8');
+    if (sitemapIndexXml.includes('sitemap-episodes.xml')) {
+      requiredFiles.push('sitemap-episodes.xml');
+    }
+  }
 
   for (const rel of requiredFiles) {
     const filePath = path.join(distDir, rel);

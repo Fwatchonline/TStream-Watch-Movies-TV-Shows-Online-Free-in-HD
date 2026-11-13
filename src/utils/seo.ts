@@ -4,6 +4,8 @@
  */
 
 import { createMediaSlug } from './slug.ts';
+import { tagToSlug } from './tags.ts';
+import { slugToGenre } from './genres.ts';
 import { PLATFORM_ALIASES } from '../services/platformConfig.ts';
 
 export interface SEOConfig {
@@ -76,6 +78,7 @@ const PAGINATED_INDEXABLE_PREFIXES = [
   '/trending',
   '/top-rated',
   '/tags/',
+  '/genre/',
   '/platform/'
 ];
 
@@ -254,6 +257,48 @@ export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy 
       }
     }
 
+    // Canonicalize legacy /tag/* and non-kebab /tags/* paths (e.g. /tags/time%20travel -> /tags/time-travel)
+    let isLegacyTagAlias = false;
+    if (rawPath.startsWith('/tag/') || rawPath.startsWith('/tags/')) {
+      const isSingularPrefix = rawPath.startsWith('/tag/');
+      const prefix = isSingularPrefix ? '/tag/' : '/tags/';
+      const rest = rawPath.slice(prefix.length);
+      if (rest && !rest.includes('/')) {
+        const canonicalSlug = tagToSlug(rest);
+        if (canonicalSlug) {
+          const targetPath = `/tags/${canonicalSlug}`;
+          if (isSingularPrefix || rawPath !== targetPath) {
+            isLegacyTagAlias = true;
+          }
+          rawPath = targetPath;
+        }
+      }
+    }
+
+    // Canonicalize genre slug aliases (e.g. /genre/sci-fi -> /genre/science-fiction)
+    let isGenreAlias = false;
+    if (rawPath.startsWith('/genre/')) {
+      const rest = rawPath.slice('/genre/'.length);
+      if (rest && !rest.includes('/')) {
+        const genre = slugToGenre(rest);
+        if (genre) {
+          const targetPath = `/genre/${genre.slug}`;
+          if (rawPath !== targetPath) {
+            isGenreAlias = true;
+          }
+          rawPath = targetPath;
+        }
+      }
+    }
+
+    // Watch movie canonical points to /movie/:slug
+    if (rawPath.startsWith('/watch/movie/')) {
+      const rest = rawPath.slice('/watch/movie/'.length);
+      if (rest && !rest.includes('/')) {
+        rawPath = `/movie/${rest}`;
+      }
+    }
+
     const params = new URLSearchParams(rawSearch);
     // Strip tracking/session parameters
     for (const key of Array.from(params.keys())) {
@@ -273,11 +318,15 @@ export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy 
       };
     }
 
-    if (isPlatformAlias) {
+    if (isPlatformAlias || isLegacyTagAlias || isGenreAlias) {
       return {
         canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
         noindex: true,
-        reason: 'platform_alias',
+        reason: isPlatformAlias
+          ? 'platform_alias'
+          : isLegacyTagAlias
+          ? 'tag_alias'
+          : 'genre_alias',
         page: 1
       };
     }
@@ -378,6 +427,24 @@ export interface MediaMetadataResult {
 }
 
 /**
+ * Determines whether a TV episode watch route has genuine, unique episode metadata
+ * worthy of search indexing (never copies show overview or fabricated titles).
+ */
+export function isEpisodeSeoIndexable(options: {
+  episodeName?: string;
+  episodeOverview?: string;
+  seriesOverview?: string;
+  isVerifiedEpisode?: boolean;
+}): boolean {
+  if (options.isVerifiedEpisode === false) return false;
+  const epOverview = (options.episodeOverview || '').trim();
+  const showOverview = (options.seriesOverview || '').trim();
+  if (!epOverview || epOverview.length < 15) return false;
+  if (showOverview && epOverview.toLowerCase() === showOverview.toLowerCase()) return false;
+  return true;
+}
+
+/**
  * Pure generator for Media SEO metadata shared between client & server.
  * Guarantees 100% identical titles, descriptions, keywords, canonical URLs, and structured data.
  */
@@ -389,6 +456,8 @@ export function buildMediaMetadata(
     episodeName?: string;
     episodeOverview?: string;
     episodeAirDate?: string;
+    episodeVoteAverage?: number;
+    episodeVoteCount?: number;
     isWatching?: boolean;
   } = {}
 ): MediaMetadataResult {
@@ -421,17 +490,24 @@ export function buildMediaMetadata(
     }
   }
 
+  const trimmedEpOverview = (options.episodeOverview || '').trim();
+  const trimmedShowOverview = (media?.overview || '').trim();
+  const hasUniqueEpisodeOverview = Boolean(
+    trimmedEpOverview &&
+      (!trimmedShowOverview || trimmedEpOverview.toLowerCase() !== trimmedShowOverview.toLowerCase())
+  );
+
   let description = '';
-  if (isDistinctEpisode && options.episodeOverview && options.episodeOverview.trim()) {
-    description = truncateAtWord(options.episodeOverview, 160);
-  } else if (media?.overview && media.overview.trim()) {
-    description = truncateAtWord(media.overview, 160);
-  } else {
-    if (isDistinctEpisode) {
-      description = `Watch ${rawTitle} Season ${options.season} Episode ${options.episode} online in HD with subtitles on T Stream.`;
+  if (isDistinctEpisode) {
+    if (hasUniqueEpisodeOverview) {
+      description = truncateAtWord(trimmedEpOverview, 160);
     } else {
-      description = `Stream ${rawTitle}${yearStr} in Full HD 1080p and 4K on T Stream with multi-language subtitles and fast streaming servers.`;
+      description = `Watch ${rawTitle} Season ${options.season} Episode ${options.episode} online in HD with subtitles on T Stream.`;
     }
+  } else if (trimmedShowOverview) {
+    description = truncateAtWord(trimmedShowOverview, 160);
+  } else {
+    description = `Stream ${rawTitle}${yearStr} in Full HD 1080p and 4K on T Stream with multi-language subtitles and fast streaming servers.`;
   }
 
   const keywords = generateMediaKeywords(media, options);
@@ -452,17 +528,16 @@ export function buildMediaMetadata(
   const isDefaultOgImage = image === DEFAULT_IMAGE || image.endsWith('/og-image.png');
   const mimeType = getImageMimeType(image);
 
-  // Schema.org JSON-LD (Strictly authentic data - NEVER fabricate ratings or review counts)
+  // Schema.org JSON-LD (Strictly authentic data - NEVER inherit series ratings onto TVEpisode!)
+  const effectiveVoteAverage = isDistinctEpisode ? Number(options.episodeVoteAverage || 0) : Number(media?.voteAverage || 0);
+  const effectiveVoteCount = isDistinctEpisode ? Number(options.episodeVoteCount || 0) : Number(media?.voteCount || 0);
   const hasGenuineRating = Boolean(
-    media?.voteAverage &&
-      media.voteAverage > 0 &&
-      media?.voteCount &&
-      media.voteCount > 0
+    effectiveVoteAverage > 0 && effectiveVoteCount > 0
   );
 
   const schemaType = isMovie ? 'Movie' : isDistinctEpisode ? 'TVEpisode' : 'TVSeries';
-  const datePublished = isDistinctEpisode && options.episodeAirDate
-    ? options.episodeAirDate
+  const datePublished = isDistinctEpisode
+    ? options.episodeAirDate || undefined
     : year && !isNaN(Number(year))
     ? String(year)
     : undefined;
@@ -479,10 +554,10 @@ export function buildMediaMetadata(
       ? {
           'aggregateRating': {
             '@type': 'AggregateRating',
-            'ratingValue': Number(media.voteAverage.toFixed(1)),
+            'ratingValue': Number(effectiveVoteAverage.toFixed(1)),
             'bestRating': '10',
             'worstRating': '1',
-            'ratingCount': media.voteCount
+            'ratingCount': effectiveVoteCount
           }
         }
       : {}),
@@ -680,11 +755,27 @@ export function updateMediaSEO(
     episodeName?: string;
     episodeOverview?: string;
     episodeAirDate?: string;
+    episodeVoteAverage?: number;
+    episodeVoteCount?: number;
+    isVerifiedEpisode?: boolean;
+    noindex?: boolean;
     isWatching?: boolean;
   } = {}
 ) {
   if (!media) return;
   const metadata = buildMediaMetadata(media, options);
+  const isDistinctEpisode = media?.mediaType !== 'movie' && Boolean(options.isWatching && options.season && options.episode);
+  const effectiveNoindex =
+    options.noindex !== undefined
+      ? options.noindex
+      : isDistinctEpisode && options.episodeOverview !== undefined
+      ? !isEpisodeSeoIndexable({
+          episodeName: options.episodeName,
+          episodeOverview: options.episodeOverview,
+          seriesOverview: media.overview,
+          isVerifiedEpisode: options.isVerifiedEpisode
+        })
+      : false;
 
   updateSEO({
     title: metadata.title,
@@ -693,6 +784,7 @@ export function updateMediaSEO(
     image: metadata.image,
     url: metadata.canonicalUrl,
     type: metadata.type,
+    noindex: effectiveNoindex,
     schema: metadata.schema
   });
 }

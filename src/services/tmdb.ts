@@ -29,6 +29,8 @@ import {
   CATALOG_PAGE_SIZE
 } from './platformDiscovery';
 import { getUserSettings } from './storage';
+import { slugToTag, tagToSlug } from '../utils/tags';
+import { getGenreById, itemMatchesGenre } from '../utils/genres';
 
 export const TMDB_BASE_URL =
   typeof window !== 'undefined' ? '/api/tmdb' : 'https://api.themoviedb.org/3';
@@ -104,7 +106,10 @@ export function queryLocalCatalog(options: FilterOptions = {}): PaginatedRespons
   }
 
   if (options.genreId) {
-    items = items.filter(item => item.genres.some(g => g.id === Number(options.genreId)));
+    const genreMeta = getGenreById(Number(options.genreId));
+    items = genreMeta
+      ? items.filter(item => itemMatchesGenre(item, genreMeta))
+      : items.filter(item => item.genres.some(g => g.id === Number(options.genreId)));
   }
 
   if (options.year) {
@@ -241,12 +246,13 @@ export async function fetchCatalog(
         const tvTransientErr = tvRes && (tvRes.status === 429 || tvRes.status >= 500);
         const hasOk = Boolean((movRes && movRes.ok) || (tvRes && tvRes.ok));
 
+        if (requestOpts.throwOnError && (movTransientErr || tvTransientErr || movRes?.status === 503 || tvRes?.status === 503)) {
+          const err: any = new Error(`TMDB platform request failed (${movTransientErr ? movRes?.status : tvRes?.status || 503})`);
+          err.status = movTransientErr ? movRes?.status : (tvRes?.status || 503);
+          throw err;
+        }
+
         if (!hasOk) {
-          if (requestOpts.throwOnError && (movTransientErr || tvTransientErr || movRes?.status === 503 || tvRes?.status === 503)) {
-            const err: any = new Error(`TMDB platform request failed (${movRes?.status || tvRes?.status})`);
-            err.status = movRes?.status || tvRes?.status || 503;
-            throw err;
-          }
           // When server explicitly returned 503 (TMDB key not configured) vs HTTP 200 empty:
           // fall back ONLY if unconfigured local catalog has verified originals; do not fabricate on empty 200.
           if ((movRes && movRes.ok === false && !movTransientErr) && (tvRes && tvRes.ok === false && !tvTransientErr)) {
@@ -515,7 +521,11 @@ export async function fetchCatalog(
 
     const defaultSort = (category === 'top-movies' || category === 'top-tv' || category === 'top-rated') ? 'vote_average.desc' : 'popularity.desc';
     const sortBy = extraFilters.sortBy || defaultSort;
-    const genreQuery = extraFilters.genreId ? `&with_genres=${extraFilters.genreId}` : '';
+    const genreMeta = extraFilters.genreId ? getGenreById(Number(extraFilters.genreId)) : undefined;
+    const movieGenreId = genreMeta?.tmdbMovieGenreId ?? extraFilters.genreId;
+    const tvGenreId = genreMeta?.tmdbTvGenreId ?? extraFilters.genreId;
+    const genreQueryMovie = movieGenreId ? `&with_genres=${movieGenreId}` : '';
+    const genreQueryTv = tvGenreId ? `&with_genres=${tvGenreId}` : '';
     const minRatingQuery = extraFilters.minRating
       ? `&vote_average.gte=${extraFilters.minRating}&vote_count.gte=30`
       : (sortBy === 'vote_average.desc' ? '&vote_count.gte=80' : '');
@@ -524,7 +534,7 @@ export async function fetchCatalog(
     const countryQuery = extraFilters.country ? `&with_origin_country=${extraFilters.country}` : '';
 
     if (targetType === 'movie') {
-      const movUrl = `${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryMovie}${countryQuery}`;
+      const movUrl = `${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryMovie}${minRatingQuery}${yearQueryMovie}${countryQuery}`;
       const res = await fetch(movUrl);
       if (res.ok) {
         const data = await res.json();
@@ -539,7 +549,7 @@ export async function fetchCatalog(
         };
       }
     } else if (targetType === 'tv') {
-      const tvUrl = `${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryTv}${countryQuery}`;
+      const tvUrl = `${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryTv}${minRatingQuery}${yearQueryTv}${countryQuery}`;
       const res = await fetch(tvUrl);
       if (res.ok) {
         const data = await res.json();
@@ -555,13 +565,14 @@ export async function fetchCatalog(
       }
     } else {
       // 'all' Content: Fetch discover movie & discover tv in parallel
-      const movUrl = `${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryMovie}${countryQuery}`;
-      const tvUrl = `${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQuery}${minRatingQuery}${yearQueryTv}${countryQuery}`;
+      const movPromise = extraFilters.genreId && !movieGenreId
+        ? Promise.resolve(null)
+        : fetch(`${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryMovie}${minRatingQuery}${yearQueryMovie}${countryQuery}`).catch(() => null);
+      const tvPromise = extraFilters.genreId && !tvGenreId
+        ? Promise.resolve(null)
+        : fetch(`${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryTv}${minRatingQuery}${yearQueryTv}${countryQuery}`).catch(() => null);
 
-      const [movRes, tvRes] = await Promise.all([
-        fetch(movUrl).catch(() => null),
-        fetch(tvUrl).catch(() => null)
-      ]);
+      const [movRes, tvRes] = await Promise.all([movPromise, tvPromise]);
 
       if ((movRes && movRes.ok) || (tvRes && tvRes.ok)) {
         const [movData, tvData] = await Promise.all([
@@ -759,21 +770,30 @@ export async function getCollectionDetail(collectionId: number): Promise<Collect
 /**
  * Fetch movies & TV series by keyword / tag from TMDB API with clean local catalog fallback
  */
-export async function fetchByTag(tagName: string, page = 1): Promise<PaginatedResponse<MediaItem>> {
+export async function fetchByTag(
+  tagName: string,
+  page = 1,
+  fetchImpl: typeof fetch = fetch
+): Promise<PaginatedResponse<MediaItem>> {
   const safePage = Math.max(1, Math.floor(Number(page) || 1));
+  const tagPhrase = slugToTag(tagName) || tagName.replace(/^#/, '').trim().toLowerCase();
+  const targetSlug = tagToSlug(tagName);
 
-  if (canUseClientTmdbProxy()) {
+  if ((canUseClientTmdbProxy() || fetchImpl !== fetch) && tagPhrase) {
     try {
-      const kwRes = await fetch(`${TMDB_BASE_URL}/search/keyword?query=${encodeURIComponent(tagName)}&page=1`);
+      const kwRes = await fetchImpl(`${TMDB_BASE_URL}/search/keyword?query=${encodeURIComponent(tagPhrase)}&page=1`);
       if (kwRes.ok) {
         const kwData = await kwRes.json();
         const keywords = Array.isArray(kwData?.results) ? kwData.results : [];
-        const cleanTag = tagName.trim().toLowerCase();
-        const firstKw = keywords.find((k: any) => String(k.name || '').toLowerCase() === cleanTag) || keywords[0];
+        const firstKw =
+          keywords.find((k: any) => {
+            const kName = String(k.name || '').toLowerCase().trim();
+            return kName === tagPhrase || (targetSlug && tagToSlug(kName) === targetSlug);
+          }) || keywords[0];
         if (firstKw && firstKw.id) {
           const [disMovRes, disTvRes] = await Promise.all([
-            fetch(`${TMDB_BASE_URL}/discover/movie?with_keywords=${firstKw.id}&page=${safePage}&sort_by=popularity.desc`).catch(() => null),
-            fetch(`${TMDB_BASE_URL}/discover/tv?with_keywords=${firstKw.id}&page=${safePage}&sort_by=popularity.desc`).catch(() => null)
+            fetchImpl(`${TMDB_BASE_URL}/discover/movie?with_keywords=${firstKw.id}&page=${safePage}&sort_by=popularity.desc`).catch(() => null),
+            fetchImpl(`${TMDB_BASE_URL}/discover/tv?with_keywords=${firstKw.id}&page=${safePage}&sort_by=popularity.desc`).catch(() => null)
           ]);
 
           const [disMovData, disTvData] = await Promise.all([
@@ -801,7 +821,7 @@ export async function fetchByTag(tagName: string, page = 1): Promise<PaginatedRe
   }
 
   return queryLocalCatalog({
-    query: tagName,
+    query: tagPhrase,
     page: safePage
   });
 }

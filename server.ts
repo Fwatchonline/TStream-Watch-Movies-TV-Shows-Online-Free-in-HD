@@ -294,7 +294,8 @@ const server = http.createServer(async (req, res) => {
     }
     res.end(seoRes.html);
   } catch (err: any) {
-    console.error('[TStream Production Server Error]', err?.message || err);
+    const safeMsg = String(err?.message || err || 'Unknown error').replace(/([?&]api_key=)[^&\s]+/gi, '$1[REDACTED]');
+    console.error('[TStream Production Server Error]', safeMsg);
     res.statusCode = 503;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Retry-After', '30');

@@ -1,0 +1,1031 @@
+# TSTREAM.ONLINE — FINAL TECHNICAL SEO REPAIR, ROUTING, PRERENDERING AND PRODUCTION READINESS
+
+Act as a senior Technical SEO Engineer, React 19 developer, TypeScript architect, Node.js engineer, Vite specialist, Google Search Console expert, and production deployment engineer.
+
+You have access to the complete source code of my existing TStream.online application.
+
+Your task is to continue improving the EXISTING application by fixing all remaining technical SEO, routing, prerendering, sitemap, metadata, and testing problems identified in the latest source-code audit.
+
+This is an implementation task, NOT just an audit.
+
+Inspect the current source code, implement the corrections, run the complete test suite, build the application, and produce an accurate final report.
+
+Do not merely describe recommended changes. Make the actual code changes.
+
+# 1. PROJECT IDENTITY AND ARCHITECTURE
+
+Repository:
+
+https://github.com/Fwatchonline/TStream-Watch-Movies-TV-Shows-Online-Free-in-HD
+
+Branch: main
+
+Latest audited commit:
+
+a5d3d01009ceba88c7b64d4700ad06eeee120a54
+
+Production domain:
+
+https://tstream.online
+
+Preferred canonical hostname:
+
+https://tstream.online
+
+Actual technology stack:
+
+- React 19
+- TypeScript
+- Vite 8
+- Node.js 24.12.0 or newer
+- Hono
+- Custom Node.js HTTP production server
+- Firebase / Firestore
+- TMDB API
+- Tailwind CSS 4
+- Nginx
+- PM2
+- PWA
+
+This is a custom Google AI Studio application.
+
+It is NOT Laravel, WordPress, MTDb, or a PHP application.
+
+Important files:
+
+- src/App.tsx
+- src/utils/seo.ts
+- src/services/catalogData.ts
+- src/pages/TagsPage.tsx
+- src/pages/CatalogPage.tsx
+- src/pages/DetailsPage.tsx
+- src/pages/WatchPage.tsx
+- scripts/seoHtmlPlugin.ts
+- scripts/generate-sitemaps.ts
+- scripts/generate-sitemaps.cjs
+- scripts/prerender.ts
+- scripts/run-build.mjs
+- scripts/verify-production.ts
+- scripts/update-vps.sh
+- server.ts
+- src/server/app.ts
+- package.json
+- package-lock.json
+- .nvmrc
+- nginx.conf.example
+- public/robots.txt
+- .github/workflows/deploy-tstream.yml
+- ecosystem.config.cjs
+
+Inspect the actual current contents of these files before modifying them.
+
+Do not assume previous audit reports perfectly describe the current repository.
+
+The source code is authoritative.
+
+# 2. STRICT PRESERVATION REQUIREMENTS
+
+This is an existing production streaming application.
+
+Preserve all existing functionality:
+
+- Homepage design.
+- Movie catalog.
+- TV-series catalog.
+- Movie detail pages.
+- TV detail pages.
+- Streaming player.
+- HLS playback.
+- Multiple streaming providers.
+- Server selection.
+- Subtitle functionality.
+- Subtitle language handling.
+- Firebase authentication.
+- Google login.
+- User watchlists.
+- Continue watching.
+- User libraries.
+- Admin functionality.
+- Notifications.
+- Collections.
+- Search.
+- PWA.
+- Mobile responsiveness.
+- Existing navigation.
+- All working API integrations.
+
+Do not redesign the website.
+
+Do not rebuild the application using another framework.
+
+Do not delete existing content.
+
+Do not reset Firebase or Firestore.
+
+Do not remove streaming providers.
+
+Do not replace working components unnecessarily.
+
+Do not expose API keys, credentials, database secrets, Firebase secrets, or private configuration.
+
+Never overwrite production environment variables or `.env` files.
+
+# 3. PRIORITY 1 — FIX TAG SLUG AND PRERENDER URL MISMATCH
+
+This is a confirmed issue in the current source code.
+
+Inspect:
+
+- src/App.tsx
+- src/pages/TagsPage.tsx
+- src/services/catalogData.ts
+- scripts/seoHtmlPlugin.ts
+- scripts/prerender.ts
+- scripts/generate-sitemaps.ts
+
+The current tag system has a mismatch between URL encoding and the physical prerender directory.
+
+For example, the tag:
+
+"time travel"
+
+can be generated as:
+
+/tags/time%20travel
+
+while the prerender engine creates a directory:
+
+dist/tags/time-travel/index.html
+
+These are inconsistent URL and filesystem representations.
+
+The application must use one unified canonical tag slug system.
+
+Implement a reusable tag slug utility with functions such as:
+
+- tagToSlug()
+- slugToTag()
+- normalizeTag()
+- getCanonicalTagUrl()
+
+Use the same utility everywhere.
+
+Examples:
+
+Original tag: time travel
+Canonical URL: /tags/time-travel
+
+Original tag: based on novel or book
+Canonical URL: /tags/based-on-novel-or-book
+
+Original tag: coming of age
+Canonical URL: /tags/coming-of-age
+
+Original tag: friendship
+Canonical URL: /tags/friendship
+
+Original tag: revenge
+Canonical URL: /tags/revenge
+
+CRITICAL:
+
+Changing spaces to hyphens in the URL must NOT destroy the original TMDB keyword.
+
+For example:
+
+/tags/time-travel
+
+must search for the original TMDB keyword:
+
+"time travel"
+
+Use a reliable mapping between original tag names and canonical slugs.
+
+Requirements:
+
+1. Frontend navigation must use canonical slugs.
+2. Direct navigation must work.
+3. Browser refresh must work.
+4. Browser back and forward must work.
+5. SEO route parsing must recognize tag slugs.
+6. Server rendering must resolve the correct original tag name.
+7. Canonical metadata must use the same slug.
+8. Sitemap entries must use the same slug.
+9. Prerendered output directories must use the same slug.
+10. No spaces or inconsistently encoded tag URLs.
+11. No duplicate tag URLs.
+12. Invalid tag slugs must return an appropriate response.
+
+Test every existing POPULAR_TAGS entry, not just the examples above.
+
+# 4. PRIORITY 2 — IMPLEMENT OR CORRECT GENRE LANDING PAGES
+
+The previous audit identified that genre URLs are described in the SEO documentation, but the actual routing and prerender implementation do not consistently support them.
+
+Inspect:
+
+- src/App.tsx
+- src/pages/CatalogPage.tsx
+- src/services/catalogData.ts
+- src/services/tmdb.ts
+- scripts/seoHtmlPlugin.ts
+- scripts/prerender.ts
+- scripts/generate-sitemaps.ts
+
+Current examples of desired genre pages:
+
+- /genre/action
+- /genre/adventure
+- /genre/animation
+- /genre/comedy
+- /genre/crime
+- /genre/drama
+- /genre/fantasy
+- /genre/horror
+- /genre/mystery
+- /genre/romance
+- /genre/science-fiction
+- /genre/thriller
+
+Implement real genre landing pages using existing catalog and TMDB data.
+
+Do not create fake pages containing only a heading.
+
+Each genre page must have:
+
+- A real genre mapping.
+- Unique page title.
+- Unique description.
+- Self-referencing canonical URL.
+- Appropriate robots metadata.
+- Correct H1.
+- Real matching movies and TV series.
+- Useful internal links.
+- Breadcrumb navigation.
+- Pagination where appropriate.
+- Server-rendered HTML content.
+- Valid structured data when appropriate.
+
+Use genuine TMDB genre IDs.
+
+Do not confuse genre IDs with movie IDs.
+
+Use the existing CatalogPage architecture where practical.
+
+Preserve existing query-based genre filtering for backward compatibility.
+
+If a particular genre does not contain sufficient real catalog content, do not create a misleading indexable page.
+
+If a genre route cannot be implemented correctly, remove it from prerender reports and sitemaps until the actual route exists.
+
+Never claim a route is supported unless direct navigation, rendering, and HTTP responses have been tested.
+
+# 5. PRIORITY 3 — FIX SITEMAP LASTMOD VALUES
+
+Inspect:
+
+scripts/generate-sitemaps.ts
+
+There is a confirmed issue with the current lastmod implementation.
+
+The generator currently uses:
+
+- Movie releaseDate.
+- TV firstAirDate.
+
+These dates represent the original release or first airing, NOT the last modification of the page content.
+
+Do not use publication or release dates as fake lastmod values.
+
+Implement this rule:
+
+1. If the application has a reliable actual content modification timestamp, use it.
+2. If a trustworthy updatedAt or modifiedAt field exists, verify its meaning before using it.
+3. If there is no real last modification date, omit lastmod.
+4. Never use the current build date for every URL.
+5. Never reuse releaseDate as lastmod.
+6. Never fabricate timestamps.
+
+Keep the sitemap XML valid after removing unsupported lastmod values.
+
+Add automated tests to prevent this problem from returning.
+
+# 6. PRIORITY 4 — DEFINE THE CORRECT TV EPISODE INDEXING STRATEGY
+
+Inspect:
+
+- src/utils/seo.ts
+- scripts/seoHtmlPlugin.ts
+- scripts/prerender.ts
+- scripts/generate-sitemaps.ts
+- src/pages/WatchPage.tsx
+- src/components/StreamingPlayer.tsx
+- src/services/tmdb.ts
+
+Current behavior:
+
+- Individual TV episodes can have their own URLs.
+- Episode pages receive self-referencing canonical URLs.
+- TVEpisode JSON-LD is generated.
+- Episode pages can receive index, follow.
+- Episode pages are prerendered.
+- However, there is no dedicated episode sitemap.
+
+The current implementation also has fallback behavior that can reuse the entire TV show's overview when a specific episode does not have its own overview.
+
+This can create many near-duplicate episode pages.
+
+Implement a quality-based indexing policy.
+
+INDEXABLE TV EPISODE REQUIREMENTS:
+
+An episode may be indexable when it has:
+
+- A valid existing TV series.
+- A verified season.
+- A verified episode number.
+- A genuine episode title.
+- Genuine episode-specific content.
+- A valid canonical episode URL.
+- A useful unique description.
+- Correct TVEpisode structured data.
+- A real relationship to its parent TVSeries.
+
+If sufficient unique episode content is unavailable:
+
+- Do not fabricate an episode description.
+- Do not copy the entire parent series overview as if it were an episode synopsis.
+- Apply noindex, follow when appropriate.
+- Exclude the page from the indexable episode sitemap.
+
+CRITICAL EPISODE VALIDATION:
+
+Inspect fetchServerEpisode().
+
+It must not invent a real episode simply because:
+
+- The season number is below numberOfSeasons.
+- An episode number is below an arbitrary limit such as 25.
+- TMDB failed to respond.
+- A season object is missing.
+
+Never present a nonexistent or unverified episode as verified content.
+
+Do not break the existing streaming player.
+
+Playback compatibility and SEO indexability must be handled separately.
+
+A valid playback request must not be incorrectly rejected merely because its episode metadata is incomplete.
+
+Add a separate indexability decision based on genuine episode metadata.
+
+EPISODE SITEMAP:
+
+If genuine detailed episode pages are eligible for indexing, create:
+
+sitemap-episodes.xml
+
+Add it to the sitemap index.
+
+Ensure it contains only verified, indexable episode URLs.
+
+If there are not enough genuine episode records, do not create artificial entries just to populate the sitemap.
+
+# 7. PRIORITY 5 — CORRECT TVEPISODE STRUCTURED DATA
+
+Inspect:
+
+src/utils/seo.ts
+
+The TVEpisode schema must not incorrectly inherit the parent series' rating and review count.
+
+Do not use the overall TVSeries rating as the rating of an individual episode.
+
+Only include aggregateRating when genuine episode-level rating data exists.
+
+For episode pages, verify:
+
+- @type: TVEpisode.
+- Correct episode name.
+- episodeNumber.
+- partOfSeason.
+- partOfSeries.
+- Genuine episode description.
+- Correct episode URL.
+- Actual episode air date, if available.
+
+Do not fabricate:
+
+- Episode ratings.
+- Reviews.
+- Rating counts.
+- Air dates.
+- Episode titles.
+- Runtime.
+- Availability.
+
+Ensure parent TVSeries metadata and episode metadata are logically separate.
+
+# 8. PRIORITY 6 — VERIFY ALL CANONICAL URL LOGIC
+
+Inspect:
+
+src/utils/seo.ts
+scripts/seoHtmlPlugin.ts
+src/App.tsx
+scripts/prerender.ts
+
+The canonical domain is:
+
+https://tstream.online
+
+Maintain consistent handling:
+
+- HTTPS.
+- Non-www hostname.
+- No duplicate trailing slash.
+- Correct URL normalization.
+- Tracking parameters excluded.
+- Search routes noindex.
+- Filters and unsupported query combinations handled appropriately.
+- Pagination canonicalized consistently.
+
+Expected URL strategy:
+
+Movies:
+
+/movie/:slug
+
+TV series:
+
+/tv/:slug
+
+Movie playback:
+
+/watch/movie/:slug
+
+The movie playback page should not compete with the movie detail page.
+
+TV series:
+
+/tv/:slug
+
+Individual TV episode:
+
+/watch/tv/:slug/:season/:episode
+
+Only verified, genuinely distinct episode pages should use an indexable episode canonical.
+
+Ensure the initial HTML, React SEO updates, Open Graph, Twitter metadata, JSON-LD, sitemap and internal navigation all agree.
+
+Avoid multiple canonical tags.
+
+Avoid canonical URLs that point to unrelated content.
+
+Avoid canonical loops and redirect chains.
+
+Ensure legacy routes are handled consistently.
+
+# 9. PRIORITY 7 — VERIFY PRERENDER ROUTE COVERAGE
+
+Inspect:
+
+scripts/prerender.ts
+scripts/seoHtmlPlugin.ts
+scripts/run-build.mjs
+
+The previous audit found inconsistencies between the reported number of genre pages and the actual prerender route-generation code.
+
+The generated report must reflect exactly what the application actually generates.
+
+Create a single authoritative route inventory used by:
+
+- Frontend route definitions where practical.
+- SEO route parsing.
+- Prerendering.
+- Sitemap generation.
+- Production verification.
+
+For every generated route, verify:
+
+1. Correct HTTP status expectation.
+2. Exact output file path.
+3. Exactly one canonical URL.
+4. Correct canonical destination.
+5. Unique page title.
+6. Meaningful H1.
+7. Semantic HTML body content.
+8. Correct robots directive.
+9. Correct JSON-LD where applicable.
+10. All local assets exist.
+
+Do not report a route as prerendered if the corresponding HTML file does not exist.
+
+Do not count noindex utility pages as indexable pages.
+
+Do not create empty prerender files.
+
+Use real content, not generic placeholder HTML.
+
+# 10. PRIORITY 8 — CHECK SEO CONTENT QUALITY
+
+Inspect:
+
+scripts/seoHtmlPlugin.ts
+src/pages/DetailsPage.tsx
+src/pages/WatchPage.tsx
+src/pages/TagsPage.tsx
+src/pages/CatalogPage.tsx
+
+Make sure prerendered content contains useful, real information.
+
+For movie pages, include available:
+
+- Movie title.
+- Release year.
+- Original overview.
+- Genres.
+- Poster.
+- Relevant metadata.
+- Relevant internal links.
+- Breadcrumbs.
+
+For TV series:
+
+- Series title.
+- First air date.
+- Overview.
+- Genres.
+- Number of seasons when available.
+- Relevant episode information.
+- Parent and child links.
+- Breadcrumbs.
+
+For tags:
+
+- Original tag name.
+- Relevant matching movies and series.
+- Real item links.
+- Unique tag metadata.
+- Useful explanatory content based on actual data.
+
+For genres:
+
+- Correct genre title.
+- Matching real movies and shows.
+- Relevant pagination.
+- Useful internal links.
+
+Never create thousands of generic descriptions.
+
+Never fabricate content.
+
+Avoid using the same description for unrelated pages.
+
+Avoid copying the parent series overview into every episode page.
+
+# 11. PRIORITY 9 — SITEMAP INTEGRITY AND COVERAGE
+
+Inspect:
+
+scripts/generate-sitemaps.ts
+scripts/run-build.mjs
+scripts/verify-production.ts
+
+Current sitemap architecture includes:
+
+- sitemap.xml
+- sitemap-main.xml
+- sitemap-movies.xml
+- sitemap-tv.xml
+
+Potentially add:
+
+- sitemap-episodes.xml, only for genuine indexable episode pages.
+
+Include relevant, valid canonical URLs only.
+
+Exclude:
+
+- Noindex pages.
+- Invalid IDs.
+- Duplicate URLs.
+- Search pages.
+- Admin pages.
+- User libraries.
+- Player utility routes.
+- Redirecting URLs.
+- Missing content.
+- Invalid tags.
+- Empty genres.
+- Unverified episodes.
+
+Verify movie IDs and TV IDs are positive integers and associated with the correct media type.
+
+Preserve the verified Spider-Man: Homecoming TMDB ID:
+
+315635
+
+Do not delete legitimate unrelated TMDB IDs such as 28.
+
+Do not rely exclusively on hardcoded special-case exclusions.
+
+Use proper structured catalog records and general validation.
+
+The generator must fail if it produces corrupted URLs or duplicate entries.
+
+Ensure sitemap entries use exactly the same slug generation as frontend routing and prerendering.
+
+Verify all sitemap URLs resolve to intended pages.
+
+# 12. PRIORITY 10 — NODE.JS VERSION AND TEST REPORT ACCURACY
+
+There is a discrepancy between the current project configuration and the previous test report.
+
+Current project configuration specifies:
+
+Node.js >=24.12.0
+
+This is defined in:
+- package.json
+- .nvmrc
+- GitHub Actions workflow
+- Deployment script
+
+However, the previous test report claims execution using Node.js 22.13.0.
+
+The current npm test script also runs six test suites, while the older report documents only three.
+
+Resolve these discrepancies.
+
+Requirements:
+
+1. Keep one authoritative supported Node.js version.
+2. Verify package.json, package-lock.json and .nvmrc agree.
+3. Verify GitHub Actions uses the same supported version.
+4. Verify deployment checks use the same supported version.
+5. Never weaken the Node requirement merely to make an old environment pass.
+6. Run tests using the actual supported Node version.
+7. Update the test report using genuine new execution output.
+
+Run all currently configured suites:
+
+- pagination.test.ts
+- seo.test.ts
+- subtitles.test.ts
+- server.test.ts
+- retries.test.ts
+- deploy.test.ts
+
+Also run:
+
+npm run lint
+npm run build
+
+Do not report success if a command was skipped.
+
+If the environment cannot run Node 24.12.0, explicitly report the limitation.
+
+Do not invent test results.
+
+# 13. PRIORITY 11 — EXPAND PRODUCTION VERIFICATION
+
+Inspect:
+
+scripts/verify-production.ts
+
+The production verifier already checks:
+
+- /api/health.
+- API input validation.
+- SSRF protections.
+- CORS.
+- Robots.txt.
+- XML sitemaps.
+- Canonical URLs.
+- Googlebot versus browser parity.
+- Semantic HTML.
+- Structured data.
+- Pagination.
+
+Expand it to test all newly corrected routes.
+
+Add tests for:
+
+TAG ROUTES:
+- /tags/revenge
+- /tags/friendship
+- /tags/magic
+- /tags/time-travel
+- /tags/based-on-novel-or-book
+- /tags/coming-of-age
+
+GENRE ROUTES:
+- /genre/action
+- /genre/comedy
+- /genre/drama
+- /genre/science-fiction
+- /genre/thriller
+
+MOVIE ROUTES:
+- /movie/spider-man-homecoming-315635
+- /watch/movie/spider-man-homecoming-315635
+
+TV ROUTES:
+- /tv/breaking-bad-1396
+- /watch/tv/breaking-bad-1396/1/1
+
+Also test:
+
+- Unknown route returns genuine HTTP 404.
+- Invalid movie ID returns appropriate HTTP 404.
+- Invalid TV ID returns appropriate HTTP 404.
+- Nonexistent TV season returns appropriate response.
+- Nonexistent episode returns appropriate response.
+- Empty tag pages are not indexable.
+- Invalid genre pages are not indexable.
+- Duplicate canonical tags do not exist.
+- Tag URLs match prerender filesystem locations.
+- HTML is not returned for unknown API routes.
+- Search results contain the intended noindex directive.
+- Missing static assets return HTTP 404.
+- Query pagination works on direct navigation.
+- Googlebot and normal browser receive the same meaningful content.
+
+Test representative sitemap URLs against the built local production server.
+
+Verify actual HTTP responses, not only generated source strings.
+
+Use bounded concurrency to avoid overwhelming TMDB or the test environment.
+
+# 14. PRIORITY 12 — 5XX ERROR HANDLING
+
+Google Search Console previously reported:
+
+571 affected URLs with Server error (5xx).
+
+The source code now has a custom Node.js server, cache mechanisms, upstream timeouts, and explicit 503 handling.
+
+Inspect:
+
+- server.ts
+- scripts/seoHtmlPlugin.ts
+- src/server/app.ts
+- src/server/legacyStreamHandler.ts
+- src/server/api/
+- ecosystem.config.cjs
+- scripts/update-vps.sh
+- nginx.conf.example
+
+Review:
+
+- TMDB 429 handling.
+- TMDB 5xx handling.
+- Network timeouts.
+- Stale cache fallback.
+- In-flight request deduplication.
+- Memory usage.
+- Error logging.
+- API request validation.
+- Static file serving.
+- PM2 restart behavior.
+- Nginx upstream behavior.
+
+Do not mask genuine failures by returning HTTP 200.
+
+Do not send homepage HTML for missing content.
+
+Do not create false successful responses.
+
+Keep proper 404, 405, 429, 500 and 503 semantics where appropriate.
+
+Improve logging so actual failure causes can be identified without exposing credentials.
+
+IMPORTANT:
+
+The source repository cannot prove whether the historical production 571 errors have been eliminated.
+
+Do not claim that they are fixed unless actual production logs and HTTP responses confirm it.
+
+If VPS access is unavailable, clearly list the exact server-side checks still required.
+
+# 15. PRIORITY 13 — NGINX AND PRODUCTION ROUTING
+
+Inspect:
+
+nginx.conf.example
+server.ts
+scripts/update-vps.sh
+
+Ensure the documented production architecture matches the real build output.
+
+The project uses a hybrid prerender + Node production server architecture.
+
+Prerendered routes should be served from their correct static HTML files.
+
+Dynamic valid routes should use the Node SEO rendering system.
+
+Unknown routes must return real 404 responses.
+
+Temporary upstream failures must preserve proper 503 responses.
+
+Do not use an SPA fallback that turns missing URLs into HTTP 200 responses.
+
+Verify:
+
+- HTTP to HTTPS 301.
+- www to non-www 301.
+- Canonical hostname.
+- Asset delivery.
+- Sitemap delivery.
+- Robots delivery.
+- API proxying.
+- Stream proxy behavior.
+- Subtitle proxy behavior.
+- Range request handling.
+- No redirect loops.
+- No unnecessary redirect chains.
+
+Do not replace an active VPS Nginx configuration with nginx.conf.example without comparing the actual production configuration first.
+
+Do not modify unrelated virtual hosts.
+
+# 16. PRIORITY 14 — UPDATE DOCUMENTATION
+
+The previous audit and test reports must reflect the current source code.
+
+Update:
+
+TSTREAM_SEO_AUDIT_REPORT.md
+
+TSTREAM_SEO_TEST_RESULTS.md
+
+Include:
+
+- Correct project architecture.
+- Confirmed problems.
+- Actual code changes.
+- Actual route inventory.
+- Actual prerendered route count.
+- Correct sitemap URL counts.
+- Actual supported Node version.
+- Real test suite names.
+- Real test results.
+- Actual build result.
+- Remaining production limitations.
+- Remaining VPS verification requirements.
+
+Do not copy older results into the new report.
+
+Do not state that a route, test, or production deployment succeeded without evidence.
+
+# 17. SAFE IMPLEMENTATION WORKFLOW
+
+PHASE A — INSPECT
+
+Inspect the current repository and identify the exact files requiring changes.
+
+Use the current main branch.
+
+Do not assume previous audit descriptions are fully accurate.
+
+PHASE B — BACKUP
+
+Before changing files, preserve their original versions.
+
+Do not modify production secrets.
+
+Do not delete source files unless their removal is genuinely necessary and justified.
+
+PHASE C — IMPLEMENT
+
+Fix:
+
+1. Tag slug normalization.
+2. Tag routing and prerender paths.
+3. Genre routing and real landing pages.
+4. Invalid lastmod generation.
+5. TV episode metadata and indexability.
+6. TVEpisode structured data.
+7. Canonical consistency.
+8. Sitemap generation and validation.
+9. Prerender route inventory.
+10. Node version and documentation discrepancy.
+11. Production test coverage.
+12. Any additional confirmed SEO defects found during implementation.
+
+Keep the UI and existing functionality unchanged.
+
+PHASE D — TEST
+
+Run the full test suite.
+
+Run TypeScript validation.
+
+Run the full production build.
+
+Validate the sitemap output.
+
+Inspect all generated prerender HTML.
+
+Run the production HTTP verification suite.
+
+Fix all new failures caused by your modifications.
+
+PHASE E — REVIEW
+
+Review the full Git diff.
+
+Ensure there are no:
+
+- Accidental UI changes.
+- Removed player functionality.
+- Broken routes.
+- Exposed secrets.
+- Invalid canonical URLs.
+- Duplicate sitemap URLs.
+- Fabricated metadata.
+- Unintended noindex tags.
+- Incorrect HTTP status codes.
+- Unrelated dependency changes.
+
+# 18. PRODUCTION DEPLOYMENT RESTRICTIONS
+
+Do not automatically deploy to the live VPS.
+
+Do not execute production deployment scripts.
+
+Do not restart PM2.
+
+Do not reload Nginx.
+
+Do not change the actual production environment.
+
+Do not delete or replace any production data.
+
+Only prepare the source code and verify the build.
+
+The deployment should happen separately after reviewing the actual VPS configuration and ensuring that the supported Node.js version is installed.
+
+Preserve existing atomic release and rollback functionality in scripts/update-vps.sh.
+
+Do not weaken deployment safeguards.
+
+# 19. FINAL ACCEPTANCE CRITERIA
+
+The task is complete only when:
+
+- All tag slugs use one consistent canonical format.
+- All tag prerender output paths match their public URLs.
+- Time Travel and other multiword tags resolve to the correct original TMDB keywords.
+- Genre pages are either genuinely implemented or correctly excluded.
+- Sitemap URLs match actual supported application routes.
+- No fake lastmod values remain.
+- Episode pages use genuine episode information.
+- Duplicate or empty episode pages are not unnecessarily indexed.
+- TVEpisode structured data does not inherit unrelated series ratings.
+- Canonical URLs are consistent across server and client.
+- Prerender output and route reports agree.
+- Sitemap generation is deterministic and validated.
+- Node.js version requirements are consistent.
+- All six configured test suites have been executed.
+- TypeScript validation passes.
+- Production build passes.
+- Production verification tests pass in the available test environment.
+- Existing streaming and authentication functionality remains intact.
+- No production deployment has been performed without authorization.
+
+# 20. FINAL RESPONSE REQUIRED
+
+After completing the implementation, provide:
+
+1. Executive summary.
+2. List of all bugs discovered.
+3. List of all fixes implemented.
+4. Exact modified file paths.
+5. Tag routing results.
+6. Genre routing results.
+7. Canonical URL verification.
+8. Episode indexing decision.
+9. Sitemap validation results and URL counts.
+10. Prerendered route count.
+11. Node.js version used for testing.
+12. Results of all six test suites.
+13. TypeScript validation result.
+14. Production build result.
+15. Production HTTP test result.
+16. Remaining VPS tasks.
+17. Exact deployment prerequisites.
+18. Any known limitations.
+
+Be honest and precise.
+
+Separate source-code fixes from production VPS fixes.
+
+Never claim that the historical Google Search Console 5xx issues have been fixed based only on local tests.
+
+Never claim that Google has indexed the pages.
+
+The goal is to make TStream.online technically consistent, reliable, crawlable, and eligible for indexing while preserving the existing application and all its features.
+
+START BY INSPECTING THE CURRENT SOURCE CODE, THEN IMPLEMENT THE FIXES. DO NOT STOP AFTER WRITING AN AUDIT REPORT.

@@ -32,6 +32,7 @@ interface DeploySandbox {
   binDir: string;
   stateDir: string;
   repoDir: string;
+  nodeBin: string;
   commitA: string;
   commitB: string;
   prevReleaseDir: string;
@@ -103,8 +104,9 @@ exec "${realGit}" "$@"
     `#!/usr/bin/env bash
 set -e
 cmd="\${1:-}"
-echo "$cmd" >> "${stateDir}/npm.log"
-if [ "$cmd" = "build" ]; then
+sub="\${2:-}"
+echo "$cmd $sub" >> "${stateDir}/npm.log"
+if [ "$cmd" = "build" ] || [ "$sub" = "build" ]; then
   mkdir -p dist/assets
   echo "<html></html>" > dist/index.html
   echo "console.log('server');" > dist/server.mjs
@@ -213,7 +215,24 @@ echo "/dev/mock 20971520 1048576 19922944 5% /"
 `
   );
 
-  return { root, appDir, binDir, stateDir, repoDir, commitA, commitB, prevReleaseDir };
+  // 7) Node >= 24.12.0 sandbox shim when container host runs Node < 24.12.0
+  const [nMaj, nMin] = process.versions.node.split('.').map(Number);
+  let nodeBin = process.execPath;
+  if (nMaj < 24 || (nMaj === 24 && nMin < 12)) {
+    const preloadPath = path.join(stateDir, 'node24-preload.cjs');
+    fs.writeFileSync(
+      preloadPath,
+      'Object.defineProperty(process.versions, "node", { value: "24.12.0", configurable: true });\n',
+      'utf8'
+    );
+    nodeBin = path.join(binDir, 'node-24');
+    makeExecutable(
+      nodeBin,
+      `#!/usr/bin/env bash\nexec "${process.execPath}" --require "${preloadPath}" "$@"\n`
+    );
+  }
+
+  return { root, appDir, binDir, stateDir, repoDir, nodeBin, commitA, commitB, prevReleaseDir };
 }
 
 async function runTests() {
@@ -279,6 +298,30 @@ async function runTests() {
       'utf8'
     );
 
+    const oldNodeBin = path.join(sb.binDir, 'node-legacy');
+    makeExecutable(
+      oldNodeBin,
+      `#!/usr/bin/env bash\nexec "${process.execPath}" -e 'Object.defineProperty(process.versions, "node", { value: "22.23.2", configurable: true });' -- "$@"\n`
+    );
+    // Test rejection when Node < 24.12.0 before testing ownership validation
+    const legacyNodeRes = spawnSync('bash', [scriptPath], {
+      env: {
+        ...process.env,
+        PATH: `${sb.binDir}:${process.env.PATH}`,
+        APP_DIR: sb.appDir,
+        PM2_APP_NAME: 'tstream-app',
+        DEPLOY_REF: sb.commitB,
+        SKIP_NGINX_CHECK: '1',
+        NODE_BIN: process.versions.node.startsWith('22.') ? process.execPath : oldNodeBin
+      },
+      encoding: 'utf8'
+    });
+    assert(
+      legacyNodeRes.status !== 0 &&
+        (legacyNodeRes.stderr + legacyNodeRes.stdout).includes('Required >= 24.12.0'),
+      'Task 2: update-vps.sh strictly rejects Node.js < 24.12.0'
+    );
+
     const runRes = spawnSync('bash', [scriptPath], {
       env: {
         ...process.env,
@@ -287,7 +330,7 @@ async function runTests() {
         PM2_APP_NAME: 'tstream-app',
         DEPLOY_REF: sb.commitB,
         SKIP_NGINX_CHECK: '1',
-        NODE_BIN: process.execPath
+        NODE_BIN: sb.nodeBin
       },
       encoding: 'utf8'
     });
@@ -342,7 +385,7 @@ async function runTests() {
         PM2_APP_NAME: 'tstream-app',
         DEPLOY_REF: sb.commitB,
         SKIP_NGINX_CHECK: '1',
-        NODE_BIN: process.execPath
+        NODE_BIN: sb.nodeBin
       },
       encoding: 'utf8'
     });
@@ -391,18 +434,19 @@ async function runTests() {
         DEPLOY_REF: sb.commitB,
         SKIP_NGINX_CHECK: '1',
         SANDBOX_STALE_HEALTH_SHA: sb.commitA, // Simulate server still reporting previous SHA after reload!
-        NODE_BIN: process.execPath
+        NODE_BIN: sb.nodeBin
       },
       encoding: 'utf8'
     });
 
     const restoredCurrent = fs.realpathSync(path.join(sb.appDir, 'current'));
+    const expectedPrev = fs.realpathSync(sb.prevReleaseDir);
     const actionsLog = fs.readFileSync(path.join(sb.stateDir, 'pm2-actions.log'), 'utf8');
     fs.rmSync(sb.root, { recursive: true, force: true });
 
     assert(
       runRes.status !== 0 &&
-        restoredCurrent === fs.realpathSync(sb.prevReleaseDir) &&
+        restoredCurrent === expectedPrev &&
         actionsLog.includes(`SAVE_AT_SHA:${sb.commitA}`),
       'Task 2: Health commitSha mismatch triggers automatic rollback to PREV_RELEASE and restores PREV_COMMIT_SHA'
     );
@@ -436,16 +480,17 @@ async function runTests() {
         DEPLOY_REF: sb.commitB,
         SKIP_NGINX_CHECK: '1',
         SANDBOX_FAIL_VERIFY: '1',
-        NODE_BIN: process.execPath
+        NODE_BIN: sb.nodeBin
       },
       encoding: 'utf8'
     });
 
     const restoredCurrent = fs.realpathSync(path.join(sb.appDir, 'current'));
+    const expectedPrev = fs.realpathSync(sb.prevReleaseDir);
     fs.rmSync(sb.root, { recursive: true, force: true });
 
     assert(
-      runRes.status !== 0 && restoredCurrent === fs.realpathSync(sb.prevReleaseDir),
+      runRes.status !== 0 && restoredCurrent === expectedPrev,
       'Task 2: Failed SEO verification triggers automatic rollback restoring previous symlink target'
     );
   }

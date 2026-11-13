@@ -46,12 +46,12 @@
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/tags/time%20travel</loc>
+    <loc>https://tstream.online/tags/time-travel</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/tags/based%20on%20novel%20or%20book</loc>
+    <loc>https://tstream.online/tags/based-on-novel-or-book</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
@@ -61,7 +61,7 @@
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/tags/school%20friend</loc>
+    <loc>https://tstream.online/tags/school-friend</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
@@ -86,14 +86,89 @@
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/tags/based%20on%20comic%20book</loc>
+    <loc>https://tstream.online/tags/based-on-comic-book</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tstream.online/tags/coming%20of%20age</loc>
+    <loc>https://tstream.online/tags/coming-of-age</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/action</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/adventure</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/animation</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/comedy</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/crime</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/drama</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/fantasy</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/history</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/horror</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/mystery</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/romance</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/science-fiction</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/thriller</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/action-adventure</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tstream.online/genre/sci-fi-fantasy</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
   </url>
   <url>
     <loc>https://tstream.online/platform/netflix</loc>
@@ -112,16 +187,6 @@
   </url>
   <url>
     <loc>https://tstream.online/platform/disney</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/platform/peacock</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://tstream.online/platform/paramount</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>

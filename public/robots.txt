@@ -12,6 +12,7 @@ Allow: /watch/
 Allow: /movie/
 Allow: /tv/
 Allow: /person/
+Allow: /genre/
 Allow: /platform/
 Allow: /az/
 Allow: /tags

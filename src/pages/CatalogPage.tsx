@@ -13,13 +13,15 @@ import {
 } from '../services/platformConfig';
 import { getUserSettings, updateUserSettings } from '../services/storage';
 import { updateSEO } from '../utils/seo';
+import { slugToGenre, getGenreById } from '../utils/genres';
 
 interface CatalogPageProps {
-  category: 'movies' | 'tv-shows' | 'trending' | 'search' | 'platform' | 'az' | 'top-rated';
+  category: 'movies' | 'tv-shows' | 'trending' | 'search' | 'platform' | 'az' | 'top-rated' | 'genre';
   initialQuery?: string;
   initialPlatform?: string;
   initialLetter?: string;
   initialGenreId?: number;
+  initialGenreSlug?: string;
   onSelectMedia: (item: MediaItem) => void;
   onWatchMedia: (item: MediaItem) => void;
   onSelectPlatform?: (platformId: string) => void;
@@ -33,15 +35,23 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
   initialPlatform,
   initialLetter,
   initialGenreId,
+  initialGenreSlug,
   onSelectMedia,
   onWatchMedia,
   onSelectPlatform
 }) => {
+  const activeGenreMeta =
+    category === 'genre'
+      ? slugToGenre(initialGenreSlug || '') || (initialGenreId ? getGenreById(initialGenreId) : undefined)
+      : undefined;
+
   // Helper to parse query parameters from window.location.search
   const getInitialParams = (): FilterOptions => {
     const params = new URLSearchParams(window.location.search);
     const parsedPage = parseInt(params.get('page') || '1', 10);
-    const parsedGenre = params.get('genreId') ? parseInt(params.get('genreId')!, 10) : initialGenreId;
+    const parsedGenre = params.get('genreId')
+      ? parseInt(params.get('genreId')!, 10)
+      : activeGenreMeta?.id ?? initialGenreId;
     const parsedYear = params.get('year') ? parseInt(params.get('year')!, 10) : undefined;
     const parsedMinRating = params.get('minRating') ? parseFloat(params.get('minRating')!) : undefined;
     const defaultSort = category === 'top-rated' ? 'vote_average.desc' : 'popularity.desc';
@@ -98,7 +108,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     if (newFilters.query && newFilters.query.trim()) {
       params.set('q', newFilters.query.trim());
     }
-    if (newFilters.genreId) {
+    if (newFilters.genreId && !(category === 'genre' && activeGenreMeta && newFilters.genreId === activeGenreMeta.id)) {
       params.set('genreId', newFilters.genreId.toString());
     }
     if (newFilters.year) {
@@ -113,10 +123,10 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     if (newFilters.mediaType && newFilters.mediaType !== 'all') {
       params.set('mediaType', newFilters.mediaType);
     }
-    if (newFilters.platform) {
+    if (newFilters.platform && category !== 'platform') {
       params.set('platform', newFilters.platform);
     }
-    if (newFilters.letter && newFilters.letter !== 'All') {
+    if (newFilters.letter && newFilters.letter !== 'All' && category !== 'az') {
       params.set('letter', newFilters.letter);
     }
     if (newFilters.country) {
@@ -133,7 +143,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     const newUrl = queryStr ? `${window.location.pathname}?${queryStr}` : window.location.pathname;
     window.history.replaceState({}, '', newUrl);
     return newUrl;
-  }, [category]);
+  }, [category, activeGenreMeta]);
 
   // Sync initialGenreId prop if passed
   useEffect(() => {
@@ -190,7 +200,9 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
       const params = new URLSearchParams();
       if (filters.page && filters.page > 1) params.set('page', filters.page.toString());
       if (filters.query && filters.query.trim()) params.set('q', filters.query.trim());
-      if (filters.genreId) params.set('genreId', filters.genreId.toString());
+      if (filters.genreId && !(category === 'genre' && activeGenreMeta && filters.genreId === activeGenreMeta.id)) {
+        params.set('genreId', filters.genreId.toString());
+      }
       if (filters.year) params.set('year', filters.year.toString());
       if (filters.minRating) params.set('minRating', filters.minRating.toString());
       if (filters.sortBy && filters.sortBy !== 'popularity.desc') params.set('sortBy', filters.sortBy);
@@ -211,6 +223,16 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
         title: filters.query ? `Search: "${filters.query}"` : 'Search Movies & TV Shows',
         noindex: true,
         url: '/search'
+      });
+    } else if (category === 'genre') {
+      const gMeta = activeGenreMeta || (filters.genreId ? getGenreById(filters.genreId) : undefined);
+      const genreSlug = gMeta?.slug || initialGenreSlug || 'action';
+      const genreName = gMeta?.name || 'Action';
+      updateSEO({
+        title: `${genreName} Movies & TV Shows Free HD${pageSuffix}`,
+        description: gMeta?.description || `Stream top ${genreName} movies and TV series free in HD on T Stream.`,
+        noindex: isEmptyOrOutOfRange,
+        url: isEmptyOrOutOfRange ? `/genre/${genreSlug}` : (queryStr.startsWith('/genre/') ? queryStr : `/genre/${genreSlug}`)
       });
     } else if (category === 'platform') {
       const plat = getPlatformById(filters.platform || 'netflix');
@@ -258,7 +280,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
         url: isEmptyOrOutOfRange ? '/top-rated' : queryStr
       });
     }
-  }, [filters, category, loading, data.results.length, data.totalPages]);
+  }, [filters, category, activeGenreMeta, initialGenreSlug, loading, data.results.length, data.totalPages]);
 
   // Handle page transitions (Preserves all existing query params and filters!)
   const handlePageChange = (newPage: number) => {
@@ -334,6 +356,14 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     }
 
     switch (category) {
+      case 'genre': {
+        const gMeta = activeGenreMeta || (filters.genreId ? getGenreById(filters.genreId) : undefined);
+        return {
+          title: gMeta ? `Best ${gMeta.name} Movies & TV Shows` : 'Browse by Genre',
+          icon: Film,
+          subtitle: gMeta?.description || 'Explore top rated movies and TV series in this genre on T Stream.'
+        };
+      }
       case 'movies':
         return { title: 'Explore Movies', icon: Film, subtitle: 'High definition films, blockbusters, and classics' };
       case 'tv-shows':

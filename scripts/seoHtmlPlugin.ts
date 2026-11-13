@@ -15,9 +15,12 @@ import type { Plugin } from 'vite';
 import fs from 'fs';
 import path from 'path';
 import { parseMediaSlug, createMediaSlug } from '../src/utils/slug.ts';
+import { tagToSlug, slugToTag, isValidTagSlug, isPopularTag } from '../src/utils/tags.ts';
+import { slugToGenre, itemMatchesGenre, type GenreLandingMeta } from '../src/utils/genres.ts';
 import {
   buildMediaMetadata,
   resolveRouteSeoPolicy,
+  isEpisodeSeoIndexable,
   DEFAULT_TITLE,
   DEFAULT_DESC,
   DEFAULT_KEYWORDS,
@@ -98,6 +101,7 @@ export type SeoRouteType =
   | 'person'
   | 'tags'
   | 'tag_detail'
+  | 'genre'
   | 'platform'
   | 'az'
   | 'random'
@@ -114,6 +118,11 @@ export interface ParsedSeoRoute {
   season?: number;
   episode?: number;
   tag?: string;
+  tagSlug?: string;
+  tagQuery?: string;
+  isTagAlias?: boolean;
+  genre?: GenreLandingMeta;
+  isGenreAlias?: boolean;
   platform?: string;
   isPlatformAlias?: boolean;
   letter?: string;
@@ -167,15 +176,23 @@ export function getAllCatalogMedia(): any[] {
  */
 export function getMatchingCatalogForTag(rawTag: string): any[] {
   if (!rawTag) return [];
-  const tag = rawTag.toLowerCase().trim().replace(/^#/, '');
-  if (!tag) return [];
+  const tagPhrase = slugToTag(rawTag).toLowerCase().trim();
+  const tagSlug = tagToSlug(rawTag);
+  if (!tagPhrase && !tagSlug) return [];
   const allMedia = getAllCatalogMedia();
 
   return allMedia.filter(item => {
     if (Array.isArray(item.keywords)) {
       for (const kw of item.keywords) {
-        const kwName = (typeof kw === 'string' ? kw : kw?.name || '').toLowerCase();
-        if (kwName && (kwName === tag || kwName.includes(tag) || tag.includes(kwName))) {
+        const kwName = (typeof kw === 'string' ? kw : kw?.name || '').toLowerCase().trim();
+        const kwSlug = tagToSlug(kwName);
+        if (
+          kwName &&
+          (kwName === tagPhrase ||
+            kwSlug === tagSlug ||
+            kwName.includes(tagPhrase) ||
+            tagPhrase.includes(kwName))
+        ) {
           return true;
         }
       }
@@ -183,7 +200,7 @@ export function getMatchingCatalogForTag(rawTag: string): any[] {
 
     const title = (item.title || item.name || '').toLowerCase();
     const overview = (item.overview || '').toLowerCase();
-    if (title.includes(tag) || overview.includes(tag)) {
+    if ((tagPhrase && (title.includes(tagPhrase) || overview.includes(tagPhrase)))) {
       return true;
     }
 
@@ -191,9 +208,9 @@ export function getMatchingCatalogForTag(rawTag: string): any[] {
       for (const g of item.genres) {
         const gName = (typeof g === 'string' ? g : g?.name || '').toLowerCase();
         if (
-          gName === tag ||
-          (tag === 'magic' && gName === 'fantasy') ||
-          (tag === 'superhero' && gName === 'action')
+          gName === tagPhrase ||
+          (tagPhrase === 'magic' && gName === 'fantasy') ||
+          (tagPhrase === 'superhero' && gName === 'action')
         ) {
           return true;
         }
@@ -350,21 +367,44 @@ export function parseSeoRoute(pathname: string): ParsedSeoRoute | null {
     return { type: 'notfound', isMatched: false };
   }
 
-  // 7. /tags and /tags/:tag
+  // 7. /tags and /tags/:tag (canonical kebab-case slugs; legacy /tag/* & unnormalized spaces flagged as aliases)
   if (parts[0] === 'tags' || parts[0] === 'tag') {
     if (parts.length === 1) {
       return { type: 'tags', isMatched: true };
     }
     if (parts.length === 2 && parts[1]) {
-      try {
-        const tag = decodeURIComponent(parts[1]).toLowerCase().replace(/^#/, '').trim();
-        if (!tag || tag.length > 60 || /[<>]/.test(tag)) {
-          return { type: 'notfound', isMatched: false };
-        }
-        return { type: 'tag_detail', isMatched: true, tag };
-      } catch {
+      if (!isValidTagSlug(parts[1])) {
         return { type: 'notfound', isMatched: false };
       }
+      const tagSlug = tagToSlug(parts[1]);
+      const tagQuery = slugToTag(parts[1]);
+      if (!tagSlug || !tagQuery) {
+        return { type: 'notfound', isMatched: false };
+      }
+      const isTagAlias = parts[0] === 'tag' || parts[1] !== tagSlug;
+      return {
+        type: 'tag_detail',
+        isMatched: true,
+        tag: tagSlug,
+        tagSlug,
+        tagQuery,
+        isTagAlias
+      };
+    }
+    return { type: 'notfound', isMatched: false };
+  }
+
+  // 7B. /genre/:slug
+  if (parts[0] === 'genre' && parts.length === 2 && parts[1]) {
+    const genre = slugToGenre(parts[1]);
+    if (genre) {
+      const isGenreAlias = parts[1].toLowerCase() !== genre.slug;
+      return {
+        type: 'genre',
+        isMatched: true,
+        genre,
+        isGenreAlias
+      };
     }
     return { type: 'notfound', isMatched: false };
   }
@@ -564,11 +604,12 @@ export class LruTtlCache<T> {
 }
 
 const serverMediaCache = new LruTtlCache<any>(400, 15 * 60 * 1000, 6 * 60 * 60 * 1000);
-const serverEpisodeCache = new LruTtlCache<any>(400, 15 * 60 * 1000, 6 * 60 * 60 * 1000);
-const serverTagCache = new LruTtlCache<{ valid: boolean; items: any[] }>(250, 10 * 60 * 1000, 2 * 60 * 60 * 1000);
+const serverEpisodeCache = new LruTtlCache<ServerEpisodeResult>(400, 15 * 60 * 1000, 6 * 60 * 60 * 1000);
+const serverTagCache = new LruTtlCache<{ valid: boolean; items: any[]; tagSlug: string; tagQuery: string }>(250, 10 * 60 * 1000, 2 * 60 * 60 * 1000);
 const serverPersonCache = new LruTtlCache<any>(250, 15 * 60 * 1000, 6 * 60 * 60 * 1000);
 const serverCatalogCache = new LruTtlCache<{ items: any[]; totalPages: number }>(250, 5 * 60 * 1000, 60 * 60 * 1000);
-const serverPlatformCache = new LruTtlCache<{ items: any[]; totalPages: number }>(250, 5 * 60 * 1000, 60 * 60 * 1000);
+const serverPlatformCache = new LruTtlCache<{ items: any[]; totalPages: number; watchRegion: string; source: 'live' | 'offline' }>(250, 5 * 60 * 1000, 60 * 60 * 1000);
+const serverGenreCache = new LruTtlCache<{ items: any[]; totalPages: number; source: 'live' | 'offline' }>(250, 5 * 60 * 1000, 60 * 60 * 1000);
 const inFlightLookups = new Map<string, Promise<any>>();
 
 export function clearSeoPluginCaches(): void {
@@ -578,6 +619,7 @@ export function clearSeoPluginCaches(): void {
   serverPersonCache.clear();
   serverCatalogCache.clear();
   serverPlatformCache.clear();
+  serverGenreCache.clear();
   inFlightLookups.clear();
 }
 
@@ -773,10 +815,22 @@ export async function fetchServerMedia(
   });
 }
 
+export interface ServerEpisodeResult {
+  name: string;
+  hasGenuineName: boolean;
+  overview: string;
+  airDate?: string;
+  voteAverage?: number;
+  voteCount?: number;
+  isVerified: boolean;
+}
+
 /**
  * Validates and fetches metadata for a specific TV episode.
- * Returns null if the season or episode does not exist (triggering HTTP 404).
- * Throws 503 on upstream timeout/429/5xx without usable local season data.
+ * - Returns null if the season or episode is provably invalid/nonexistent (triggering HTTP 404).
+ * - NEVER fabricates fake episode titles/overviews on TMDB failures or blindly assumes `episode <= 25`.
+ * - NEVER copies parent series overview into episode overview.
+ * - Throws 503 on transient upstream failure when no verified local/cached episode exists.
  */
 export async function fetchServerEpisode(
   show: any,
@@ -784,7 +838,7 @@ export async function fetchServerEpisode(
   episode: number,
   fetchImpl: typeof fetch = fetch,
   tmdbApiKey: string = getServerTmdbApiKey()
-): Promise<{ name: string; overview?: string; airDate?: string } | null> {
+): Promise<ServerEpisodeResult | null> {
   if (!show || !Number.isInteger(season) || !Number.isInteger(episode) || season < 1 || episode < 1) {
     return null;
   }
@@ -793,6 +847,7 @@ export async function fetchServerEpisode(
     return null;
   }
 
+  const showOverview = (show.overview || '').trim();
   const seasonObj = Array.isArray(show.seasons)
     ? show.seasons.find((s: any) => s.seasonNumber === season)
     : undefined;
@@ -800,10 +855,20 @@ export async function fetchServerEpisode(
   if (seasonObj?.episodes && Array.isArray(seasonObj.episodes)) {
     const exactEp = seasonObj.episodes.find((e: any) => e.episodeNumber === episode);
     if (exactEp) {
+      const rawName = (exactEp.name || '').trim();
+      const rawOverview = (exactEp.overview || '').trim();
+      const uniqueOverview =
+        rawOverview && (!showOverview || rawOverview.toLowerCase() !== showOverview.toLowerCase())
+          ? rawOverview
+          : '';
       return {
-        name: exactEp.name || `Episode ${episode}`,
-        overview: exactEp.overview || show.overview || '',
-        airDate: exactEp.airDate || seasonObj.airDate || ''
+        name: rawName || `Episode ${episode}`,
+        hasGenuineName: Boolean(rawName && !/^episode\s+\d+$/i.test(rawName)),
+        overview: uniqueOverview,
+        airDate: exactEp.airDate || seasonObj.airDate || '',
+        voteAverage: exactEp.voteAverage && exactEp.voteAverage > 0 ? Number(exactEp.voteAverage) : undefined,
+        voteCount: (exactEp as any).voteCount && (exactEp as any).voteCount > 0 ? Number((exactEp as any).voteCount) : undefined,
+        isVerified: true
       };
     }
   }
@@ -837,59 +902,63 @@ export async function fetchServerEpisode(
             const stale = serverEpisodeCache.getStale(cacheKey);
             if (stale) return stale;
           }
-          if (seasonObj && episode <= (seasonObj.episodeCount || 1)) {
-            return {
-              name: `Episode ${episode}`,
-              overview: show.overview || '',
-              airDate: seasonObj.airDate || ''
-            };
-          }
           throw make503Error(`TMDB episode lookup returned HTTP ${res.status}`);
         }
-        if (res.ok) {
-          const epJson = await res.json();
-          const data = {
-            name: epJson.name || `Episode ${episode}`,
-            overview: epJson.overview || show.overview || '',
-            airDate: epJson.air_date || ''
-          };
-          if (useCache) serverEpisodeCache.set(cacheKey, data);
-          return data;
+        if (!res.ok) {
+          // Non-transient error (e.g. 401 test key): only allow thin unverified playback within known verified season bounds
+          if (seasonObj?.episodeCount && episode <= seasonObj.episodeCount) {
+            return {
+              name: `Episode ${episode}`,
+              hasGenuineName: false,
+              overview: '',
+              airDate: seasonObj.airDate || '',
+              isVerified: false
+            };
+          }
+          return null;
         }
+
+        const epJson = await res.json();
+        const rawName = (epJson.name || '').trim();
+        const rawOverview = (epJson.overview || '').trim();
+        const uniqueOverview =
+          rawOverview && (!showOverview || rawOverview.toLowerCase() !== showOverview.toLowerCase())
+            ? rawOverview
+            : '';
+
+        const data: ServerEpisodeResult = {
+          name: rawName || `Episode ${episode}`,
+          hasGenuineName: Boolean(rawName && !/^episode\s+\d+$/i.test(rawName)),
+          overview: uniqueOverview,
+          airDate: epJson.air_date || '',
+          voteAverage: epJson.vote_average && epJson.vote_average > 0 ? Number(epJson.vote_average) : undefined,
+          voteCount: epJson.vote_count && epJson.vote_count > 0 ? Number(epJson.vote_count) : undefined,
+          isVerified: true
+        };
+        if (useCache) serverEpisodeCache.set(cacheKey, data);
+        return data;
       } catch (err: any) {
         if (useCache) {
           const stale = serverEpisodeCache.getStale(cacheKey);
           if (stale) return stale;
-        }
-        if (seasonObj && episode <= (seasonObj.episodeCount || 1)) {
-          return {
-            name: `Episode ${episode}`,
-            overview: show.overview || '',
-            airDate: seasonObj.airDate || ''
-          };
         }
         if (err?.status === 503) throw err;
         throw make503Error('TMDB episode lookup failed');
       } finally {
         clearTimeout(timeout);
       }
-      return null;
     });
   }
 
-  // Offline local validation when TMDB key is not configured
-  if (seasonObj && episode <= (seasonObj.episodeCount || 1)) {
+  // Offline local validation when TMDB key is not configured:
+  // Allow playback URLs within verified season episodeCount as thin/noindex, NEVER invent episode <= 25 blindly.
+  if (seasonObj?.episodeCount && episode <= seasonObj.episodeCount) {
     return {
       name: `Episode ${episode}`,
-      overview: show.overview || '',
-      airDate: seasonObj.airDate || ''
-    };
-  }
-
-  if (!seasonObj && show.numberOfSeasons && season <= show.numberOfSeasons && episode <= 25) {
-    return {
-      name: `Episode ${episode}`,
-      overview: show.overview || ''
+      hasGenuineName: false,
+      overview: '',
+      airDate: seasonObj.airDate || '',
+      isVerified: false
     };
   }
 
@@ -897,53 +966,61 @@ export async function fetchServerEpisode(
 }
 
 /**
- * Validates a tag and gathers matching items from local catalog and TMDB keywords.
+ * Validates a tag slug/phrase and gathers matching items from local catalog and TMDB keywords.
+ * Queries TMDB using original human-readable tag phrase while keying URLs strictly by kebab slug.
  */
 export async function fetchServerTagMedia(
-  rawTag: string,
+  rawTagOrSlug: string,
   fetchImpl: typeof fetch = fetch,
   tmdbApiKey: string = getServerTmdbApiKey()
-): Promise<{ valid: boolean; items: any[] }> {
-  const cleanTag = (rawTag || '').toLowerCase().trim().replace(/^#/, '');
-  if (!cleanTag || cleanTag.length > 60) {
-    return { valid: false, items: [] };
+): Promise<{ valid: boolean; items: any[]; tagSlug: string; tagQuery: string }> {
+  if (!isValidTagSlug(rawTagOrSlug)) {
+    return { valid: false, items: [], tagSlug: '', tagQuery: '' };
+  }
+
+  const tagSlug = tagToSlug(rawTagOrSlug);
+  const tagQuery = slugToTag(rawTagOrSlug);
+  if (!tagSlug || !tagQuery || tagSlug.length > 60) {
+    return { valid: false, items: [], tagSlug: '', tagQuery: '' };
   }
 
   const useCache = fetchImpl === fetch;
   if (useCache) {
-    const fresh = serverTagCache.getFresh(cleanTag);
+    const fresh = serverTagCache.getFresh(tagSlug);
     if (fresh) return fresh;
   }
 
-  const localMatches = getMatchingCatalogForTag(cleanTag);
-  const isKnownPopularTag = POPULAR_TAGS.some(t => t.name.toLowerCase() === cleanTag);
+  const localMatches = getMatchingCatalogForTag(tagQuery);
+  const isKnownPopularTag = isPopularTag(tagSlug) || POPULAR_TAGS.some(t => tagToSlug(t.name) === tagSlug);
 
   const effectiveKey = tmdbApiKey || (fetchImpl !== fetch ? 'test-key' : '');
   if (!effectiveKey) {
     const result = {
       valid: isKnownPopularTag || localMatches.length > 0,
-      items: localMatches
+      items: localMatches,
+      tagSlug,
+      tagQuery
     };
-    if (useCache) serverTagCache.set(cleanTag, result);
+    if (useCache) serverTagCache.set(tagSlug, result);
     return result;
   }
 
-  return coalesceLookup(`tag:${cleanTag}`, useCache, async () => {
+  return coalesceLookup(`tag:${tagSlug}`, useCache, async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500);
     try {
       const kwRes = await fetchImpl(
-        `${TMDB_BASE_URL}/search/keyword?api_key=${effectiveKey}&query=${encodeURIComponent(cleanTag)}&page=1`,
+        `${TMDB_BASE_URL}/search/keyword?api_key=${effectiveKey}&query=${encodeURIComponent(tagQuery)}&page=1`,
         { signal: controller.signal }
       );
 
       if (kwRes.status === 429 || kwRes.status >= 500) {
         if (useCache) {
-          const stale = serverTagCache.getStale(cleanTag);
+          const stale = serverTagCache.getStale(tagSlug);
           if (stale) return stale;
         }
         if (localMatches.length > 0 || isKnownPopularTag) {
-          return { valid: true, items: localMatches };
+          return { valid: true, items: localMatches, tagSlug, tagQuery };
         }
         throw make503Error(`TMDB keyword lookup failed with HTTP ${kwRes.status}`);
       }
@@ -952,8 +1029,10 @@ export async function fetchServerTagMedia(
         const kwData = await kwRes.json();
         const keywords = Array.isArray(kwData?.results) ? kwData.results : [];
         const exactKw =
-          keywords.find((k: any) => String(k.name || '').toLowerCase() === cleanTag) ||
-          keywords[0];
+          keywords.find((k: any) => {
+            const kName = String(k.name || '').toLowerCase().trim();
+            return kName === tagQuery || tagToSlug(kName) === tagSlug;
+          }) || keywords[0];
 
         if (exactKw && exactKw.id) {
           const [movRes, tvRes] = await Promise.all([
@@ -1003,25 +1082,27 @@ export async function fetchServerTagMedia(
             }
           }
 
-          const result = { valid: true, items: Array.from(mergedMap.values()) };
-          if (useCache) serverTagCache.set(cleanTag, result);
+          const result = { valid: true, items: Array.from(mergedMap.values()), tagSlug, tagQuery };
+          if (useCache) serverTagCache.set(tagSlug, result);
           return result;
         }
       }
 
       const fallback = {
         valid: isKnownPopularTag || localMatches.length > 0,
-        items: localMatches
+        items: localMatches,
+        tagSlug,
+        tagQuery
       };
-      if (useCache) serverTagCache.set(cleanTag, fallback);
+      if (useCache) serverTagCache.set(tagSlug, fallback);
       return fallback;
     } catch (err: any) {
       if (useCache) {
-        const stale = serverTagCache.getStale(cleanTag);
+        const stale = serverTagCache.getStale(tagSlug);
         if (stale) return stale;
       }
       if (localMatches.length > 0 || isKnownPopularTag) {
-        return { valid: true, items: localMatches };
+        return { valid: true, items: localMatches, tagSlug, tagQuery };
       }
       if (err?.status === 503) throw err;
       throw make503Error('TMDB tag discovery unavailable');
@@ -1041,7 +1122,7 @@ function normalizeServerTmdbListItem(r: any, forcedType?: 'movie' | 'tv') {
     name: title,
     releaseDate: r.release_date || r.first_air_date || '',
     firstAirDate: mType === 'tv' ? r.first_air_date || '' : undefined,
-    voteAverage: Number(r.vote_average || 0),
+    voteAverage: Number(Number(r.vote_average || 0).toFixed(1)),
     voteCount: Number(r.vote_count || 0),
     popularity: Number(r.popularity || 0),
     posterPath: r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : ''
@@ -1170,6 +1251,148 @@ export async function fetchServerPlatformMedia(
 }
 
 /**
+ * Fetches genuine genre-specific movies & TV series using TMDB genre discovery
+ * with verified local catalog matching when TMDB is unconfigured or rejects auth.
+ */
+export async function fetchServerGenreMedia(
+  genre: GenreLandingMeta,
+  page = 1,
+  fetchImpl: typeof fetch = fetch,
+  tmdbApiKey: string = getServerTmdbApiKey()
+): Promise<{ items: any[]; totalPages: number; source: 'live' | 'offline' }> {
+  const localPool = sortNormalizedMedia(
+    getAllCatalogMedia().filter(item => itemMatchesGenre(item, genre)),
+    'popularity.desc'
+  );
+  const useCache = fetchImpl === fetch;
+  const cacheKey = `genre:${genre.slug}:p=${page}`;
+
+  if (useCache) {
+    const fresh = serverGenreCache.getFresh(cacheKey);
+    if (fresh) return fresh;
+  }
+
+  const effectiveKey = tmdbApiKey || (fetchImpl !== fetch ? 'test-key' : '');
+  if (!effectiveKey) {
+    const totalPages = Math.max(1, Math.ceil(localPool.length / PAGE_SIZE));
+    const start = (page - 1) * PAGE_SIZE;
+    const result = {
+      items: start >= localPool.length ? [] : localPool.slice(start, start + PAGE_SIZE),
+      totalPages,
+      source: 'offline' as const
+    };
+    if (useCache) serverGenreCache.set(cacheKey, result);
+    return result;
+  }
+
+  return coalesceLookup(cacheKey, useCache, async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+      const movId = genre.tmdbMovieGenreId;
+      const tvId = genre.tmdbTvGenreId;
+
+      const [movRes, tvRes] = await Promise.all([
+        movId
+          ? fetchImpl(
+              `${TMDB_BASE_URL}/discover/movie?api_key=${effectiveKey}&with_genres=${movId}&sort_by=popularity.desc&page=${page}&include_adult=false`,
+              { signal: controller.signal }
+            )
+          : Promise.resolve(null),
+        tvId
+          ? fetchImpl(
+              `${TMDB_BASE_URL}/discover/tv?api_key=${effectiveKey}&with_genres=${tvId}&sort_by=popularity.desc&page=${page}&include_adult=false`,
+              { signal: controller.signal }
+            )
+          : Promise.resolve(null)
+      ]);
+
+      const movTransient = Boolean(movRes && (movRes.status === 429 || movRes.status >= 500));
+      const tvTransient = Boolean(tvRes && (tvRes.status === 429 || tvRes.status >= 500));
+      const movFailed = !movRes || !movRes.ok;
+      const tvFailed = !tvRes || !tvRes.ok;
+
+      if (movFailed && tvFailed) {
+        if (useCache) {
+          const stale = serverGenreCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
+        if ((movTransient || tvTransient) && localPool.length === 0) {
+          throw make503Error(`TMDB genre discovery unavailable for ${genre.slug}`);
+        }
+        const totalPages = Math.max(1, Math.ceil(localPool.length / PAGE_SIZE));
+        const start = (page - 1) * PAGE_SIZE;
+        return {
+          items: start >= localPool.length ? [] : localPool.slice(start, start + PAGE_SIZE),
+          totalPages,
+          source: 'offline' as const
+        };
+      }
+
+      const merged = new Map<string, any>();
+      let maxTotalPages = 1;
+
+      if (movRes && movRes.ok) {
+        const movJson = await movRes.json();
+        maxTotalPages = Math.max(maxTotalPages, Math.min(Number(movJson.total_pages || 1), 500));
+        for (const r of movJson.results || []) {
+          if (r?.id && (r.title || r.name)) {
+            merged.set(`movie:${r.id}`, normalizeServerTmdbListItem(r, 'movie'));
+          }
+        }
+      }
+
+      if (tvRes && tvRes.ok) {
+        const tvJson = await tvRes.json();
+        maxTotalPages = Math.max(maxTotalPages, Math.min(Number(tvJson.total_pages || 1), 500));
+        for (const r of tvJson.results || []) {
+          if (r?.id && (r.name || r.title)) {
+            merged.set(`tv:${r.id}`, normalizeServerTmdbListItem(r, 'tv'));
+          }
+        }
+      }
+
+      const items = sortNormalizedMedia(Array.from(merged.values()), 'popularity.desc').slice(0, PAGE_SIZE);
+      const result = {
+        items,
+        totalPages: items.length === 0 && page === 1 ? 1 : maxTotalPages,
+        source: 'live' as const
+      };
+      if (useCache) serverGenreCache.set(cacheKey, result);
+      return result;
+    } catch (err: any) {
+      if (useCache) {
+        const stale = serverGenreCache.getStale(cacheKey);
+        if (stale) return stale;
+      }
+      if (err?.status === 503) throw err;
+      throw make503Error(`TMDB genre discovery unavailable for ${genre.slug}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+}
+
+function buildBalancedOfflineTopRatedPool(all: any[]): any[] {
+  const byRating = (a: any, b: any) => {
+    const diffAvg = (b.voteAverage || 0) - (a.voteAverage || 0);
+    if (diffAvg !== 0) return diffAvg;
+    const diffCount = (b.voteCount || 0) - (a.voteCount || 0);
+    if (diffCount !== 0) return diffCount;
+    return (a.id || 0) - (b.id || 0);
+  };
+  const movies = all.filter(i => i.mediaType === 'movie').sort(byRating);
+  const tvs = all.filter(i => i.mediaType === 'tv').sort(byRating);
+  const interleaved: any[] = [];
+  const maxLen = Math.max(movies.length, tvs.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < movies.length) interleaved.push(movies[i]);
+    if (i < tvs.length) interleaved.push(tvs[i]);
+  }
+  return interleaved;
+}
+
+/**
  * Genuine server-side catalog pagination for /movies, /tv-shows, /trending, /top-rated.
  */
 export async function fetchServerCatalogPage(
@@ -1182,15 +1405,7 @@ export async function fetchServerCatalogPage(
     const all = getAllCatalogMedia();
     if (routeType === 'movies') return all.filter(i => i.mediaType === 'movie');
     if (routeType === 'tv-shows') return all.filter(i => i.mediaType === 'tv');
-    if (routeType === 'top-rated') {
-      return [...all].sort((a, b) => {
-        const diffAvg = (b.voteAverage || 0) - (a.voteAverage || 0);
-        if (diffAvg !== 0) return diffAvg;
-        const diffCount = (b.voteCount || 0) - (a.voteCount || 0);
-        if (diffCount !== 0) return diffCount;
-        return (a.id || 0) - (b.id || 0);
-      });
-    }
+    if (routeType === 'top-rated') return buildBalancedOfflineTopRatedPool(all);
     return all;
   };
 
@@ -1239,13 +1454,19 @@ export async function fetchServerCatalogPage(
         const allMovFailed = movResList.every(r => !r.ok);
         const allTvFailed = tvResList.every(r => !r.ok);
 
-        if ((allMovFailed && anyMovTransient) && (allTvFailed && anyTvTransient)) {
+        if (allMovFailed && allTvFailed) {
           if (useCache) {
             const stale = serverCatalogCache.getStale(cacheKey);
             if (stale) return stale;
           }
           const totalPagesOffline = Math.max(1, Math.ceil(offlinePool.length / PAGE_SIZE));
           const startOffline = (page - 1) * PAGE_SIZE;
+          if (!anyMovTransient && !anyTvTransient) {
+            return {
+              items: startOffline >= offlinePool.length ? [] : offlinePool.slice(startOffline, startOffline + PAGE_SIZE),
+              totalPages: totalPagesOffline
+            };
+          }
           if (page <= totalPagesOffline && offlinePool.length > 0) {
             return { items: offlinePool.slice(startOffline, startOffline + PAGE_SIZE), totalPages: totalPagesOffline };
           }
@@ -1609,7 +1830,7 @@ export async function renderSeoResult(
     }
 
     // Validate TV season & episode when watching a specific TV episode
-    let episodeData: { name: string; overview?: string; airDate?: string } | null = null;
+    let episodeData: ServerEpisodeResult | null = null;
     if (route.type === 'watch_tv' && route.season !== undefined && route.episode !== undefined) {
       try {
         episodeData = await fetchServerEpisode(media, route.season, route.episode, fetchImpl, tmdbApiKey);
@@ -1633,12 +1854,28 @@ export async function renderSeoResult(
       }
     }
 
+    const isEpisodeIndexed =
+      route.type === 'watch_tv'
+        ? route.season !== undefined &&
+          route.episode !== undefined &&
+          Boolean(episodeData) &&
+          isEpisodeSeoIndexable({
+            episodeName: episodeData?.hasGenuineName ? episodeData.name : '',
+            episodeOverview: episodeData?.overview,
+            seriesOverview: media.overview,
+            isVerifiedEpisode: episodeData?.isVerified
+          }) &&
+          !policy.noindex
+        : !policy.noindex;
+
     const meta = buildMediaMetadata(media, {
       season: route.season,
       episode: route.episode,
       episodeName: episodeData?.name,
       episodeOverview: episodeData?.overview,
       episodeAirDate: episodeData?.airDate,
+      episodeVoteAverage: episodeData?.voteAverage,
+      episodeVoteCount: episodeData?.voteCount,
       isWatching: route.isWatchRoute
     });
 
@@ -1647,7 +1884,14 @@ export async function renderSeoResult(
     result = setMetaTag(result, 'name', 'description', meta.description);
     result = setMetaTag(result, 'name', 'keywords', meta.keywords);
     result = setCanonical(result, meta.canonicalUrl);
-    result = setMetaTag(result, 'name', 'robots', 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1');
+    result = setMetaTag(
+      result,
+      'name',
+      'robots',
+      isEpisodeIndexed
+        ? 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1'
+        : 'noindex, follow'
+    );
 
     result = setMetaTag(result, 'property', 'og:title', meta.title);
     result = setMetaTag(result, 'property', 'og:description', meta.description);
@@ -1711,8 +1955,8 @@ export async function renderSeoResult(
     } else if (route.type === 'watch_tv') {
       const sNum = route.season || 1;
       const eNum = route.episode || 1;
-      const epTitle = episodeData?.name && !/^episode\s+\d+$/i.test(episodeData.name) ? ` — ${episodeData.name}` : '';
-      const epOverview = episodeData?.overview || media.overview || '';
+      const epTitle = episodeData?.hasGenuineName ? ` — ${episodeData.name}` : '';
+      const epOverview = (episodeData?.overview || '').trim();
       semanticHtml = `
         <main class="min-h-screen bg-[#232326] text-[#F3F3F3] p-4 sm:p-8" id="seo-prerender">
           <nav aria-label="Breadcrumb" class="text-xs text-zinc-400 mb-4 max-w-5xl mx-auto">
@@ -1726,10 +1970,10 @@ export async function renderSeoResult(
               <h1 class="text-3xl sm:text-4xl font-extrabold text-white mb-2">Watch ${escapeHtml(media.title)} Season ${sNum} Episode ${eNum}${escapeHtml(epTitle)} Free HD</h1>
               <div class="flex flex-wrap gap-2 text-xs font-semibold text-amber-400">
                 ${genresList.map((g: string) => `<span>${escapeHtml(g)}</span>`).join(' · ')}
-                ${media.voteAverage > 0 ? `<span>★ ${Number(media.voteAverage).toFixed(1)}/10</span>` : ''}
+                ${episodeData?.voteAverage && episodeData.voteAverage > 0 ? `<span>★ ${Number(episodeData.voteAverage).toFixed(1)}/10</span>` : ''}
               </div>
             </header>
-            ${epOverview ? `<section class="mb-6"><h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-1">Episode Synopsis</h2><p class="text-sm sm:text-base text-zinc-300 leading-relaxed">${escapeHtml(epOverview)}</p></section>` : ''}
+            ${epOverview ? `<section class="mb-6"><h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-1">Episode Synopsis</h2><p class="text-sm sm:text-base text-zinc-300 leading-relaxed">${escapeHtml(epOverview)}</p></section>` : `<section class="mb-6"><p class="text-sm sm:text-base text-zinc-300 leading-relaxed">Stream ${escapeHtml(media.title)} Season ${sNum} Episode ${eNum} online in HD with multi-language subtitles on T Stream.</p></section>`}
             <div class="mt-6 pt-4 border-t border-white/10 flex flex-wrap gap-4 text-xs text-zinc-400">
               <a href="/tv/${mediaSlug}" class="text-amber-400 font-semibold hover:underline">← View ${escapeHtml(media.title)} Series Page</a>
               <a href="/tv-shows" class="hover:text-white">Browse All TV Shows</a>
@@ -1771,7 +2015,7 @@ export async function renderSeoResult(
       html: result,
       status: 200,
       canonicalUrl: meta.canonicalUrl,
-      isNoindex: false
+      isNoindex: !isEpisodeIndexed
     };
   }
 
@@ -1845,12 +2089,18 @@ export async function renderSeoResult(
     };
   }
 
-  // 4. Tag Detail Route (/tags/:tag)
-  if (route.type === 'tag_detail' && route.tag) {
-    const cleanTag = route.tag.toLowerCase();
-    let tagLookup: { valid: boolean; items: any[] } = { valid: false, items: [] };
+  // 4. Tag Detail Route (/tags/:slug)
+  if (route.type === 'tag_detail' && route.tagSlug && route.tagQuery) {
+    const tagSlug = route.tagSlug;
+    const tagQuery = route.tagQuery;
+    let tagLookup: { valid: boolean; items: any[]; tagSlug: string; tagQuery: string } = {
+      valid: false,
+      items: [],
+      tagSlug,
+      tagQuery
+    };
     try {
-      tagLookup = await fetchServerTagMedia(cleanTag, fetchImpl, tmdbApiKey);
+      tagLookup = await fetchServerTagMedia(tagSlug, fetchImpl, tmdbApiKey);
     } catch (err: any) {
       if (err?.status === 503) {
         return {
@@ -1878,23 +2128,27 @@ export async function renderSeoResult(
     const startIdx = (requestedPage - 1) * PAGE_SIZE;
     const pagedItems = isOutOfRange ? [] : allMatchingItems.slice(startIdx, startIdx + PAGE_SIZE);
     const isEmptyTag = allMatchingItems.length === 0;
-    const isNoindex = isEmptyTag || isOutOfRange || policy.noindex;
-    const baseTagCanonical = `${PRIMARY_ORIGIN}/tags/${encodeURIComponent(cleanTag)}`;
-    const pageCanonical = isNoindex ? baseTagCanonical : policy.canonicalUrl;
+    const isNoindex = isEmptyTag || isOutOfRange || policy.noindex || Boolean(route.isTagAlias);
+    const baseTagCanonical = `${PRIMARY_ORIGIN}/tags/${tagSlug}`;
+    const pageCanonical = isNoindex
+      ? baseTagCanonical
+      : requestedPage > 1
+      ? `${baseTagCanonical}?page=${requestedPage}`
+      : baseTagCanonical;
     const pageSuffix = !isNoindex && requestedPage > 1 ? ` — Page ${requestedPage}` : '';
 
     const pageTitle = isEmptyTag
-      ? `Movies Tagged #${cleanTag} — T Stream`
-      : `Movies & TV Shows Tagged #${cleanTag} — Watch Online Free${pageSuffix} — T Stream`;
+      ? `Movies Tagged #${tagQuery} — T Stream`
+      : `Movies & TV Shows Tagged #${tagQuery} — Watch Online Free${pageSuffix} — T Stream`;
     const pageDesc = isEmptyTag
-      ? `Browse titles tagged #${cleanTag} on T Stream.`
-      : `Discover top rated and popular movies and TV series tagged with #${cleanTag}. Stream free in 4K and 1080p HD with subtitles on T Stream.`;
-    const h1Heading = `Movies & Shows Tagged #${cleanTag}`;
+      ? `Browse titles tagged #${tagQuery} on T Stream.`
+      : `Discover top rated and popular movies and TV series tagged with #${tagQuery}. Stream free in 4K and 1080p HD with subtitles on T Stream.`;
+    const h1Heading = `Movies & Shows Tagged #${tagQuery}`;
 
     result = setTitle(result, pageTitle);
     result = setMetaTag(result, 'name', 'title', pageTitle);
     result = setMetaTag(result, 'name', 'description', pageDesc);
-    result = setMetaTag(result, 'name', 'keywords', normalizeKeywords([cleanTag, `${cleanTag} movies`, `${cleanTag} series`, 'T Stream', DEFAULT_KEYWORDS]));
+    result = setMetaTag(result, 'name', 'keywords', normalizeKeywords([tagQuery, `${tagQuery} movies`, `${tagQuery} series`, 'T Stream', DEFAULT_KEYWORDS]));
     result = setCanonical(result, pageCanonical);
     result = setMetaTag(
       result,
@@ -1924,7 +2178,7 @@ export async function renderSeoResult(
         <nav aria-label="Breadcrumb" class="text-xs text-zinc-400 mb-4 max-w-5xl mx-auto">
           <a href="/" class="hover:underline">Home</a> &gt;
           <a href="/tags" class="hover:underline">Tags</a> &gt;
-          <span class="text-white">#${escapeHtml(cleanTag)}</span>
+          <span class="text-white">#${escapeHtml(tagQuery)}</span>
         </nav>
         <header class="max-w-5xl mx-auto mb-6">
           <h1 class="text-3xl sm:text-4xl font-extrabold text-white mb-2">${escapeHtml(h1Heading)}</h1>
@@ -1932,12 +2186,12 @@ export async function renderSeoResult(
         </header>
         ${renderMediaCardsGrid(
           pagedItems,
-          `Titles Tagged #${cleanTag}`,
+          `Titles Tagged #${tagQuery}`,
           isOutOfRange
-            ? `Page ${requestedPage} exceeds the available catalog range for #${cleanTag}.`
-            : `No titles currently indexed for tag #${cleanTag}.`
+            ? `Page ${requestedPage} exceeds the available catalog range for #${tagQuery}.`
+            : `No titles currently indexed for tag #${tagQuery}.`
         )}
-        ${renderPaginationNav(`/tags/${encodeURIComponent(cleanTag)}`, requestedPage, totalPages)}
+        ${renderPaginationNav(`/tags/${tagSlug}`, requestedPage, totalPages)}
         <section class="max-w-5xl mx-auto pt-6 border-t border-white/10 flex flex-wrap gap-4 text-xs text-zinc-400">
           <a href="/tags" class="hover:text-white">All Tags</a>
           <a href="/movies" class="hover:text-white">Movies</a>
@@ -2077,10 +2331,47 @@ export async function renderSeoResult(
       <section class="max-w-5xl mx-auto my-6">
         <h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-3">Popular Story Tags</h2>
         <div class="flex flex-wrap gap-2">
-          ${POPULAR_TAGS.map(t => `<a href="/tags/${encodeURIComponent(t.name)}" class="px-3 py-1 rounded bg-zinc-900 border border-white/10 text-xs text-amber-400 hover:underline">#${escapeHtml(t.name)}</a>`).join('')}
+          ${POPULAR_TAGS.map(t => `<a href="/tags/${tagToSlug(t.name)}" class="px-3 py-1 rounded bg-zinc-900 border border-white/10 text-xs text-amber-400 hover:underline">#${escapeHtml(t.name)}</a>`).join('')}
         </div>
       </section>
     `;
+  } else if (route.type === 'genre' && route.genre) {
+    const genre = route.genre;
+    paginationBasePath = `/genre/${genre.slug}`;
+    let genreRes: { items: any[]; totalPages: number; source: 'live' | 'offline' } = {
+      items: [],
+      totalPages: 1,
+      source: 'offline'
+    };
+    try {
+      genreRes = await fetchServerGenreMedia(genre, currentPage, fetchImpl, tmdbApiKey);
+    } catch (err: any) {
+      if (err?.status === 503) {
+        return {
+          html: render503Html(result),
+          status: 503,
+          canonicalUrl: `${PRIMARY_ORIGIN}/`,
+          isNoindex: true
+        };
+      }
+    }
+
+    matchingItems = genreRes.items;
+    totalPages = genreRes.totalPages;
+    const isEmptyOrOutOfRange = matchingItems.length === 0 || currentPage > totalPages || Boolean(policy.isInvalidPage);
+    isNoindex = isNoindex || isEmptyOrOutOfRange || Boolean(route.isGenreAlias);
+    pageCanonical =
+      isNoindex || currentPage <= 1
+        ? `${PRIMARY_ORIGIN}/genre/${genre.slug}`
+        : `${PRIMARY_ORIGIN}/genre/${genre.slug}?page=${currentPage}`;
+    const activeSuffix = !isNoindex && currentPage > 1 ? ` — Page ${currentPage}` : '';
+    pageTitle = `${genre.name} Movies & TV Shows Free HD${activeSuffix} — T Stream`;
+    pageDesc = genre.description;
+    h1Heading = `Best ${genre.name} Movies & TV Shows Online`;
+    breadcrumbTitle = genre.name;
+    if (matchingItems.length === 0) {
+      emptyStateMessage = `No verified ${genre.name} titles are currently indexed for page ${currentPage}. Explore Movies or TV Shows for more titles.`;
+    }
   } else if (route.type === 'platform' && route.platform) {
     const platConfig = getPlatformConfigById(route.platform);
     if (!platConfig) {

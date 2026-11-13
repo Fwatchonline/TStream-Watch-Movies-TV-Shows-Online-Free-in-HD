@@ -14,14 +14,30 @@ import {
   buildMediaMetadata,
   buildCanonicalUrl,
   resolveRouteSeoPolicy,
+  isEpisodeSeoIndexable,
   DEFAULT_KEYWORDS
 } from '../../utils/seo';
+import {
+  tagToSlug,
+  slugToTag,
+  isValidTagSlug,
+  getCanonicalTagUrl
+} from '../../utils/tags';
+import {
+  PRIMARY_GENRE_SLUGS,
+  genreToSlug,
+  slugToGenre,
+  getCanonicalGenreUrl
+} from '../../utils/genres';
+import { POPULAR_TAGS } from '../catalogData';
 import {
   parseSeoRoute,
   renderSeoResult,
   fetchServerTagMedia,
+  fetchServerGenreMedia,
   fetchServerPlatformMedia,
   fetchServerCatalogPage,
+  fetchServerEpisode,
   clearSeoPluginCaches,
   LruTtlCache
 } from '../../../scripts/seoHtmlPlugin';
@@ -29,6 +45,12 @@ import {
   prerenderAndValidateRoute,
   loadDistTemplateOrFail
 } from '../../../scripts/prerender';
+import {
+  getTagInventory,
+  getMovieInventory,
+  getVerifiedEpisodeInventory
+} from '../../../scripts/routeInventory';
+import { generateSitemaps, validateSitemapXml } from '../../../scripts/generate-sitemaps';
 import { validateBuildArgs, verifyNoLeakedSecretsInDist } from '../../../scripts/run-build.mjs';
 import { loadBuildEnv } from '../../../scripts/loadEnv.mjs';
 import { getPlatformConfigById } from '../platformConfig';
@@ -37,7 +59,7 @@ import {
   computeBalancedTopRatedPlan,
   mergeBalancedTopRatedSlices
 } from '../platformDiscovery';
-import { fetchCatalog } from '../tmdb';
+import { fetchCatalog, fetchByTag } from '../tmdb';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -525,10 +547,267 @@ async function runTests() {
   }
   assert(platThrew503, 'Task 3: Platform outage raises HTTP 503 instead of empty fabricated catalog');
 
-  console.log('\n--- ALL PHASE 3 & PHASE 4 SEO, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
+  // =======================================================================
+  // FINAL TECHNICAL SEO REPAIR: TAGS, GENRES, LASTMOD, EPISODES & INVENTORY
+  // =======================================================================
+
+  // 1. Tag Slug & Prerender Parity across ALL 12 POPULAR_TAGS
+  const tagInventory = getTagInventory();
+  assert(POPULAR_TAGS.length === 12, `POPULAR_TAGS has 12 entries (got ${POPULAR_TAGS.length})`);
+  for (const tag of POPULAR_TAGS) {
+    const slug = tagToSlug(tag.name);
+    const display = slugToTag(slug);
+    const inv = tagInventory.find(t => t.tagSlug === slug);
+    const tagRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, `/tags/${slug}`);
+    assert(
+      isValidTagSlug(slug) &&
+        display === tag.name.toLowerCase().trim() &&
+        getCanonicalTagUrl(tag.name) === `https://tstream.online/tags/${slug}` &&
+        Boolean(inv && inv.outputFileRel === `tags/${slug}/index.html`) &&
+        tagRes.status === 200 &&
+        !tagRes.isNoindex &&
+        tagRes.canonicalUrl === `https://tstream.online/tags/${slug}`,
+      `Tag parity verified for "${tag.name}" -> /tags/${slug} & dist/${inv?.outputFileRel}`
+    );
+  }
+
+  // Multiword tag TMDB keyword lookup uses spaces ("time travel", "based on novel or book", "coming of age", "school friend", "based on comic book")
+  for (const multiTag of ['time travel', 'based on novel or book', 'coming of age', 'school friend', 'based on comic book']) {
+    const slug = tagToSlug(multiTag);
+    let capturedQueryUrl = '';
+    const mockKwFetch = (async (input: string | URL | Request) => {
+      const u = String(input);
+      if (u.includes('/search/keyword')) {
+        capturedQueryUrl = u;
+        return new Response(JSON.stringify({ results: [{ id: 4379, name: multiTag }] }), { status: 200 });
+      }
+      if (u.includes('/discover/movie')) {
+        return new Response(
+          JSON.stringify({ results: [{ id: 105, title: 'Back to the Future', release_date: '1985-07-03', vote_average: 8.3 }] }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    }) as typeof fetch;
+
+    const srvTag = await fetchServerTagMedia(slug, mockKwFetch, 'test-key');
+    const cliTag = await fetchByTag(slug, 1, mockKwFetch);
+    const decodedQuery = new URL(capturedQueryUrl).searchParams.get('query');
+    assert(
+      srvTag.valid &&
+        srvTag.tagSlug === slug &&
+        decodedQuery === multiTag &&
+        srvTag.items.some(i => i.id === 105) &&
+        cliTag.results.some(r => r.id === 105),
+      `Multiword tag /tags/${slug} queries TMDB keyword "${decodedQuery}" cleanly`
+    );
+  }
+
+  // Legacy /tag/* & non-kebab /tags/time%20travel -> noindex pointing to kebab canonical
+  const singularTagRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/tag/revenge');
+  const encodedSpaceTagRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/tags/time%20travel');
+  assert(
+    singularTagRes.status === 200 &&
+      singularTagRes.isNoindex &&
+      singularTagRes.canonicalUrl === 'https://tstream.online/tags/revenge' &&
+      encodedSpaceTagRes.status === 200 &&
+      encodedSpaceTagRes.isNoindex &&
+      encodedSpaceTagRes.canonicalUrl === 'https://tstream.online/tags/time-travel',
+    'Legacy /tag/* and /tags/time%20travel emit noindex with kebab canonical'
+  );
+
+  // 2. Real Genre Landing Pages (/genre/:slug)
+  assert(
+    genreToSlug('sci-fi') === 'science-fiction' &&
+      getCanonicalGenreUrl('action', 2) === 'https://tstream.online/genre/action?page=2' &&
+      PRIMARY_GENRE_SLUGS.length === 12,
+    'Genre utility resolves primary slugs, sci-fi alias, and paginated canonical'
+  );
+
+  const actionGenreRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/genre/action');
+  const sciFiAliasRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/genre/sci-fi');
+  const westernOfflineRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/genre/western');
+  const nonexistentGenreRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/genre/nonexistent-genre');
+  const invalidGenrePageRes = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/genre/action?page=999');
+  assert(
+    actionGenreRes.status === 200 &&
+      !actionGenreRes.isNoindex &&
+      actionGenreRes.canonicalUrl === 'https://tstream.online/genre/action' &&
+      /"@type"\s*:\s*"CollectionPage"/.test(actionGenreRes.html) &&
+      extractCardTitles(actionGenreRes.html).length > 0,
+    '/genre/action renders indexable 200 CollectionPage with matched cards'
+  );
+  assert(
+    sciFiAliasRes.status === 200 &&
+      sciFiAliasRes.isNoindex &&
+      sciFiAliasRes.canonicalUrl === 'https://tstream.online/genre/science-fiction',
+    '/genre/sci-fi alias emits noindex with canonical /genre/science-fiction'
+  );
+  assert(
+    westernOfflineRes.status === 200 &&
+      westernOfflineRes.isNoindex &&
+      extractCardTitles(westernOfflineRes.html).length === 0,
+    'Unpopulated offline /genre/western emits noindex without fabricating unrelated titles'
+  );
+  assert(
+    nonexistentGenreRes.status === 404 && nonexistentGenreRes.isNoindex,
+    'Unknown /genre/nonexistent-genre returns HTTP 404 + noindex'
+  );
+  assert(
+    invalidGenrePageRes.status === 200 &&
+      invalidGenrePageRes.isNoindex &&
+      invalidGenrePageRes.canonicalUrl === 'https://tstream.online/genre/action',
+    'Out-of-range genre page ?page=999 emits noindex with clean /genre/action canonical'
+  );
+
+  // Live mock TMDB genre fetch for /genre/western?page=2
+  const westernMeta = slugToGenre('western')!;
+  const mockWesternFetch = (async (input: string | URL | Request) => {
+    const u = String(input);
+    const pg = new URL(u).searchParams.get('page') || '1';
+    if (u.includes('/discover/movie')) {
+      return new Response(
+        JSON.stringify({
+          results: Array.from({ length: 8 }, (_, idx) => ({
+            id: 9000 + Number(pg) * 20 + idx,
+            title: `Western Film P${pg} #${idx + 1}`,
+            release_date: '2024-10-31',
+            vote_average: 7.4,
+            genre_ids: [37]
+          })),
+          total_pages: 5
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response(JSON.stringify({ results: [], total_pages: 1 }), { status: 200 });
+  }) as typeof fetch;
+  const westernP2 = await fetchServerGenreMedia(westernMeta, 2, mockWesternFetch, 'test-key');
+  assert(
+    westernP2.source === 'live' && westernP2.items.length > 0 && westernP2.items[0].title.includes('P2'),
+    'Live genre pagination fetches TMDB genre IDs for page 2'
+  );
+
+  // 3 & 9. Sitemap Integrity: zero fake <lastmod>, kebab tags, Spider-Man 315635, no /watch/movie/, episodes parity
+  const sitemapDry = await generateSitemaps(true);
+  assert(
+    !/<lastmod>/i.test(sitemapDry.mainXml) &&
+      !/<lastmod>/i.test(sitemapDry.moviesXml) &&
+      !/<lastmod>/i.test(sitemapDry.tvXml) &&
+      (!sitemapDry.episodesXml || !/<lastmod>/i.test(sitemapDry.episodesXml)),
+    'All generated sitemaps omit fake <lastmod> timestamps'
+  );
+  let rejectedFakeLastmod = false;
+  try {
+    validateSitemapXml(
+      '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n<url><loc>https://tstream.online/</loc><lastmod>2026-11-13</lastmod></url>\n</urlset>',
+      'test-lastmod.xml'
+    );
+  } catch {
+    rejectedFakeLastmod = true;
+  }
+  assert(rejectedFakeLastmod, 'validateSitemapXml rejects unverified fake <lastmod> tags');
+  assert(
+    sitemapDry.mainXml.includes('https://tstream.online/tags/time-travel') &&
+      !sitemapDry.mainXml.includes('%20') &&
+      sitemapDry.mainXml.includes('https://tstream.online/genre/action') &&
+      sitemapDry.mainXml.includes('https://tstream.online/genre/horror') &&
+      !sitemapDry.mainXml.includes('https://tstream.online/genre/western') &&
+      sitemapDry.moviesXml.includes('https://tstream.online/movie/spider-man-homecoming-315635') &&
+      !sitemapDry.moviesXml.includes('spider-man-homecoming-28') &&
+      !sitemapDry.moviesXml.includes('/watch/movie/'),
+    'Sitemap output contains kebab tags, populated genres (excluding empty offline genres), Spider-Man 315635, and zero /watch/movie/ duplicates'
+  );
+
+  // Legitimate unrelated movie ID 28 preserved in inventory (non-Homecoming)
+  const movieInventory = getMovieInventory();
+  assert(
+    movieInventory.some(m => m.id === 315635) && !movieInventory.some(m => m.slug.includes('homecoming-28')),
+    'Movie inventory preserves Spider-Man Homecoming 315635 and excludes homecoming-28'
+  );
+
+  // 4 & 5. Quality-Based TV Episode Validation & TVEpisode AggregateRating Isolation
+  const showWithCountNoEp20 = {
+    id: 1396,
+    mediaType: 'tv',
+    name: 'Breaking Bad',
+    overview: 'A high school chemistry teacher turns to cooking meth.',
+    voteAverage: 8.9,
+    voteCount: 13500,
+    numberOfSeasons: 5,
+    seasons: [{ seasonNumber: 1, episodeCount: 7, episodes: [] }]
+  };
+  const invalidEpBeyondCount = await fetchServerEpisode(showWithCountNoEp20, 1, 20, mock404Fetch, 'test-key');
+  assert(
+    invalidEpBeyondCount === null,
+    'fetchServerEpisode returns null (404) when episode exceeds season episodeCount (never fabricates episode <= 25)'
+  );
+
+  let epThrew503 = false;
+  try {
+    await fetchServerEpisode(showWithCountNoEp20, 1, 2, mock503Fetch, 'test-key');
+  } catch (err: any) {
+    epThrew503 = err?.status === 503;
+  }
+  assert(epThrew503, 'fetchServerEpisode throws HTTP 503 on TMDB 429/5xx instead of fabricating episode data');
+
+  // Unverified offline/401 episode within season bounds -> thin/noindex, zero copied series overview, zero parent rating
+  const mock401Fetch = (async () => new Response('{"status_code":7}', { status: 401 })) as typeof fetch;
+  const thinEpRes = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/breaking-bad-1396/1/6',
+    { fetchImpl: mock401Fetch, tmdbApiKey: '' }
+  );
+  assert(
+    thinEpRes.status === 200 &&
+      thinEpRes.isNoindex &&
+      !thinEpRes.html.includes('diagnos') &&
+      !thinEpRes.html.includes('"ratingCount":13500'),
+    'Unverified thin TV episode emits 200 + noindex and does NOT copy parent series overview or rating'
+  );
+
+  // Rich verified episode -> indexable, TVEpisode omits parent rating unless genuine episodeVoteAverage & episodeVoteCount exist
+  const epMetaNoEpRating = buildMediaMetadata(breakingBadTv, {
+    season: 1,
+    episode: 1,
+    episodeName: 'Pilot',
+    episodeOverview: 'Walter White, a struggling high school chemistry teacher, is diagnosed with terminal lung cancer.',
+    isWatching: true
+  });
+  const epMetaWithEpRating = buildMediaMetadata(breakingBadTv, {
+    season: 1,
+    episode: 1,
+    episodeName: 'Pilot',
+    episodeOverview: 'Walter White, a struggling high school chemistry teacher, is diagnosed with terminal lung cancer.',
+    episodeVoteAverage: 9.0,
+    episodeVoteCount: 412,
+    isWatching: true
+  });
+  assert(
+    isEpisodeSeoIndexable({
+      episodeName: 'Pilot',
+      episodeOverview: 'Walter White, a struggling high school chemistry teacher, is diagnosed with terminal lung cancer.',
+      seriesOverview: breakingBadTv.overview,
+      isVerifiedEpisode: true
+    }) &&
+      !epMetaNoEpRating.schema.aggregateRating &&
+      epMetaWithEpRating.schema.aggregateRating?.ratingValue === 9 &&
+      epMetaWithEpRating.schema.aggregateRating?.ratingCount === 412,
+    'TVEpisode schema never inherits parent TVSeries aggregateRating and only emits genuine episode ratings'
+  );
+
+  // Verified episode inventory matches sitemap-episodes.xml URL count
+  const verifiedEps = getVerifiedEpisodeInventory();
+  assert(
+    verifiedEps.length === sitemapDry.episodesCount,
+    `Verified episode inventory (${verifiedEps.length}) matches sitemap-episodes.xml count (${sitemapDry.episodesCount})`
+  );
+
+  console.log('\n--- ALL SEO, TAGS, GENRES, EPISODES, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
 }
 
 runTests().catch(err => {
   console.error('Test error:', err);
   process.exit(1);
 });
+
