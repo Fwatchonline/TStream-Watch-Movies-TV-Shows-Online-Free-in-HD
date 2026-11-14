@@ -49,6 +49,11 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
         const rawSeason = c.req.query('season');
         const rawEpisode = c.req.query('episode');
         const preferredProvider = (c.req.query('provider') || '').trim().toLowerCase() || undefined;
+        const singleMode = c.req.query('single') === '1' || c.req.query('only') === '1';
+        const excludeParam = (c.req.query('exclude') || '').trim().toLowerCase();
+        const excludedProviders = new Set(
+            excludeParam ? excludeParam.split(',').map(s => s.trim()).filter(Boolean) : []
+        );
         let season: number | undefined;
         let episode: number | undefined;
 
@@ -66,7 +71,17 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
             episode = parseInt(rawEpisode, 10);
         }
 
-        const activeList = getProvidersFn();
+        let activeList = getProvidersFn();
+        if (excludedProviders.size > 0) {
+            activeList = activeList.filter(p => !excludedProviders.has(p.key.toLowerCase()));
+        }
+        if (singleMode && preferredProvider && preferredProvider !== 'all') {
+            const matched = activeList.filter(p => p.key.toLowerCase() === preferredProvider);
+            if (matched.length > 0) {
+                activeList = matched;
+            }
+        }
+
         const results: Array<{
             key: string;
             label: string;
@@ -78,7 +93,7 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
         }> = [];
         let failedProviders = 0;
 
-        // Query all active providers in parallel and benchmark real response times
+        // Query active providers in parallel and benchmark real response times
         await Promise.allSettled(
             activeList.map(async (provider) => {
                 const startedAt = Date.now();
@@ -115,13 +130,13 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
             })
         );
 
-        // Fastest responding working provider comes FIRST (honoring explicit ?provider= override if selected)
+        // Default primary provider is Core ('vidrock') unless another ?provider= is requested;
+        // remaining servers are sorted fastest-first by responseTimeMs
+        const primaryKey = preferredProvider && preferredProvider !== 'all' ? preferredProvider : 'vidrock';
         results.sort((a, b) => {
-            if (preferredProvider) {
-                const aPref = a.key.toLowerCase() === preferredProvider ? 0 : 1;
-                const bPref = b.key.toLowerCase() === preferredProvider ? 0 : 1;
-                if (aPref !== bPref) return aPref - bPref;
-            }
+            const aPref = a.key.toLowerCase() === primaryKey ? 0 : 1;
+            const bPref = b.key.toLowerCase() === primaryKey ? 0 : 1;
+            if (aPref !== bPref) return aPref - bPref;
             if (a.responseTimeMs !== b.responseTimeMs) {
                 return a.responseTimeMs - b.responseTimeMs;
             }

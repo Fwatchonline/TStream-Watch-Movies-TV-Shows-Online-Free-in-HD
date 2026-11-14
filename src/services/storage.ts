@@ -15,7 +15,7 @@ export interface UserSettings {
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
-  preferredServer: 'vidapi',
+  preferredServer: 'vidrock',
   preferredSubtitleLang: 'en',
   preferredWatchRegion: 'US',
   autoplayNext: true,

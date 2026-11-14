@@ -9,25 +9,27 @@ import { VidLinkProvider } from './vidlink';
 import { VidRiftProvider } from './vidrift';
 
 /**
- * All active direct streaming providers ranked by baseline lowest-RTT architecture first:
- * 1. Vector   (vidapi)   — 1 RTT direct adaptive HLS
- * 2. Eclipse  (eclipse)  — 1 RTT direct 1080p MP4/HLS
- * 3. BoxMovie (boxmovie) — 1 RTT direct 1080p/720p MP4 CDN
- * 4. Core     (vidrock)  — AES-GCM HLS + parallel source validation
- * 5. Orion    (vidrift)  — 1 RTT embed HLS extraction
- * 6. Pulse    (vidlink)  — 2 RTTs enc-dec + vidlink.pro HLS/MP4
- * 7. Valence  (lmscript) — 2 RTTs TMDB + lmscript (Movies 1080p)
- * 8. Apex     (meowtv)   — 3 RTTs ticket + stream + decrypt (Multi-Audio HLS)
+ * All active direct streaming providers.
+ * Core (vidrock) is Priority 1 (default primary server loaded first),
+ * followed by the remaining servers loaded right after:
+ * 1. Core     (vidrock)  — Default primary AES-GCM HLS server
+ * 2. BoxMovie (boxmovie) — 1 RTT direct 1080p/720p MP4 CDN
+ * 3. Apex     (meowtv)   — Multi-Audio HLS Stream
+ * 4. Vector   (vidapi)   — 1 RTT direct adaptive HLS
+ * 5. Eclipse  (eclipse)  — 1 RTT direct 1080p MP4/HLS
+ * 6. Orion    (vidrift)  — Embed HLS extraction
+ * 7. Pulse    (vidlink)  — Enc-dec + vidlink.pro HLS/MP4
+ * 8. Valence  (lmscript) — Movies 1080p
  */
 export const providers: Record<string, VideoProvider> = {
-    vidapi: new VidAPIProvider({ priority: 1, label: 'Vector' }),
-    eclipse: new EclipseProvider({ priority: 2, label: 'Eclipse' }),
-    boxmovie: new BoxMovieProvider({ priority: 3, label: 'BoxMovie' }),
-    vidrock: new VidRockProvider({ priority: 4, label: 'Core' }),
-    vidrift: new VidRiftProvider({ priority: 5, label: 'Orion' }),
-    vidlink: new VidLinkProvider({ priority: 6, label: 'Pulse' }),
-    lmscript: new LMScriptProvider({ priority: 7, label: 'Valence' }),
-    meowtv: new MeowTVProvider({ priority: 8, label: 'Apex' })
+    vidrock: new VidRockProvider({ priority: 1, label: 'Core' }),
+    boxmovie: new BoxMovieProvider({ priority: 2, label: 'BoxMovie' }),
+    meowtv: new MeowTVProvider({ priority: 3, label: 'Apex' }),
+    vidapi: new VidAPIProvider({ priority: 4, label: 'Vector' }),
+    eclipse: new EclipseProvider({ priority: 5, label: 'Eclipse' }),
+    vidrift: new VidRiftProvider({ priority: 6, label: 'Orion' }),
+    vidlink: new VidLinkProvider({ priority: 7, label: 'Pulse' }),
+    lmscript: new LMScriptProvider({ priority: 8, label: 'Valence' })
 };
 
 const providerLatencyEwmaMs = new Map<string, number>();

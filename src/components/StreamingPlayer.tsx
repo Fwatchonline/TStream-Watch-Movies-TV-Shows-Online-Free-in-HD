@@ -34,6 +34,7 @@ interface StreamingPlayerProps {
   isLightsDimmed?: boolean;
   onToggleLights?: () => void;
   // External server control from WatchPage
+  directStreamEnabled?: boolean;
   playerMode?: PlayerMode;
   onPlayerModeChange?: (mode: PlayerMode) => void;
   webServer?: WebServer;
@@ -42,15 +43,15 @@ interface StreamingPlayerProps {
 }
 
 const HLS_CLUSTERS = [
-  { id: 'all', name: 'Auto Fastest First', desc: 'Parallel Speed Benchmark & Failover', badge: 'Fastest' },
-  { id: 'vidapi', name: 'Vector (1-Hop HLS)', desc: 'Direct HLS Multi-bitrate 1080p/720p', badge: 'Priority 1' },
-  { id: 'eclipse', name: 'Eclipse (1-Hop MP4)', desc: 'Direct 1080p MP4 Stream', badge: 'Priority 2' },
-  { id: 'boxmovie', name: 'BoxMovie (CDN MP4)', desc: 'Direct 1080p / 720p MP4 CDN', badge: 'Priority 3' },
-  { id: 'vidrock', name: 'Core (AES-GCM HLS)', desc: 'Verified Multi-Bitrate 1080p HLS', badge: 'Priority 4' },
-  { id: 'vidrift', name: 'Orion (1080p HLS)', desc: 'Direct 1080p Embed HLS Extraction', badge: 'Priority 5' },
-  { id: 'vidlink', name: 'Pulse (1080p HLS/MP4)', desc: 'Multi-Quality 1080p/720p Stream', badge: 'Priority 6' },
-  { id: 'lmscript', name: 'Valence (Movies)', desc: '1080p MP4 / HLS High Speed', badge: 'Priority 7' },
-  { id: 'meowtv', name: 'Apex (Multi-Audio)', desc: 'Multi-lingual HLS Stream', badge: 'Priority 8' }
+  { id: 'vidrock', name: 'Core (Default)', desc: 'Primary AES-GCM 1080p HLS Loaded First', badge: 'Default' },
+  { id: 'boxmovie', name: 'BoxMovie (CDN MP4)', desc: 'Direct 1080p / 720p / 480p MP4 CDN', badge: 'MP4' },
+  { id: 'meowtv', name: 'Apex (Multi-Audio)', desc: 'Multi-lingual HLS Stream', badge: 'Multi HLS' },
+  { id: 'vidapi', name: 'Vector (Adaptive HLS)', desc: 'Direct HLS Multi-bitrate 1080p/720p', badge: 'HLS' },
+  { id: 'eclipse', name: 'Eclipse (1080p MP4)', desc: 'Direct 1080p MP4 Stream', badge: 'MP4' },
+  { id: 'vidrift', name: 'Orion (1080p HLS)', desc: 'Direct 1080p Embed HLS Extraction', badge: 'HLS' },
+  { id: 'vidlink', name: 'Pulse (1080p HLS/MP4)', desc: 'Multi-Quality Stream', badge: 'Adaptive' },
+  { id: 'lmscript', name: 'Valence (Movies)', desc: '1080p MP4 / HLS High Speed', badge: 'Movies' },
+  { id: 'all', name: 'Sweep All Servers', desc: 'Load Core First + Background Failover', badge: 'All' }
 ];
 
 export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
@@ -62,6 +63,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   onToggleTheater,
   isLightsDimmed = false,
   onToggleLights,
+  directStreamEnabled = true,
   playerMode: externalPlayerMode,
   onPlayerModeChange,
   webServer: externalWebServer,
@@ -73,15 +75,17 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   const playerContainerRef = useRef<HTMLDivElement>(null);
 
   // Internal state if not controlled externally
-  const [internalMode, setInternalMode] = useState<PlayerMode>('direct');
+  const [internalMode, setInternalMode] = useState<PlayerMode>(directStreamEnabled ? 'direct' : 'web');
   const [internalWebServer, setInternalWebServer] = useState<WebServer>('fmov');
 
-  const playerMode = externalPlayerMode !== undefined ? externalPlayerMode : internalMode;
+  const rawPlayerMode = externalPlayerMode !== undefined ? externalPlayerMode : internalMode;
+  const playerMode: PlayerMode = !directStreamEnabled ? 'web' : rawPlayerMode;
   const webServer = externalWebServer !== undefined ? externalWebServer : internalWebServer;
 
   const setPlayerMode = (mode: PlayerMode) => {
-    if (onPlayerModeChange) onPlayerModeChange(mode);
-    setInternalMode(mode);
+    const resolved = !directStreamEnabled ? 'web' : mode;
+    if (onPlayerModeChange) onPlayerModeChange(resolved);
+    setInternalMode(resolved);
   };
 
   const setWebServer = (server: WebServer) => {
@@ -98,11 +102,15 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   // Subtitles
   const [subtitles, setSubtitles] = useState<SubtitleTrack[]>([]);
 
-  // Direct HLS Streams
+  // Direct HLS Streams (Default server: Core / vidrock loaded first, others in background)
   const [directResults, setDirectResults] = useState<DirectProviderResult[]>([]);
   const [loadingDirect, setLoadingDirect] = useState<boolean>(true);
   const [directFailed, setDirectFailed] = useState<boolean>(false);
-  const [activeCluster, setActiveCluster] = useState<string>(settings.preferredServer || 'all');
+  const [activeCluster, setActiveCluster] = useState<string>(() => {
+    const pref = settings.preferredServer;
+    if (!pref || pref === 'vidapi' || pref === 'all') return 'vidrock';
+    return pref;
+  });
   const [isScanningAlternative, setIsScanningAlternative] = useState<boolean>(false);
 
   // TV Episodes cache & retryable loader
@@ -219,7 +227,9 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
 
   const [streamReloadTick, setStreamReloadTick] = useState<number>(0);
 
-  // Load Direct Native HLS Streams cleanly without double-fetching
+  // Progressive 2-Phase Direct Stream Loader:
+  // 1) Load default Core ('vidrock') FIRST for immediate playback
+  // 2) Then load all remaining servers in the background behind Core
   const loadDirectStreams = useCallback((targetCluster?: string) => {
     if (targetCluster && targetCluster !== activeCluster) {
       setActiveCluster(targetCluster);
@@ -229,41 +239,97 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   }, [activeCluster]);
 
   useEffect(() => {
+    if (!directStreamEnabled || playerMode !== 'direct') {
+      setDirectResults([]);
+      setLoadingDirect(false);
+      setDirectFailed(false);
+      setIsScanningAlternative(false);
+      return;
+    }
+
     let isMounted = true;
-    async function runFetch() {
+    const tmdbIdValue = media.tmdbId || media.id;
+    const primaryCluster = activeCluster === 'all' ? 'vidrock' : activeCluster;
+
+    async function runProgressiveFetch() {
       setLoadingDirect(true);
       setDirectFailed(false);
       setIsScanningAlternative(true);
 
       try {
-        const results = await fetchDirectStreams({
-          tmdbId: media.tmdbId || media.id,
+        // Step 1: Immediately fetch primary server (Core by default) in single mode
+        const primaryResults = await fetchDirectStreams({
+          tmdbId: tmdbIdValue,
           mediaType: media.mediaType,
           season: isMovie ? undefined : currentSeason,
           episode: isMovie ? undefined : currentEpisode,
-          provider: activeCluster === 'all' ? undefined : activeCluster
+          provider: primaryCluster,
+          single: true
         });
         if (!isMounted) return;
-        setDirectResults(results || []);
-        if (!results || results.length === 0) {
+
+        if (primaryResults && primaryResults.length > 0) {
+          // Core succeeded -> show player & begin playback immediately!
+          setDirectResults(primaryResults);
+          setLoadingDirect(false);
+
+          // Step 2: Load remaining servers in the background and append after Core
+          fetchDirectStreams({
+            tmdbId: tmdbIdValue,
+            mediaType: media.mediaType,
+            season: isMovie ? undefined : currentSeason,
+            episode: isMovie ? undefined : currentEpisode,
+            exclude: [primaryCluster]
+          })
+            .then((remainingResults) => {
+              if (!isMounted) return;
+              if (remainingResults && remainingResults.length > 0) {
+                setDirectResults((prev) => {
+                  const base = prev.length > 0 ? prev : primaryResults;
+                  const seen = new Set(base.map((p) => p.provider));
+                  const extras = remainingResults.filter((r) => !seen.has(r.provider));
+                  return extras.length > 0 ? [...base, ...extras] : base;
+                });
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              if (isMounted) setIsScanningAlternative(false);
+            });
+          return;
+        }
+
+        // Primary server returned no streams -> fall back to remaining servers now
+        const remainingResults = await fetchDirectStreams({
+          tmdbId: tmdbIdValue,
+          mediaType: media.mediaType,
+          season: isMovie ? undefined : currentSeason,
+          episode: isMovie ? undefined : currentEpisode,
+          exclude: [primaryCluster]
+        });
+        if (!isMounted) return;
+
+        setDirectResults(remainingResults || []);
+        if (!remainingResults || remainingResults.length === 0) {
           setDirectFailed(true);
         }
+        setLoadingDirect(false);
+        setIsScanningAlternative(false);
       } catch (err) {
         console.warn('Direct stream resolution failed:', err);
-        if (isMounted) setDirectFailed(true);
-      } finally {
         if (isMounted) {
+          setDirectFailed(true);
           setLoadingDirect(false);
           setIsScanningAlternative(false);
         }
       }
     }
 
-    runFetch();
+    runProgressiveFetch();
     return () => {
       isMounted = false;
     };
-  }, [media.tmdbId, media.id, media.mediaType, currentSeason, currentEpisode, isMovie, activeCluster, streamReloadTick]);
+  }, [directStreamEnabled, playerMode, media.tmdbId, media.id, media.mediaType, currentSeason, currentEpisode, isMovie, activeCluster, streamReloadTick]);
 
   // Load subtitles
   useEffect(() => {
@@ -469,17 +535,19 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                     </button>
                   )}
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPlayerMode('direct');
-                      loadDirectStreams();
-                    }}
-                    className="px-3 py-1 rounded-lg bg-[#25252b] hover:bg-[#303038] text-[#F5C400] text-[11px] font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#F5C400]/40 shadow-sm"
-                  >
-                    <Zap className="w-3.5 h-3.5" />
-                    <span>Switch to Direct Player</span>
-                  </button>
+                  {directStreamEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPlayerMode('direct');
+                        loadDirectStreams();
+                      }}
+                      className="px-3 py-1 rounded-lg bg-[#25252b] hover:bg-[#303038] text-[#F5C400] text-[11px] font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#F5C400]/40 shadow-sm"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Switch to Direct Player</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -543,30 +611,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                 Direct HLS Stream Currently Busy
               </h3>
               <p className="text-xs text-[#A6A6AC] mb-5 max-w-md leading-relaxed">
-                The primary direct cluster is congested. Select an alternative HLS cluster below, or switch instantly to the Web Stream player:
+                No working stream responded on the selected server. Select an alternative direct server cluster below or rescan all servers:
               </p>
-
-              {/* Quick Action: Instant Web Stream Player (FMOV, MovieTV API, VidSrc) */}
-              <div className="w-full mb-5 p-3 sm:p-4 rounded-xl bg-[#1a1a20] border border-[#F5C400]/40 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
-                <div className="text-left">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span className="text-xs font-black text-white">Instant Web Player (Zero Delay)</span>
-                  </div>
-                  <p className="text-[11px] text-[#A6A6AC] mt-0.5">
-                    FMOV / MovieTV API / VidSrc embeds are 100% active and available right now.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setPlayerMode('web')}
-                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] text-black font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-amber-500/25 shrink-0 active:scale-95"
-                >
-                  <Play className="w-3.5 h-3.5 fill-black" />
-                  <span>Play Now (Web Stream)</span>
-                </button>
-              </div>
 
               {/* Alternative HLS Clusters */}
               <div className="w-full text-left mb-2">
@@ -625,15 +671,13 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_#34d399]" />
             <span className="font-bold text-white">
-              {playerMode === 'direct' ? 'Direct Native Player' : `Web Stream · ${webServer.toUpperCase()}`}
+              {playerMode === 'direct'
+                ? 'Direct Native Player (Core Default)'
+                : `Embed Player · ${webServer.replace(/^server_\d+_/, '').toUpperCase()}`}
             </span>
             <span className="text-[#3A3A40]">|</span>
             <span className="font-mono text-emerald-400 font-bold">
-              {playerMode === 'direct' ? '100% Native HLS' : 'Verified Multi-Source'}
-            </span>
-            <span className="text-[#3A3A40]">|</span>
-            <span className="hidden sm:inline">
-              {playerMode === 'direct' ? 'Direct master .m3u8 stream' : 'FMOV · MovieTV API · VidSrc'}
+              {playerMode === 'direct' ? 'Core First + Background Failover' : 'Embed Mode Active'}
             </span>
           </div>
 
@@ -665,37 +709,6 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
               <Sparkles className="w-3 h-3" />
               <span className="hidden xs:inline">Ambient Glow</span>
             </button>
-
-            {/* Mode Switcher Pill */}
-            <div className="flex items-center gap-1.5 p-0.5 bg-[#1e1e24] rounded-lg border border-[#33333a]">
-              <button
-                type="button"
-                onClick={() => {
-                  setPlayerMode('direct');
-                  loadDirectStreams();
-                }}
-                className={`px-2.5 py-1 rounded-md text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
-                  playerMode === 'direct'
-                    ? 'bg-[#F5C400] text-black shadow-xs font-black'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Zap className="w-3 h-3" />
-                <span>Direct HLS</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setPlayerMode('web')}
-                className={`px-2.5 py-1 rounded-md text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
-                  playerMode === 'web'
-                    ? 'bg-[#F5C400] text-black shadow-xs font-black'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Globe className="w-3 h-3" />
-                <span>Web Stream</span>
-              </button>
-            </div>
           </div>
         </div>
       </div>

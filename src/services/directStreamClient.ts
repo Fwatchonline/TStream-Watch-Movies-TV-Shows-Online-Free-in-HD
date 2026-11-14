@@ -89,11 +89,15 @@ export async function fetchDirectStreams(params: {
   season?: number;
   episode?: number;
   provider?: string;
+  single?: boolean;
+  exclude?: string[];
 }): Promise<DirectProviderResult[]> {
   const query = new URLSearchParams();
   if (params.season != null) query.set('season', params.season.toString());
   if (params.episode != null) query.set('episode', params.episode.toString());
   if (params.provider && params.provider !== 'all') query.set('provider', params.provider);
+  if (params.single && params.provider && params.provider !== 'all') query.set('single', '1');
+  if (params.exclude && params.exclude.length > 0) query.set('exclude', params.exclude.join(','));
   const queryStr = query.toString() ? `?${query.toString()}` : '';
 
   // 1. Primary Orchestrated Multi-Server Route (/api/stream/:type/:id)

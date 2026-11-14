@@ -276,31 +276,41 @@ async function runTests() {
     'Task 6: CORS rejects untrusted Origin with HTTP 403 and never emits wildcard Access-Control-Allow-Origin: *'
   );
 
-  // 8. Streaming Providers Registry, Fastest-First Ordering & New Providers (VidRock, VidLink, VidRift)
+  // 8. Streaming Providers Registry, Core-Default + Progressive Loading & Fastest-First Fallbacks
   clearProviderLatencies();
   const activeProviders = getActiveProviders();
-  const expectedOrder = ['vidapi', 'eclipse', 'boxmovie', 'vidrock', 'vidrift', 'vidlink', 'lmscript', 'meowtv'];
+  const expectedOrder = ['vidrock', 'boxmovie', 'meowtv', 'vidapi', 'eclipse', 'vidrift', 'vidlink', 'lmscript'];
   assert(
     expectedOrder.every(k => Boolean(providerRegistry[k])) &&
       activeProviders.length === 8 &&
       activeProviders.map(p => p.key).join(',') === expectedOrder.join(','),
-    'All 8 providers (Vector, Eclipse, BoxMovie, Core, Orion, Pulse, Valence, Apex) are registered in lowest-RTT order'
+    'All 8 providers (Core default first, then BoxMovie, Apex, Vector, Eclipse, Orion, Pulse, Valence) are registered in expected order'
   );
 
-  // 8A. Dynamic fastest-first benchmarking in createStreamRoute()
-  const slowProvider = {
-    key: 'slow_server',
-    label: 'SlowServer',
+  // 8A. Core ('vidrock') stays primary default when healthy; fallback servers rank fastest-first by RTT
+  const slowCoreProvider = {
+    key: 'vidrock',
+    label: 'Core',
     priority: 1,
     enabled: true,
     async getStream() {
       await new Promise(r => setTimeout(r, 85));
+      return { success: true, source: 'vidrock', url: '/api/proxy?url=https%3A%2F%2Fcore.example%2Fv.m3u8', type: 'hls' as const };
+    }
+  };
+  const mediumFallbackProvider = {
+    key: 'slow_server',
+    label: 'SlowFallback',
+    priority: 3,
+    enabled: true,
+    async getStream() {
+      await new Promise(r => setTimeout(r, 45));
       return { success: true, source: 'slow_server', url: '/api/proxy?url=https%3A%2F%2Fslow.example%2Fv.m3u8', type: 'hls' as const };
     }
   };
-  const fastProvider = {
+  const fastFallbackProvider = {
     key: 'fast_server',
-    label: 'FastServer',
+    label: 'FastFallback',
     priority: 5,
     enabled: true,
     async getStream() {
@@ -311,7 +321,7 @@ async function runTests() {
 
   const latencyTracker = new Map<string, number>();
   const benchmarkStreamRoute = createStreamRoute({
-    getProviders: () => [slowProvider, fastProvider],
+    getProviders: () => [slowCoreProvider, mediumFallbackProvider, fastFallbackProvider],
     recordLatency: (key, ms) => latencyTracker.set(key, ms),
     getLatency: (key) => latencyTracker.get(key) ?? null
   });
@@ -320,15 +330,17 @@ async function runTests() {
   const fastestJson = await fastestRes.json() as any;
   assert(
     fastestRes.status === 200 &&
-      fastestJson.source === 'fast_server' &&
-      fastestJson.primaryServer === 'FastServer' &&
-      fastestJson.servers.length === 2 &&
-      fastestJson.servers[0].key === 'fast_server' &&
-      fastestJson.servers[0].responseTimeMs <= fastestJson.servers[1].responseTimeMs,
-    'Stream orchestrator automatically ranks fastest responding working provider first'
+      fastestJson.source === 'vidrock' &&
+      fastestJson.primaryServer === 'Core' &&
+      fastestJson.servers.length === 3 &&
+      fastestJson.servers[0].key === 'vidrock' &&
+      fastestJson.servers[1].key === 'fast_server' &&
+      fastestJson.servers[2].key === 'slow_server' &&
+      fastestJson.servers[1].responseTimeMs <= fastestJson.servers[2].responseTimeMs,
+    'Stream orchestrator puts Core (vidrock) first by default and ranks fallback servers fastest-first'
   );
 
-  // 8B. Explicit ?provider= selection moves selected provider first while retaining faster fallback
+  // 8B. Explicit ?provider= selection moves selected provider first while retaining Core & fallbacks
   const overrideRes = await benchmarkStreamRoute.request('/movie/550?provider=slow_server');
   const overrideJson = await overrideRes.json() as any;
   assert(
@@ -352,15 +364,79 @@ async function runTests() {
   );
   clearProviderLatencies();
 
-  // 8D. GET /api/stream/providers exposes full fastest-first provider directory
+  // 8D. GET /api/stream/providers exposes full provider directory with Core default first
   const providersListRes = await serverApp.request('/api/stream/providers');
   const providersListJson = await providersListRes.json() as any;
   assert(
     providersListRes.status === 200 &&
-      providersListJson.fastest?.key === 'vidapi' &&
+      providersListJson.fastest?.key === 'vidrock' &&
       Array.isArray(providersListJson.providers) &&
       providersListJson.providers.length === 8,
-    'GET /api/stream/providers returns all 8 active providers ranked fastest-first'
+    'GET /api/stream/providers returns all 8 active providers with Core (vidrock) first by default'
+  );
+
+  // 8F. Progressive 2-phase loading (?provider=vidrock&single=1 then ?exclude=vidrock)
+  const calledKeys: string[] = [];
+  const progressiveRoute = createStreamRoute({
+    getProviders: () => [
+      {
+        key: 'vidrock',
+        label: 'Core',
+        priority: 1,
+        enabled: true,
+        async getStream() {
+          calledKeys.push('vidrock');
+          return { success: true, source: 'vidrock', url: '/api/proxy?url=https%3A%2F%2Fcore.example%2Fmaster.m3u8', type: 'hls' as const };
+        }
+      },
+      {
+        key: 'boxmovie',
+        label: 'BoxMovie',
+        priority: 2,
+        enabled: true,
+        async getStream() {
+          calledKeys.push('boxmovie');
+          await new Promise(r => setTimeout(r, 35));
+          return { success: true, source: 'boxmovie', url: '/api/proxy?url=https%3A%2F%2Fbox.example%2Fv.mp4', type: 'mp4' as const };
+        }
+      },
+      {
+        key: 'meowtv',
+        label: 'Apex',
+        priority: 3,
+        enabled: true,
+        async getStream() {
+          calledKeys.push('meowtv');
+          await new Promise(r => setTimeout(r, 10));
+          return { success: true, source: 'meowtv', url: '/api/proxy?url=https%3A%2F%2Fapex.example%2Fv.m3u8', type: 'hls' as const };
+        }
+      }
+    ]
+  });
+
+  const phase1Res = await progressiveRoute.request('/movie/550?provider=vidrock&single=1');
+  const phase1Json = await phase1Res.json() as any;
+  assert(
+    phase1Res.status === 200 &&
+      phase1Json.source === 'vidrock' &&
+      phase1Json.servers.length === 1 &&
+      calledKeys.length === 1 &&
+      calledKeys[0] === 'vidrock',
+    'Phase 1 (?provider=vidrock&single=1) queries ONLY Core (vidrock) without waiting for other servers'
+  );
+
+  calledKeys.length = 0;
+  const phase2Res = await progressiveRoute.request('/movie/550?exclude=vidrock');
+  const phase2Json = await phase2Res.json() as any;
+  assert(
+    phase2Res.status === 200 &&
+      !calledKeys.includes('vidrock') &&
+      calledKeys.includes('boxmovie') &&
+      calledKeys.includes('meowtv') &&
+      phase2Json.servers.length === 2 &&
+      phase2Json.servers[0].key === 'meowtv' &&
+      phase2Json.servers[1].key === 'boxmovie',
+    'Phase 2 (?exclude=vidrock) skips Core and loads remaining servers sorted fastest-first'
   );
 
   // 8E. VidRock AES-GCM decrypt roundtrip + validator SSRF/HTML rejection

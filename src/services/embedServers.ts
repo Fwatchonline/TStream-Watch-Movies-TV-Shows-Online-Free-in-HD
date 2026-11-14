@@ -17,9 +17,9 @@ export interface EmbedServerConfig {
 export const DEFAULT_SERVERS: EmbedServerConfig[] = [
   {
     id: 'server_1_direct',
-    name: 'TStream Multi-Server (Fastest Auto · Vector, Eclipse, BoxMovie, Core, Orion, Pulse, Valence, Apex)',
+    name: 'Core · Direct Stream',
     type: 'direct',
-    badge: 'Fastest',
+    badge: 'Default',
     dotColor: '#34D399', // emerald
     enabled: true,
     order: 1,
@@ -64,7 +64,17 @@ export const DEFAULT_SERVERS: EmbedServerConfig[] = [
 ];
 
 const LOCAL_SERVERS_KEY = 'tstream_configured_embed_servers';
+const LOCAL_DIRECT_ENABLED_KEY = 'tstream_direct_stream_enabled';
 const FIRESTORE_DOC_PATH = 'embedServers';
+
+function normalizeServerList(list: EmbedServerConfig[]): EmbedServerConfig[] {
+  return list.map((s) =>
+    s.id === 'server_1_direct' &&
+    (s.name === 'TStream Server' || s.name === 'Core · Direct Native Stream (Auto Failover)')
+      ? { ...s, name: DEFAULT_SERVERS[0].name, badge: DEFAULT_SERVERS[0].badge }
+      : s
+  );
+}
 
 function getLocalServers(): EmbedServerConfig[] {
   try {
@@ -72,7 +82,7 @@ function getLocalServers(): EmbedServerConfig[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return normalizeServerList(parsed);
       }
     }
   } catch {}
@@ -87,6 +97,107 @@ function saveLocalServers(servers: EmbedServerConfig[]): void {
   } catch {}
 }
 
+export function getDirectStreamEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(LOCAL_DIRECT_ENABLED_KEY);
+    if (raw === 'false') return false;
+    if (raw === 'true') return true;
+    const directServer = getLocalServers().find((s) => s.id === 'server_1_direct' || s.type === 'direct');
+    if (directServer) return directServer.enabled !== false;
+  } catch {}
+  return true;
+}
+
+function saveLocalDirectStreamEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(LOCAL_DIRECT_ENABLED_KEY, String(enabled));
+    window.dispatchEvent(new CustomEvent('tstream_direct_stream_updated', { detail: enabled }));
+  } catch {}
+}
+
+/**
+ * Enable or disable Direct Stream globally (Watch Page shows Embed Player only when disabled)
+ */
+export async function setDirectStreamEnabled(enabled: boolean): Promise<void> {
+  saveLocalDirectStreamEnabled(enabled);
+
+  const current = await getEmbedServers();
+  const hasDirect = current.some((s) => s.id === 'server_1_direct' || s.type === 'direct');
+  const updatedServers = hasDirect
+    ? current.map((s) => (s.id === 'server_1_direct' || s.type === 'direct' ? { ...s, enabled } : s))
+    : [{ ...DEFAULT_SERVERS[0], enabled }, ...current];
+
+  const sorted = [...updatedServers].sort((a, b) => a.order - b.order);
+  saveLocalServers(sorted);
+
+  try {
+    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+    await setDoc(
+      docRef,
+      {
+        servers: sorted,
+        directStreamEnabled: enabled,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('Error saving directStreamEnabled to Firestore:', err);
+  }
+}
+
+/**
+ * Subscribe in real time to Admin-controlled Direct Stream ON/OFF setting
+ */
+export function subscribeToDirectStreamEnabled(
+  callback: (enabled: boolean) => void
+): () => void {
+  callback(getDirectStreamEnabled());
+
+  const handleCustomEvent = (e: any) => {
+    if (typeof e?.detail === 'boolean') {
+      callback(e.detail);
+    }
+  };
+  window.addEventListener('tstream_direct_stream_updated', handleCustomEvent);
+
+  let unsubscribeFirestore: Unsubscribe | null = null;
+  try {
+    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+    unsubscribeFirestore = onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          let resolved: boolean | undefined;
+          if (typeof data?.directStreamEnabled === 'boolean') {
+            resolved = data.directStreamEnabled;
+          } else if (Array.isArray(data?.servers)) {
+            const directSrv = data.servers.find((s: any) => s.id === 'server_1_direct' || s.type === 'direct');
+            if (directSrv && typeof directSrv.enabled === 'boolean') {
+              resolved = directSrv.enabled;
+            }
+          }
+          if (typeof resolved === 'boolean') {
+            saveLocalDirectStreamEnabled(resolved);
+            callback(resolved);
+          }
+        }
+      },
+      (err) => {
+        console.warn('Firestore directStreamEnabled listener error:', err);
+      }
+    );
+  } catch (err) {
+    console.warn('Firestore directStreamEnabled subscription failed:', err);
+  }
+
+  return () => {
+    window.removeEventListener('tstream_direct_stream_updated', handleCustomEvent);
+    if (unsubscribeFirestore) unsubscribeFirestore();
+  };
+}
+
 /**
  * Fetch all streaming servers (Firestore with localStorage cache fallback)
  */
@@ -97,9 +208,13 @@ export async function getEmbedServers(): Promise<EmbedServerConfig[]> {
     const snap = await getDoc(docRef);
     if (snap.exists()) {
       const data = snap.data();
+      if (typeof data?.directStreamEnabled === 'boolean') {
+        saveLocalDirectStreamEnabled(data.directStreamEnabled);
+      }
       if (Array.isArray(data?.servers) && data.servers.length > 0) {
-        saveLocalServers(data.servers);
-        return data.servers;
+        const normalized = normalizeServerList(data.servers);
+        saveLocalServers(normalized);
+        return normalized;
       }
     }
   } catch (err) {
@@ -115,10 +230,15 @@ export async function saveEmbedServers(servers: EmbedServerConfig[]): Promise<vo
   const sorted = [...servers].sort((a, b) => a.order - b.order);
   saveLocalServers(sorted);
 
+  const directSrv = sorted.find((s) => s.id === 'server_1_direct' || s.type === 'direct');
+  const directEnabled = directSrv ? directSrv.enabled !== false : getDirectStreamEnabled();
+  saveLocalDirectStreamEnabled(directEnabled);
+
   try {
     const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
     await setDoc(docRef, {
       servers: sorted,
+      directStreamEnabled: directEnabled,
       updatedAt: new Date().toISOString()
     });
   } catch (err) {
@@ -171,6 +291,7 @@ export async function deleteEmbedServer(id: string): Promise<void> {
  * Reset embed servers back to default initial configuration
  */
 export async function resetEmbedServersToDefault(): Promise<EmbedServerConfig[]> {
+  saveLocalDirectStreamEnabled(true);
   await saveEmbedServers([...DEFAULT_SERVERS]);
   return [...DEFAULT_SERVERS];
 }
@@ -199,9 +320,13 @@ export function subscribeToEmbedServers(
       (snap) => {
         if (snap.exists()) {
           const data = snap.data();
+          if (typeof data?.directStreamEnabled === 'boolean') {
+            saveLocalDirectStreamEnabled(data.directStreamEnabled);
+          }
           if (Array.isArray(data?.servers) && data.servers.length > 0) {
-            saveLocalServers(data.servers);
-            callback(data.servers);
+            const normalized = normalizeServerList(data.servers);
+            saveLocalServers(normalized);
+            callback(normalized);
           }
         }
       },

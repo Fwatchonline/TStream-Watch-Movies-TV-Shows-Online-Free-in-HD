@@ -6,29 +6,39 @@ import { StreamServer } from '../types/media';
  */
 export const STREAMING_PROVIDERS: StreamServer[] = [
   {
-    id: 'fmov',
-    name: 'Zeus Ultra 4K',
-    badge: 'Cinema 4K HDR',
-    quality: '2160p / 1080p HDR',
+    id: 'vidrock',
+    name: 'Core (Default)',
+    badge: 'Primary Default',
+    quality: '1080p Master HLS',
     category: 'vyla',
-    description: 'Flagship multi-cluster ultra stream engine with high-bitrate master feeds and multi-channel audio',
+    description: 'Primary AES-GCM decrypted master direct streams loaded first with auto-failover',
     buildUrl: ({ mediaType, tmdbId, season = 1, episode = 1 }) =>
-      `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=fmov`
+      `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=vidrock`
   },
   {
-    id: 'showbox',
-    name: 'Poseidon Quantum 4K',
-    badge: '4K Ultra HDR / 5.1',
-    quality: '2160p / 1080p',
+    id: 'boxmovie',
+    name: 'BoxMovie Direct',
+    badge: '1080p CDN MP4',
+    quality: '1080p / 720p MP4',
     category: 'vyla',
-    description: 'Direct dedicated 4K HDR cloud stream engine with native 4K streams and multi-channel 5.1 surround sound',
+    description: 'High-speed direct MP4 CDN with 1080p, 720p, and 480p quality tracks',
     buildUrl: ({ mediaType, tmdbId, season = 1, episode = 1 }) =>
-      `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=showbox`
+      `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=boxmovie`
+  },
+  {
+    id: 'meowtv',
+    name: 'Apex Multi-Audio',
+    badge: 'Multi-Language HLS',
+    quality: '1080p Multi HLS',
+    category: 'vyla',
+    description: 'Adaptive multi-audio HLS stream with instant fallback',
+    buildUrl: ({ mediaType, tmdbId, season = 1, episode = 1 }) =>
+      `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=meowtv`
   },
   {
     id: 'vidapi',
-    name: 'Apollo Master HLS',
-    badge: 'Zero-Buffer Quantum',
+    name: 'Vector Master HLS',
+    badge: 'Adaptive HLS',
     quality: '1080p 60fps',
     category: 'vyla',
     description: 'Adaptive multi-bitrate ladder (1080p, 720p, 480p) optimized for instantaneous playback start',
@@ -36,18 +46,8 @@ export const STREAMING_PROVIDERS: StreamServer[] = [
       `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=vidapi`
   },
   {
-    id: 'vidrock',
-    name: 'Athena Prime HD',
-    badge: 'Pure Studio Audio',
-    quality: '1080p Master',
-    category: 'vyla',
-    description: 'Decrypted master direct streams with high-bitrate surround audio channels',
-    buildUrl: ({ mediaType, tmdbId, season = 1, episode = 1 }) =>
-      `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=vidrock`
-  },
-  {
     id: 'vidlink',
-    name: 'Hermes Velocity',
+    name: 'Pulse Velocity',
     badge: 'Ultra-Adaptive',
     quality: '1080p HD',
     category: 'vyla',
@@ -56,14 +56,14 @@ export const STREAMING_PROVIDERS: StreamServer[] = [
       `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=vidlink`
   },
   {
-    id: 'fastcloud',
-    name: 'Ares Direct CDN',
+    id: 'vidrift',
+    name: 'Orion Direct',
     badge: 'Sub-Second Latency',
-    quality: '1080p Fast',
+    quality: '1080p HLS',
     category: 'featured',
-    description: 'Ultra-fast distributed edge CDN cluster with low-latency TS and fMP4 segments',
+    description: 'Ultra-fast direct HLS cluster with low-latency TS segments',
     buildUrl: ({ mediaType, tmdbId, season = 1, episode = 1 }) =>
-      `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=vidrock`
+      `/api/stream-resolve?tmdbId=${tmdbId}&type=${mediaType}${mediaType === 'tv' ? `&season=${season}&episode=${episode}` : ''}&provider=vidrift`
   },
   {
     id: 'direct_hls_backup',
@@ -77,4 +77,4 @@ export const STREAMING_PROVIDERS: StreamServer[] = [
   }
 ];
 
-export const DEFAULT_SERVER_ID = 'fmov';
+export const DEFAULT_SERVER_ID = 'vidrock';

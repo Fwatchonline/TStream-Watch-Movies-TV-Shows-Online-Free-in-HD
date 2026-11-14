@@ -59,6 +59,9 @@ import {
 import {
   EmbedServerConfig,
   subscribeToEmbedServers,
+  subscribeToDirectStreamEnabled,
+  getDirectStreamEnabled,
+  setDirectStreamEnabled,
   addEmbedServer,
   updateEmbedServer,
   deleteEmbedServer,
@@ -110,8 +113,10 @@ export const AdminPage: React.FC = () => {
   const [movieStatsList, setMovieStatsList] = useState<MovieStats[]>([]);
   const [statsLoading, setStatsLoading] = useState(false);
 
-  // Embed Servers state
+  // Embed Servers & Direct Stream Mode state
   const [servers, setServers] = useState<EmbedServerConfig[]>([]);
+  const [directStreamEnabled, setDirectStreamEnabledState] = useState<boolean>(() => getDirectStreamEnabled());
+  const [savingDirectToggle, setSavingDirectToggle] = useState(false);
   const [isEditingModalOpen, setIsEditingModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<EmbedServerConfig | null>(null);
   const [serverFormData, setServerFormData] = useState<{
@@ -195,13 +200,19 @@ export const AdminPage: React.FC = () => {
     return () => unsubscribe();
   }, [isAdmin]);
 
-  // Real-time subscription to Embed Servers
+  // Real-time subscription to Embed Servers & Direct Stream ON/OFF switch
   useEffect(() => {
     if (!isAdmin) return;
-    const unsubscribe = subscribeToEmbedServers((data) => {
+    const unsubscribeServers = subscribeToEmbedServers((data) => {
       setServers(data);
     });
-    return () => unsubscribe();
+    const unsubscribeDirect = subscribeToDirectStreamEnabled((enabled) => {
+      setDirectStreamEnabledState(enabled);
+    });
+    return () => {
+      unsubscribeServers();
+      unsubscribeDirect();
+    };
   }, [isAdmin]);
 
   // Fetch real movie views when tab is activated
@@ -360,8 +371,20 @@ export const AdminPage: React.FC = () => {
   };
 
   const handleResetServers = async () => {
-    if (confirm('Restore the default 4 servers (Direct HLS, MovieTV API, VidSrc Cloud, FMov Ultra)?')) {
+    if (confirm('Restore the default 4 servers (Core Direct Native Stream, MovieTV API, VidSrc Cloud, FMov Ultra)?')) {
       await resetEmbedServersToDefault();
+    }
+  };
+
+  const handleToggleDirectStream = async () => {
+    if (savingDirectToggle) return;
+    setSavingDirectToggle(true);
+    try {
+      const next = !directStreamEnabled;
+      setDirectStreamEnabledState(next);
+      await setDirectStreamEnabled(next);
+    } finally {
+      setSavingDirectToggle(false);
     }
   };
 
@@ -1328,13 +1351,60 @@ export const AdminPage: React.FC = () => {
          ========================================================================= */}
       {activeTab === 'servers' && (
         <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Global Direct Stream vs Embed Player Master Switch */}
+          <div className="p-6 rounded-2xl bg-gradient-to-br from-[#1b1b22] to-[#141418] border border-[#F5C400]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <Zap className={`w-4 h-4 ${directStreamEnabled ? 'text-emerald-400' : 'text-amber-400'}`} />
+                <h3 className="text-base font-black text-white">
+                  Direct Native Stream (Watch Page Mode)
+                </h3>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                    directStreamEnabled
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                  }`}
+                >
+                  {directStreamEnabled ? 'Direct Stream ON · Core Default' : 'Direct Stream OFF · Embed Only'}
+                </span>
+              </div>
+              <p className="text-xs text-[#A6A6AC] leading-relaxed max-w-2xl">
+                When <strong className="text-white">ON</strong>, Watch Page starts in Direct Stream (<strong className="text-[#F5C400]">Core</strong> first, then other direct servers in background) with Embed Servers also selectable in the server bar. Turn <strong className="text-white">OFF</strong> to hide Direct Stream and use Embed Players only.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={savingDirectToggle}
+              onClick={handleToggleDirectStream}
+              className={`px-4 py-2.5 rounded-xl font-black text-xs flex items-center gap-2.5 transition-all cursor-pointer shrink-0 border shadow-md disabled:opacity-50 ${
+                directStreamEnabled
+                  ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40'
+                  : 'bg-[#F5C400] hover:bg-[#e0b400] text-black border-[#F5C400]'
+              }`}
+            >
+              {directStreamEnabled ? (
+                <>
+                  <ToggleRight className="w-5 h-5 text-emerald-400" />
+                  <span>Direct Stream: ON</span>
+                </>
+              ) : (
+                <>
+                  <ToggleLeft className="w-5 h-5 text-black" />
+                  <span>Direct Stream: OFF (Embed Only)</span>
+                </>
+              )}
+            </button>
+          </div>
+
           <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h3 className="text-base font-bold text-white">
                 Multi-Server Streaming Sources
               </h3>
               <p className="text-xs text-[#A6A6AC] mt-1">
-                Servers appear in the player control bar on movies and episodes. Reorder or customize mirrors.
+                Configure direct &amp; embed mirrors displayed in the Watch Page server bar.
               </p>
             </div>
 
