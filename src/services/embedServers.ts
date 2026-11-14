@@ -14,6 +14,31 @@ export interface EmbedServerConfig {
   isCustom?: boolean;
 }
 
+export interface DefaultServerPreferences {
+  movieServerId: string;
+  tvServerId: string;
+  movieDirectProvider: string;
+  tvDirectProvider: string;
+}
+
+export const DIRECT_PROVIDER_OPTIONS = [
+  { id: 'vidrock', name: 'Core (vidrock)', badge: 'HLS' },
+  { id: 'boxmovie', name: 'BoxMovie (boxmovie)', badge: 'MP4' },
+  { id: 'meowtv', name: 'Apex (meowtv)', badge: 'Multi HLS' },
+  { id: 'vidapi', name: 'Vector (vidapi)', badge: 'HLS' },
+  { id: 'eclipse', name: 'Eclipse (eclipse)', badge: 'MP4' },
+  { id: 'vidrift', name: 'Orion (vidrift)', badge: 'HLS' },
+  { id: 'vidlink', name: 'Pulse (vidlink)', badge: 'Adaptive' },
+  { id: 'lmscript', name: 'Valence (lmscript)', badge: 'Movies' }
+] as const;
+
+export const DEFAULT_SERVER_PREFERENCES: DefaultServerPreferences = {
+  movieServerId: 'server_1_direct',
+  tvServerId: 'server_1_direct',
+  movieDirectProvider: 'vidrock',
+  tvDirectProvider: 'vidrock'
+};
+
 export const DEFAULT_SERVERS: EmbedServerConfig[] = [
   {
     id: 'server_1_direct',
@@ -65,6 +90,7 @@ export const DEFAULT_SERVERS: EmbedServerConfig[] = [
 
 const LOCAL_SERVERS_KEY = 'tstream_configured_embed_servers';
 const LOCAL_DIRECT_ENABLED_KEY = 'tstream_direct_stream_enabled';
+const LOCAL_DEFAULT_PREFS_KEY = 'tstream_default_server_prefs';
 const FIRESTORE_DOC_PATH = 'embedServers';
 
 function normalizeServerList(list: EmbedServerConfig[]): EmbedServerConfig[] {
@@ -74,6 +100,33 @@ function normalizeServerList(list: EmbedServerConfig[]): EmbedServerConfig[] {
       ? { ...s, name: DEFAULT_SERVERS[0].name, badge: DEFAULT_SERVERS[0].badge }
       : s
   );
+}
+
+function normalizeDefaultServerPreferences(raw: any): DefaultServerPreferences {
+  const validDirectIds = new Set<string>(DIRECT_PROVIDER_OPTIONS.map((p) => p.id));
+  const movieServerId =
+    typeof raw?.movieServerId === 'string' && raw.movieServerId.trim()
+      ? raw.movieServerId.trim()
+      : DEFAULT_SERVER_PREFERENCES.movieServerId;
+  const tvServerId =
+    typeof raw?.tvServerId === 'string' && raw.tvServerId.trim()
+      ? raw.tvServerId.trim()
+      : DEFAULT_SERVER_PREFERENCES.tvServerId;
+  const movieDirectProvider =
+    typeof raw?.movieDirectProvider === 'string' && validDirectIds.has(raw.movieDirectProvider)
+      ? raw.movieDirectProvider
+      : DEFAULT_SERVER_PREFERENCES.movieDirectProvider;
+  const tvDirectProvider =
+    typeof raw?.tvDirectProvider === 'string' && validDirectIds.has(raw.tvDirectProvider)
+      ? raw.tvDirectProvider
+      : DEFAULT_SERVER_PREFERENCES.tvDirectProvider;
+
+  return {
+    movieServerId,
+    tvServerId,
+    movieDirectProvider,
+    tvDirectProvider
+  };
 }
 
 function getLocalServers(): EmbedServerConfig[] {
@@ -113,6 +166,130 @@ function saveLocalDirectStreamEnabled(enabled: boolean): void {
     localStorage.setItem(LOCAL_DIRECT_ENABLED_KEY, String(enabled));
     window.dispatchEvent(new CustomEvent('tstream_direct_stream_updated', { detail: enabled }));
   } catch {}
+}
+
+export function getDefaultServerPreferences(): DefaultServerPreferences {
+  try {
+    const raw = localStorage.getItem(LOCAL_DEFAULT_PREFS_KEY);
+    if (raw) {
+      return normalizeDefaultServerPreferences(JSON.parse(raw));
+    }
+  } catch {}
+  return { ...DEFAULT_SERVER_PREFERENCES };
+}
+
+function saveLocalDefaultServerPreferences(prefs: DefaultServerPreferences): void {
+  try {
+    const normalized = normalizeDefaultServerPreferences(prefs);
+    localStorage.setItem(LOCAL_DEFAULT_PREFS_KEY, JSON.stringify(normalized));
+    window.dispatchEvent(
+      new CustomEvent('tstream_default_server_prefs_updated', { detail: normalized })
+    );
+  } catch {}
+}
+
+/**
+ * Resolve the effective default server for a given media type ('movie' | 'tv')
+ * based on Admin preferences, enabled server list, and Direct Stream toggle.
+ */
+export function pickEffectiveDefaultServer(
+  mediaType: 'movie' | 'tv',
+  servers: EmbedServerConfig[],
+  directEnabled: boolean,
+  prefs: DefaultServerPreferences
+): EmbedServerConfig {
+  const activeServers = servers.length > 0 ? servers : DEFAULT_SERVERS;
+  const preferredId = mediaType === 'movie' ? prefs.movieServerId : prefs.tvServerId;
+
+  const directPool = directEnabled
+    ? activeServers.filter((s) => s.type === 'direct' && s.enabled !== false)
+    : [];
+  const embedPool = activeServers.filter((s) => s.type === 'embed' && s.enabled);
+  const fallbackEmbeds = DEFAULT_SERVERS.filter((s) => s.type === 'embed');
+
+  const availablePool: EmbedServerConfig[] = [
+    ...(directPool.length > 0 ? directPool : directEnabled ? [DEFAULT_SERVERS[0]] : []),
+    ...(embedPool.length > 0 ? embedPool : fallbackEmbeds)
+  ];
+
+  const exactMatch = availablePool.find((s) => s.id === preferredId);
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (directEnabled) {
+    return availablePool.find((s) => s.type === 'direct') || availablePool[0];
+  }
+  return availablePool.find((s) => s.type === 'embed') || availablePool[0];
+}
+
+/**
+ * Save Admin-chosen default server preferences for Movies and TV Series
+ */
+export async function saveDefaultServerPreferences(
+  prefs: DefaultServerPreferences
+): Promise<DefaultServerPreferences> {
+  const normalized = normalizeDefaultServerPreferences(prefs);
+  saveLocalDefaultServerPreferences(normalized);
+
+  try {
+    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+    await setDoc(
+      docRef,
+      {
+        defaultServerPrefs: normalized,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('Error saving defaultServerPrefs to Firestore:', err);
+  }
+  return normalized;
+}
+
+/**
+ * Subscribe in real time to Admin-chosen default server preferences (Movies vs TV Series)
+ */
+export function subscribeToDefaultServerPreferences(
+  callback: (prefs: DefaultServerPreferences) => void
+): () => void {
+  callback(getDefaultServerPreferences());
+
+  const handleCustomEvent = (e: any) => {
+    if (e?.detail && typeof e.detail === 'object') {
+      callback(normalizeDefaultServerPreferences(e.detail));
+    }
+  };
+  window.addEventListener('tstream_default_server_prefs_updated', handleCustomEvent);
+
+  let unsubscribeFirestore: Unsubscribe | null = null;
+  try {
+    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+    unsubscribeFirestore = onSnapshot(
+      docRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data?.defaultServerPrefs && typeof data.defaultServerPrefs === 'object') {
+            const normalized = normalizeDefaultServerPreferences(data.defaultServerPrefs);
+            saveLocalDefaultServerPreferences(normalized);
+            callback(normalized);
+          }
+        }
+      },
+      (err) => {
+        console.warn('Firestore defaultServerPrefs listener error:', err);
+      }
+    );
+  } catch (err) {
+    console.warn('Firestore defaultServerPrefs subscription failed:', err);
+  }
+
+  return () => {
+    window.removeEventListener('tstream_default_server_prefs_updated', handleCustomEvent);
+    if (unsubscribeFirestore) unsubscribeFirestore();
+  };
 }
 
 /**
@@ -211,6 +388,11 @@ export async function getEmbedServers(): Promise<EmbedServerConfig[]> {
       if (typeof data?.directStreamEnabled === 'boolean') {
         saveLocalDirectStreamEnabled(data.directStreamEnabled);
       }
+      if (data?.defaultServerPrefs && typeof data.defaultServerPrefs === 'object') {
+        saveLocalDefaultServerPreferences(
+          normalizeDefaultServerPreferences(data.defaultServerPrefs)
+        );
+      }
       if (Array.isArray(data?.servers) && data.servers.length > 0) {
         const normalized = normalizeServerList(data.servers);
         saveLocalServers(normalized);
@@ -236,11 +418,15 @@ export async function saveEmbedServers(servers: EmbedServerConfig[]): Promise<vo
 
   try {
     const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
-    await setDoc(docRef, {
-      servers: sorted,
-      directStreamEnabled: directEnabled,
-      updatedAt: new Date().toISOString()
-    });
+    await setDoc(
+      docRef,
+      {
+        servers: sorted,
+        directStreamEnabled: directEnabled,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
   } catch (err) {
     console.warn('Error saving embed servers to Firestore:', err);
   }
@@ -292,6 +478,7 @@ export async function deleteEmbedServer(id: string): Promise<void> {
  */
 export async function resetEmbedServersToDefault(): Promise<EmbedServerConfig[]> {
   saveLocalDirectStreamEnabled(true);
+  await saveDefaultServerPreferences({ ...DEFAULT_SERVER_PREFERENCES });
   await saveEmbedServers([...DEFAULT_SERVERS]);
   return [...DEFAULT_SERVERS];
 }
@@ -322,6 +509,11 @@ export function subscribeToEmbedServers(
           const data = snap.data();
           if (typeof data?.directStreamEnabled === 'boolean') {
             saveLocalDirectStreamEnabled(data.directStreamEnabled);
+          }
+          if (data?.defaultServerPrefs && typeof data.defaultServerPrefs === 'object') {
+            saveLocalDefaultServerPreferences(
+              normalizeDefaultServerPreferences(data.defaultServerPrefs)
+            );
           }
           if (Array.isArray(data?.servers) && data.servers.length > 0) {
             const normalized = normalizeServerList(data.servers);

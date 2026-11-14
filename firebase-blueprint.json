@@ -108,6 +108,21 @@
       },
       "required": ["id", "name", "type", "enabled"]
     },
+    "SystemEmbedSettings": {
+      "title": "SystemEmbedSettings",
+      "description": "Global streaming settings including configured servers, Direct Stream toggle, and default movie/TV server preferences",
+      "type": "object",
+      "properties": {
+        "servers": { "type": "array" },
+        "directStreamEnabled": { "type": "boolean" },
+        "defaultServerPrefs": {
+          "type": "object",
+          "description": "Default movieServerId, tvServerId, movieDirectProvider, and tvDirectProvider"
+        },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["servers"]
+    },
     "FollowedShow": {
       "title": "FollowedShow",
       "description": "TV series followed by a registered user to receive new episode notifications",
@@ -218,8 +233,8 @@
       "description": "Global movie and TV show view counts and interactive user ratings"
     },
     "/systemSettings/{settingId}": {
-      "schema": { "$ref": "#/entities/EmbedServerConfig" },
-      "description": "Global application and embed player configurations managed by administrator"
+      "schema": { "$ref": "#/entities/SystemEmbedSettings" },
+      "description": "Global application, server, and default movie/TV streaming configurations managed by administrator"
     },
     "/analytics_visits/{visitId}": {
       "schema": { "$ref": "#/entities/SiteVisit" },

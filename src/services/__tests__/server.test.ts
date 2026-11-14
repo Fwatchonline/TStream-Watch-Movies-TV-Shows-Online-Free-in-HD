@@ -32,6 +32,7 @@ import { handleLegacyStreamRequest } from '../../server/legacyStreamHandler';
 import { safeFetchStream, ProxySecurityError } from '../../server/utils/safeProxyFetch';
 import { getServerTmdbApiKey } from '../../../scripts/seoHtmlPlugin';
 import { getTmdbApiKey } from '../tmdb';
+import { DEFAULT_SERVERS, pickEffectiveDefaultServer } from '../embedServers';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -467,6 +468,24 @@ async function runTests() {
       !(await validateSourceUrl('https://cdn.example.com/cf.m3u8', {}, mockHtmlReject)) &&
       (await validateSourceUrl('https://cdn.example.com/ok.m3u8', {}, mockHlsOk)),
     'validateSourceUrl rejects internal SSRF/HTML pages and accepts verified HLS/MP4 streams'
+  );
+
+  // 8G. Separate Movie vs TV Series default server resolution
+  const adminPrefs = {
+    movieServerId: 'server_4_fmov',
+    tvServerId: 'server_1_direct',
+    movieDirectProvider: 'boxmovie',
+    tvDirectProvider: 'vidrock'
+  };
+  const resolvedMovieOn = pickEffectiveDefaultServer('movie', DEFAULT_SERVERS, true, adminPrefs);
+  const resolvedTvOn = pickEffectiveDefaultServer('tv', DEFAULT_SERVERS, true, adminPrefs);
+  const resolvedTvWhenDirectOff = pickEffectiveDefaultServer('tv', DEFAULT_SERVERS, false, adminPrefs);
+  assert(
+    resolvedMovieOn.id === 'server_4_fmov' &&
+      resolvedTvOn.id === 'server_1_direct' &&
+      resolvedTvWhenDirectOff.type === 'embed' &&
+      resolvedTvWhenDirectOff.id === 'server_2_movietvapi',
+    'pickEffectiveDefaultServer resolves separate Admin defaults for Movies vs TV Series and falls back to Embed when Direct Stream is OFF'
   );
 
   console.log('\n--- ALL SERVER, SECURITY & STREAMING REGRESSION TESTS PASSED ---');

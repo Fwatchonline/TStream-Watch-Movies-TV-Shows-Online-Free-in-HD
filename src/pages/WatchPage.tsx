@@ -28,9 +28,13 @@ import { ShareModal } from '../components/ShareModal';
 import { ReportIssueModal } from '../components/ReportIssueModal';
 import {
   EmbedServerConfig,
+  DefaultServerPreferences,
   subscribeToEmbedServers,
   subscribeToDirectStreamEnabled,
+  subscribeToDefaultServerPreferences,
   getDirectStreamEnabled,
+  getDefaultServerPreferences,
+  pickEffectiveDefaultServer,
   resolveEmbedUrl,
   DEFAULT_SERVERS
 } from '../services/embedServers';
@@ -64,17 +68,23 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   // Player & Server states from user settings & admin toggle
   const userSettings = getUserPlayerSettings();
   const [directStreamEnabled, setDirectStreamEnabled] = useState<boolean>(() => getDirectStreamEnabled());
-  const [playerMode, setPlayerMode] = useState<PlayerMode>(() => {
-    if (!getDirectStreamEnabled()) return 'web';
-    return 'direct';
-  });
-  const [activeWebServer, setActiveWebServer] = useState<WebServer>(() => {
-    return (userSettings.defaultServerId && userSettings.defaultServerId !== 'server_1_direct'
-      ? userSettings.defaultServerId
-      : 'fmov') as WebServer;
-  });
+  const [defaultServerPrefs, setDefaultServerPrefs] = useState<DefaultServerPreferences>(() =>
+    getDefaultServerPreferences()
+  );
   const [servers, setServers] = useState<EmbedServerConfig[]>(DEFAULT_SERVERS);
-  const [selectedServerId, setSelectedServerId] = useState<string>(userSettings.defaultServerId || 'server_1_direct');
+  const initialDefaultSrv = pickEffectiveDefaultServer(
+    mediaType,
+    DEFAULT_SERVERS,
+    getDirectStreamEnabled(),
+    getDefaultServerPreferences()
+  );
+  const [playerMode, setPlayerMode] = useState<PlayerMode>(() =>
+    initialDefaultSrv.type === 'direct' && getDirectStreamEnabled() ? 'direct' : 'web'
+  );
+  const [activeWebServer, setActiveWebServer] = useState<WebServer>(() =>
+    initialDefaultSrv.type === 'embed' ? (initialDefaultSrv.id as WebServer) : 'fmov'
+  );
+  const [selectedServerId, setSelectedServerId] = useState<string>(() => initialDefaultSrv.id);
   const [customEmbedUrl, setCustomEmbedUrl] = useState<string | undefined>(undefined);
 
   // Cinema UI Controls
@@ -87,7 +97,7 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
 
-  // Subscribe to real-time configured embed servers & Direct Stream ON/OFF toggle (Admin managed)
+  // Subscribe to real-time configured embed servers, Direct Stream toggle, & Movie/TV default server preferences
   useEffect(() => {
     const unsubServers = subscribeToEmbedServers((data) => {
       setServers(data.length > 0 ? data : DEFAULT_SERVERS);
@@ -95,9 +105,13 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     const unsubDirect = subscribeToDirectStreamEnabled((enabled) => {
       setDirectStreamEnabled(enabled);
     });
+    const unsubPrefs = subscribeToDefaultServerPreferences((prefs) => {
+      setDefaultServerPrefs(prefs);
+    });
     return () => {
       unsubServers();
       unsubDirect();
+      unsubPrefs();
     };
   }, []);
 
@@ -155,28 +169,28 @@ export const WatchPage: React.FC<WatchPageProps> = ({
             }
           }
 
-          // Initial player mode & embed URL sync based on Admin Direct Stream toggle
-          if (!directStreamEnabled) {
-            const embedPool = servers.filter((s) => s.type === 'embed' && s.enabled);
-            const fallbackEmbeds = DEFAULT_SERVERS.filter((s) => s.type === 'embed');
-            const pool = embedPool.length > 0 ? embedPool : fallbackEmbeds;
-            const preferred = pool.find((s) => s.id === userSettings.defaultServerId) || pool[0];
-            if (preferred) {
-              const template = data.mediaType === 'movie' ? preferred.movieUrlTemplate : preferred.tvUrlTemplate;
-              const url = template
-                ? resolveEmbedUrl(template, {
-                    id: data.id,
-                    season: currentSeason,
-                    episode: currentEpisode
-                  })
-                : '';
-              setSelectedServerId(preferred.id);
-              setCustomEmbedUrl(url || undefined);
-              setPlayerMode('web');
-              setActiveWebServer(preferred.id as WebServer);
-            }
+          // Initial player mode & server sync based on Admin's Movie/TV default settings
+          const chosenDefault = pickEffectiveDefaultServer(
+            data.mediaType,
+            servers,
+            directStreamEnabled,
+            defaultServerPrefs
+          );
+          if (chosenDefault.type === 'embed' || !directStreamEnabled) {
+            const template = data.mediaType === 'movie' ? chosenDefault.movieUrlTemplate : chosenDefault.tvUrlTemplate;
+            const url = template
+              ? resolveEmbedUrl(template, {
+                  id: data.id,
+                  season: currentSeason,
+                  episode: currentEpisode
+                })
+              : '';
+            setSelectedServerId(chosenDefault.id);
+            setCustomEmbedUrl(url || undefined);
+            setPlayerMode('web');
+            setActiveWebServer(chosenDefault.id as WebServer);
           } else {
-            setSelectedServerId('server_1_direct');
+            setSelectedServerId(chosenDefault.id);
             setCustomEmbedUrl(undefined);
             setPlayerMode('direct');
           }
@@ -253,20 +267,54 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   }, [detail, currentSeason]);
 
   const prevDirectEnabledRef = useRef<boolean>(directStreamEnabled);
+  const prevDefaultServerForTypeRef = useRef<string>(
+    mediaType === 'movie' ? defaultServerPrefs.movieServerId : defaultServerPrefs.tvServerId
+  );
 
-  // Synchronize WatchPage mode & embed URL whenever Admin toggles Direct Stream or user changes season/episode
+  // Synchronize WatchPage mode & embed URL whenever Admin toggles Direct Stream, changes Movie/TV default server, or user changes season/episode
   useEffect(() => {
     const justEnabledDirect = !prevDirectEnabledRef.current && directStreamEnabled;
     prevDirectEnabledRef.current = directStreamEnabled;
+
+    const currentPrefServerId =
+      mediaType === 'movie' ? defaultServerPrefs.movieServerId : defaultServerPrefs.tvServerId;
+    const prefChangedByAdmin = prevDefaultServerForTypeRef.current !== currentPrefServerId;
+    prevDefaultServerForTypeRef.current = currentPrefServerId;
 
     const embedPool = servers.filter((s) => s.type === 'embed' && s.enabled);
     const fallbackEmbeds = DEFAULT_SERVERS.filter((s) => s.type === 'embed');
     const pool = embedPool.length > 0 ? embedPool : fallbackEmbeds;
 
-    if (!directStreamEnabled) {
-      const chosen = pool.find((s) => s.id === selectedServerId) || pool[0];
-      if (chosen) {
-        const template = mediaType === 'movie' ? chosen.movieUrlTemplate : chosen.tvUrlTemplate;
+    if (!directStreamEnabled || justEnabledDirect || prefChangedByAdmin) {
+      const effectiveDefault = pickEffectiveDefaultServer(
+        mediaType,
+        servers,
+        directStreamEnabled,
+        defaultServerPrefs
+      );
+
+      if (!directStreamEnabled) {
+        const chosen = pool.find((s) => s.id === selectedServerId) || effectiveDefault;
+        if (chosen) {
+          const template = mediaType === 'movie' ? chosen.movieUrlTemplate : chosen.tvUrlTemplate;
+          const url = template
+            ? resolveEmbedUrl(template, {
+                id: detail?.id || mediaId,
+                season: currentSeason,
+                episode: currentEpisode
+              })
+            : '';
+          const resolvedUrl = url || undefined;
+          if (chosen.id !== selectedServerId) setSelectedServerId(chosen.id);
+          if (resolvedUrl !== customEmbedUrl) setCustomEmbedUrl(resolvedUrl);
+          if (chosen.id !== activeWebServer) setActiveWebServer(chosen.id as WebServer);
+          if (playerMode !== 'web') setPlayerMode('web');
+        }
+        return;
+      }
+
+      if (effectiveDefault.type === 'embed') {
+        const template = mediaType === 'movie' ? effectiveDefault.movieUrlTemplate : effectiveDefault.tvUrlTemplate;
         const url = template
           ? resolveEmbedUrl(template, {
               id: detail?.id || mediaId,
@@ -275,18 +323,15 @@ export const WatchPage: React.FC<WatchPageProps> = ({
             })
           : '';
         const resolvedUrl = url || undefined;
-        if (chosen.id !== selectedServerId) setSelectedServerId(chosen.id);
+        if (effectiveDefault.id !== selectedServerId) setSelectedServerId(effectiveDefault.id);
         if (resolvedUrl !== customEmbedUrl) setCustomEmbedUrl(resolvedUrl);
-        if (chosen.id !== activeWebServer) setActiveWebServer(chosen.id as WebServer);
+        if (effectiveDefault.id !== activeWebServer) setActiveWebServer(effectiveDefault.id as WebServer);
         if (playerMode !== 'web') setPlayerMode('web');
+      } else {
+        if (effectiveDefault.id !== selectedServerId) setSelectedServerId(effectiveDefault.id);
+        if (customEmbedUrl !== undefined) setCustomEmbedUrl(undefined);
+        if (playerMode !== 'direct') setPlayerMode('direct');
       }
-      return;
-    }
-
-    if (justEnabledDirect) {
-      if (selectedServerId !== 'server_1_direct') setSelectedServerId('server_1_direct');
-      if (customEmbedUrl !== undefined) setCustomEmbedUrl(undefined);
-      if (playerMode !== 'direct') setPlayerMode('direct');
       return;
     }
 
@@ -304,7 +349,21 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       const resolvedUrl = url || undefined;
       if (resolvedUrl !== customEmbedUrl) setCustomEmbedUrl(resolvedUrl);
     }
-  }, [directStreamEnabled, servers, selectedServerId, playerMode, activeWebServer, customEmbedUrl, mediaType, mediaId, detail?.id, currentSeason, currentEpisode]);
+  }, [
+    directStreamEnabled,
+    defaultServerPrefs.movieServerId,
+    defaultServerPrefs.tvServerId,
+    servers,
+    selectedServerId,
+    playerMode,
+    activeWebServer,
+    customEmbedUrl,
+    mediaType,
+    mediaId,
+    detail?.id,
+    currentSeason,
+    currentEpisode
+  ]);
 
   const handleEpisodeChange = (s: number, e: number) => {
     setCurrentSeason(s);
@@ -544,6 +603,11 @@ export const WatchPage: React.FC<WatchPageProps> = ({
             isLightsDimmed={isLightsDimmed}
             onToggleLights={() => setIsLightsDimmed(prev => !prev)}
             directStreamEnabled={directStreamEnabled}
+            defaultDirectProvider={
+              isMovie
+                ? defaultServerPrefs.movieDirectProvider
+                : defaultServerPrefs.tvDirectProvider
+            }
             playerMode={directStreamEnabled ? playerMode : 'web'}
             onPlayerModeChange={(m) => {
               if (!directStreamEnabled) {

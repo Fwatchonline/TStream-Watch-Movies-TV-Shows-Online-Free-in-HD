@@ -35,6 +35,7 @@ interface StreamingPlayerProps {
   onToggleLights?: () => void;
   // External server control from WatchPage
   directStreamEnabled?: boolean;
+  defaultDirectProvider?: string;
   playerMode?: PlayerMode;
   onPlayerModeChange?: (mode: PlayerMode) => void;
   webServer?: WebServer;
@@ -64,6 +65,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   isLightsDimmed = false,
   onToggleLights,
   directStreamEnabled = true,
+  defaultDirectProvider,
   playerMode: externalPlayerMode,
   onPlayerModeChange,
   webServer: externalWebServer,
@@ -107,10 +109,16 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   const [loadingDirect, setLoadingDirect] = useState<boolean>(true);
   const [directFailed, setDirectFailed] = useState<boolean>(false);
   const [activeCluster, setActiveCluster] = useState<string>(() => {
+    if (defaultDirectProvider) return defaultDirectProvider;
     const pref = settings.preferredServer;
     if (!pref || pref === 'vidapi' || pref === 'all') return 'vidrock';
     return pref;
   });
+  useEffect(() => {
+    if (defaultDirectProvider) {
+      setActiveCluster(defaultDirectProvider);
+    }
+  }, [defaultDirectProvider, media.id, media.mediaType]);
   const [isScanningAlternative, setIsScanningAlternative] = useState<boolean>(false);
 
   // TV Episodes cache & retryable loader
@@ -249,7 +257,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
 
     let isMounted = true;
     const tmdbIdValue = media.tmdbId || media.id;
-    const primaryCluster = activeCluster === 'all' ? 'vidrock' : activeCluster;
+    const primaryCluster = activeCluster === 'all' ? (defaultDirectProvider || 'vidrock') : activeCluster;
 
     async function runProgressiveFetch() {
       setLoadingDirect(true);
@@ -329,7 +337,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [directStreamEnabled, playerMode, media.tmdbId, media.id, media.mediaType, currentSeason, currentEpisode, isMovie, activeCluster, streamReloadTick]);
+  }, [directStreamEnabled, defaultDirectProvider, playerMode, media.tmdbId, media.id, media.mediaType, currentSeason, currentEpisode, isMovie, activeCluster, streamReloadTick]);
 
   // Load subtitles
   useEffect(() => {
@@ -672,12 +680,14 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_#34d399]" />
             <span className="font-bold text-white">
               {playerMode === 'direct'
-                ? 'Direct Native Player (Core Default)'
+                ? `Direct Native Player (${HLS_CLUSTERS.find(c => c.id === activeCluster)?.name || 'Core (Default)'})`
                 : `Embed Player · ${webServer.replace(/^server_\d+_/, '').toUpperCase()}`}
             </span>
             <span className="text-[#3A3A40]">|</span>
             <span className="font-mono text-emerald-400 font-bold">
-              {playerMode === 'direct' ? 'Core First + Background Failover' : 'Embed Mode Active'}
+              {playerMode === 'direct'
+                ? `${(HLS_CLUSTERS.find(c => c.id === activeCluster)?.name.split(' ')[0] || 'Core')} First + Background Failover`
+                : 'Embed Mode Active'}
             </span>
           </div>
 

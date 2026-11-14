@@ -58,10 +58,16 @@ import {
 } from '../services/firebase';
 import {
   EmbedServerConfig,
+  DefaultServerPreferences,
+  DIRECT_PROVIDER_OPTIONS,
+  DEFAULT_SERVERS,
   subscribeToEmbedServers,
   subscribeToDirectStreamEnabled,
+  subscribeToDefaultServerPreferences,
   getDirectStreamEnabled,
+  getDefaultServerPreferences,
   setDirectStreamEnabled,
+  saveDefaultServerPreferences,
   addEmbedServer,
   updateEmbedServer,
   deleteEmbedServer,
@@ -117,6 +123,11 @@ export const AdminPage: React.FC = () => {
   const [servers, setServers] = useState<EmbedServerConfig[]>([]);
   const [directStreamEnabled, setDirectStreamEnabledState] = useState<boolean>(() => getDirectStreamEnabled());
   const [savingDirectToggle, setSavingDirectToggle] = useState(false);
+  const [defaultServerPrefs, setDefaultServerPrefs] = useState<DefaultServerPreferences>(() =>
+    getDefaultServerPreferences()
+  );
+  const [savingDefaultPrefs, setSavingDefaultPrefs] = useState(false);
+  const [savedDefaultPrefsToast, setSavedDefaultPrefsToast] = useState(false);
   const [isEditingModalOpen, setIsEditingModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<EmbedServerConfig | null>(null);
   const [serverFormData, setServerFormData] = useState<{
@@ -200,7 +211,7 @@ export const AdminPage: React.FC = () => {
     return () => unsubscribe();
   }, [isAdmin]);
 
-  // Real-time subscription to Embed Servers & Direct Stream ON/OFF switch
+  // Real-time subscription to Embed Servers, Direct Stream switch & Movie/TV default servers
   useEffect(() => {
     if (!isAdmin) return;
     const unsubscribeServers = subscribeToEmbedServers((data) => {
@@ -209,9 +220,13 @@ export const AdminPage: React.FC = () => {
     const unsubscribeDirect = subscribeToDirectStreamEnabled((enabled) => {
       setDirectStreamEnabledState(enabled);
     });
+    const unsubscribePrefs = subscribeToDefaultServerPreferences((prefs) => {
+      setDefaultServerPrefs(prefs);
+    });
     return () => {
       unsubscribeServers();
       unsubscribeDirect();
+      unsubscribePrefs();
     };
   }, [isAdmin]);
 
@@ -385,6 +400,20 @@ export const AdminPage: React.FC = () => {
       await setDirectStreamEnabled(next);
     } finally {
       setSavingDirectToggle(false);
+    }
+  };
+
+  const handleUpdateDefaultPrefs = async (patch: Partial<DefaultServerPreferences>) => {
+    const next = { ...defaultServerPrefs, ...patch };
+    setDefaultServerPrefs(next);
+    setSavingDefaultPrefs(true);
+    try {
+      const saved = await saveDefaultServerPreferences(next);
+      setDefaultServerPrefs(saved);
+      setSavedDefaultPrefsToast(true);
+      setTimeout(() => setSavedDefaultPrefsToast(false), 2200);
+    } finally {
+      setSavingDefaultPrefs(false);
     }
   };
 
@@ -1397,6 +1426,144 @@ export const AdminPage: React.FC = () => {
               )}
             </button>
           </div>
+
+          {/* Default Server Selection for Movies & TV Series */}
+          {(() => {
+            const activePool = (servers.length > 0 ? servers : DEFAULT_SERVERS).filter((s) =>
+              directStreamEnabled ? s.enabled !== false : s.type === 'embed' && s.enabled !== false
+            );
+            const selectableServers =
+              activePool.length > 0
+                ? activePool
+                : DEFAULT_SERVERS.filter((s) => (directStreamEnabled ? true : s.type === 'embed'));
+
+            const movieSrvObj =
+              selectableServers.find((s) => s.id === defaultServerPrefs.movieServerId) ||
+              selectableServers[0];
+            const tvSrvObj =
+              selectableServers.find((s) => s.id === defaultServerPrefs.tvServerId) ||
+              selectableServers[0];
+
+            return (
+              <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34] space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-base font-black text-white flex items-center gap-2">
+                      <Sliders className="w-4 h-4 text-[#F5C400]" />
+                      <span>Default Servers for Movies &amp; TV Series</span>
+                    </h3>
+                    <p className="text-xs text-[#A6A6AC] mt-1">
+                      Choose which server opens by default on Watch Page separately for <strong className="text-white">Movies</strong> and <strong className="text-white">TV Series</strong>.
+                    </p>
+                  </div>
+                  {savedDefaultPrefsToast && (
+                    <span className="px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1.5 w-fit">
+                      <Check className="w-3.5 h-3.5" />
+                      Saved to Firestore
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Movies Default Column */}
+                  <div className="p-4 rounded-xl bg-[#0f0f13] border border-[#282830] space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-[#F5C400]">
+                      <Film className="w-4 h-4" />
+                      <span>Movies (Default Server)</span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-[#A6A6AC] block">
+                        Primary Watch Page Server for Movies
+                      </label>
+                      <select
+                        value={movieSrvObj?.id || defaultServerPrefs.movieServerId}
+                        disabled={savingDefaultPrefs}
+                        onChange={(e) => handleUpdateDefaultPrefs({ movieServerId: e.target.value })}
+                        className="w-full h-10 px-3 rounded-xl bg-[#16161c] border border-[#32323c] text-xs font-bold text-white focus:outline-none focus:border-[#F5C400] cursor-pointer"
+                      >
+                        {selectableServers.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} ({s.type === 'direct' ? 'Direct Native' : 'Embed'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {directStreamEnabled && movieSrvObj?.type === 'direct' && (
+                      <div className="space-y-1 pt-1">
+                        <label className="text-[11px] font-semibold text-[#A6A6AC] block">
+                          Direct Provider Loaded First (Movies)
+                        </label>
+                        <select
+                          value={defaultServerPrefs.movieDirectProvider}
+                          disabled={savingDefaultPrefs}
+                          onChange={(e) =>
+                            handleUpdateDefaultPrefs({ movieDirectProvider: e.target.value })
+                          }
+                          className="w-full h-10 px-3 rounded-xl bg-[#16161c] border border-[#32323c] text-xs font-semibold text-amber-300 focus:outline-none focus:border-[#F5C400] cursor-pointer"
+                        >
+                          {DIRECT_PROVIDER_OPTIONS.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} · {p.badge}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* TV Series Default Column */}
+                  <div className="p-4 rounded-xl bg-[#0f0f13] border border-[#282830] space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-sky-400">
+                      <Tv className="w-4 h-4" />
+                      <span>TV Series (Default Server)</span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-semibold text-[#A6A6AC] block">
+                        Primary Watch Page Server for TV Series
+                      </label>
+                      <select
+                        value={tvSrvObj?.id || defaultServerPrefs.tvServerId}
+                        disabled={savingDefaultPrefs}
+                        onChange={(e) => handleUpdateDefaultPrefs({ tvServerId: e.target.value })}
+                        className="w-full h-10 px-3 rounded-xl bg-[#16161c] border border-[#32323c] text-xs font-bold text-white focus:outline-none focus:border-[#F5C400] cursor-pointer"
+                      >
+                        {selectableServers.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} ({s.type === 'direct' ? 'Direct Native' : 'Embed'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {directStreamEnabled && tvSrvObj?.type === 'direct' && (
+                      <div className="space-y-1 pt-1">
+                        <label className="text-[11px] font-semibold text-[#A6A6AC] block">
+                          Direct Provider Loaded First (TV Series)
+                        </label>
+                        <select
+                          value={defaultServerPrefs.tvDirectProvider}
+                          disabled={savingDefaultPrefs}
+                          onChange={(e) =>
+                            handleUpdateDefaultPrefs({ tvDirectProvider: e.target.value })
+                          }
+                          className="w-full h-10 px-3 rounded-xl bg-[#16161c] border border-[#32323c] text-xs font-semibold text-sky-300 focus:outline-none focus:border-[#F5C400] cursor-pointer"
+                        >
+                          {DIRECT_PROVIDER_OPTIONS.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} · {p.badge}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
