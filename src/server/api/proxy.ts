@@ -130,10 +130,23 @@ proxyRoute.all('*', async (c) => {
 
     try {
         const target = new URL(rawUrl);
+        const host = target.hostname.toLowerCase();
 
-        if (target.hostname.toLowerCase().includes('videodownloader.site')) {
+        if (host.includes('videodownloader.site')) {
             referer = 'https://videodownloader.site/';
             origin = 'https://videodownloader.site';
+        } else if (!queryReferer && (host === 'vidrock.net' || host.endsWith('.vidrock.net'))) {
+            referer = 'https://vidrock.net/';
+            origin = 'https://vidrock.net';
+        } else if (!queryReferer && (host === 'meowtv.ru' || host.endsWith('.meowtv.ru'))) {
+            referer = 'https://meowtv.ru/';
+            origin = 'https://meowtv.ru';
+        } else if (!queryReferer && (host === 'vidlink.pro' || host.endsWith('.vidlink.pro'))) {
+            referer = 'https://vidlink.pro/';
+            origin = 'https://vidlink.pro';
+        } else if (!queryReferer && (host === 'vidrift.in' || host.endsWith('.vidrift.in'))) {
+            referer = 'https://embed.vidrift.in/';
+            origin = 'https://embed.vidrift.in';
         }
     } catch {
         return c.json({ error: 'Invalid upstream URL' }, 400);

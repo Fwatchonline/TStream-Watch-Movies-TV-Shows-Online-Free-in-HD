@@ -30,20 +30,22 @@ export function cleanServerDisplay(name: string): string {
   let s = name;
 
   // Preserve core fast providers
-  if (/^(Vector|Valence|Eclipse|BoxMovie|Apex)\b/i.test(s)) {
+  if (/^(Vector|Valence|Eclipse|BoxMovie|Apex|Core|Orion|Pulse)\b/i.test(s)) {
     return s;
   }
   if (/vidapi/i.test(s)) return 'Vector';
   if (/lmscript/i.test(s)) return 'Valence';
   if (/boxmovie/i.test(s)) return 'BoxMovie';
   if (/meowtv/i.test(s)) return 'Apex';
+  if (/vidrock/i.test(s)) return 'Core';
+  if (/vidrift/i.test(s)) return 'Orion';
+  if (/vidlink/i.test(s)) return 'Pulse';
 
   s = s.replace(/api\.fmov\.my/gi, 'Eclipse');
   s = s.replace(/fmov/gi, 'Eclipse');
   s = s.replace(/showbox/gi, 'Poseidon 4K');
   s = s.replace(/febbox/gi, 'Poseidon');
   s = s.replace(/vaplayer/gi, 'Vector Core');
-  s = s.replace(/vidlink/gi, 'Hermes');
   s = s.replace(/castletv/gi, 'Athena');
   s = s.replace(/4khdhub/gi, 'Apollo 4K');
   s = s.replace(/streamflix/gi, 'Ares Edge');
@@ -91,6 +93,7 @@ export async function fetchDirectStreams(params: {
   const query = new URLSearchParams();
   if (params.season != null) query.set('season', params.season.toString());
   if (params.episode != null) query.set('episode', params.episode.toString());
+  if (params.provider && params.provider !== 'all') query.set('provider', params.provider);
   const queryStr = query.toString() ? `?${query.toString()}` : '';
 
   // 1. Primary Orchestrated Multi-Server Route (/api/stream/:type/:id)

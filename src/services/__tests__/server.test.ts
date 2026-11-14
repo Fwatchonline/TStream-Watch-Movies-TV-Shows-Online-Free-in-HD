@@ -10,6 +10,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { webcrypto } from 'node:crypto';
 import serverApp from '../../server/app';
 import {
   createTmdbProxyRoute,
@@ -17,6 +18,16 @@ import {
   clearTmdbRateLimits,
   isAllowedTmdbPath
 } from '../../server/api/tmdb';
+import { createStreamRoute } from '../../server/api/stream';
+import {
+  providers as providerRegistry,
+  getActiveProviders,
+  recordProviderLatency,
+  clearProviderLatencies,
+  getProviderLatencyMs
+} from '../../server/providers';
+import { decryptVidRockStreamUrl } from '../../server/providers/vidrock';
+import { validateSourceUrl } from '../../server/utils/validator';
 import { handleLegacyStreamRequest } from '../../server/legacyStreamHandler';
 import { safeFetchStream, ProxySecurityError } from '../../server/utils/safeProxyFetch';
 import { getServerTmdbApiKey } from '../../../scripts/seoHtmlPlugin';
@@ -263,6 +274,123 @@ async function runTests() {
       badOriginOptions.status === 403 &&
       badOriginGet.headers.get('access-control-allow-origin') !== '*',
     'Task 6: CORS rejects untrusted Origin with HTTP 403 and never emits wildcard Access-Control-Allow-Origin: *'
+  );
+
+  // 8. Streaming Providers Registry, Fastest-First Ordering & New Providers (VidRock, VidLink, VidRift)
+  clearProviderLatencies();
+  const activeProviders = getActiveProviders();
+  const expectedOrder = ['vidapi', 'eclipse', 'boxmovie', 'vidrock', 'vidrift', 'vidlink', 'lmscript', 'meowtv'];
+  assert(
+    expectedOrder.every(k => Boolean(providerRegistry[k])) &&
+      activeProviders.length === 8 &&
+      activeProviders.map(p => p.key).join(',') === expectedOrder.join(','),
+    'All 8 providers (Vector, Eclipse, BoxMovie, Core, Orion, Pulse, Valence, Apex) are registered in lowest-RTT order'
+  );
+
+  // 8A. Dynamic fastest-first benchmarking in createStreamRoute()
+  const slowProvider = {
+    key: 'slow_server',
+    label: 'SlowServer',
+    priority: 1,
+    enabled: true,
+    async getStream() {
+      await new Promise(r => setTimeout(r, 85));
+      return { success: true, source: 'slow_server', url: '/api/proxy?url=https%3A%2F%2Fslow.example%2Fv.m3u8', type: 'hls' as const };
+    }
+  };
+  const fastProvider = {
+    key: 'fast_server',
+    label: 'FastServer',
+    priority: 5,
+    enabled: true,
+    async getStream() {
+      await new Promise(r => setTimeout(r, 10));
+      return { success: true, source: 'fast_server', url: '/api/proxy?url=https%3A%2F%2Ffast.example%2Fv.m3u8', type: 'hls' as const };
+    }
+  };
+
+  const latencyTracker = new Map<string, number>();
+  const benchmarkStreamRoute = createStreamRoute({
+    getProviders: () => [slowProvider, fastProvider],
+    recordLatency: (key, ms) => latencyTracker.set(key, ms),
+    getLatency: (key) => latencyTracker.get(key) ?? null
+  });
+
+  const fastestRes = await benchmarkStreamRoute.request('/movie/550');
+  const fastestJson = await fastestRes.json() as any;
+  assert(
+    fastestRes.status === 200 &&
+      fastestJson.source === 'fast_server' &&
+      fastestJson.primaryServer === 'FastServer' &&
+      fastestJson.servers.length === 2 &&
+      fastestJson.servers[0].key === 'fast_server' &&
+      fastestJson.servers[0].responseTimeMs <= fastestJson.servers[1].responseTimeMs,
+    'Stream orchestrator automatically ranks fastest responding working provider first'
+  );
+
+  // 8B. Explicit ?provider= selection moves selected provider first while retaining faster fallback
+  const overrideRes = await benchmarkStreamRoute.request('/movie/550?provider=slow_server');
+  const overrideJson = await overrideRes.json() as any;
+  assert(
+    overrideRes.status === 200 &&
+      overrideJson.source === 'slow_server' &&
+      overrideJson.servers[1].key === 'fast_server',
+    'Explicit ?provider= preference promotes chosen provider first with fastest fallback second'
+  );
+
+  // 8C. Rolling latency tracking promotes fastest healthy provider in getActiveProviders()
+  recordProviderLatency('vidrock', 45, true);
+  recordProviderLatency('vidapi', 320, true);
+  recordProviderLatency('eclipse', 110, true);
+  const dynamicOrder = getActiveProviders();
+  assert(
+    dynamicOrder[0].key === 'vidrock' &&
+      dynamicOrder[1].key === 'eclipse' &&
+      dynamicOrder[2].key === 'vidapi' &&
+      getProviderLatencyMs('vidrock') === 45,
+    'Rolling provider latency promotes genuinely fastest provider to rank #1 in getActiveProviders()'
+  );
+  clearProviderLatencies();
+
+  // 8D. GET /api/stream/providers exposes full fastest-first provider directory
+  const providersListRes = await serverApp.request('/api/stream/providers');
+  const providersListJson = await providersListRes.json() as any;
+  assert(
+    providersListRes.status === 200 &&
+      providersListJson.fastest?.key === 'vidapi' &&
+      Array.isArray(providersListJson.providers) &&
+      providersListJson.providers.length === 8,
+    'GET /api/stream/providers returns all 8 active providers ranked fastest-first'
+  );
+
+  // 8E. VidRock AES-GCM decrypt roundtrip + validator SSRF/HTML rejection
+  const gcmKeyHex = '7f3e9c2a8b5d1f4e6a9c3b7d2e5f8a1c4b6d9e2f5a8c1b4d7e9f2a5c8b1d4e7f';
+  const rawKey = new Uint8Array(gcmKeyHex.length / 2);
+  for (let i = 0; i < rawKey.length; i++) rawKey[i] = parseInt(gcmKeyHex.slice(i * 2, i * 2 + 2), 16);
+  const cryptoKey = await webcrypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['encrypt']);
+  const iv = new Uint8Array(12).fill(7);
+  const encryptedBuf = await webcrypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    cryptoKey,
+    new TextEncoder().encode('https://cdn.example.com/master.m3u8')
+  );
+  const combined = new Uint8Array(iv.length + encryptedBuf.byteLength);
+  combined.set(iv, 0);
+  combined.set(new Uint8Array(encryptedBuf), iv.length);
+  const b64url = Buffer.from(combined).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const decrypted = await decryptVidRockStreamUrl(b64url);
+  assert(
+    decrypted === 'https://cdn.example.com/master.m3u8',
+    'VidRock AES-GCM decryptor accurately decodes encrypted stream URLs'
+  );
+
+  const mockHtmlReject = (async () => new Response('<html>CF</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })) as typeof fetch;
+  const mockHlsOk = (async () => new Response('#EXTM3U', { status: 206, headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } })) as typeof fetch;
+  assert(
+    !(await validateSourceUrl('http://127.0.0.1/internal.m3u8')) &&
+      !(await validateSourceUrl('https://cdn.example.com/cf.m3u8', {}, mockHtmlReject)) &&
+      (await validateSourceUrl('https://cdn.example.com/ok.m3u8', {}, mockHlsOk)),
+    'validateSourceUrl rejects internal SSRF/HTML pages and accepts verified HLS/MP4 streams'
   );
 
   console.log('\n--- ALL SERVER, SECURITY & STREAMING REGRESSION TESTS PASSED ---');

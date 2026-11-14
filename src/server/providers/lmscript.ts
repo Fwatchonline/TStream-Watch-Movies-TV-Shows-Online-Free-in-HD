@@ -9,6 +9,7 @@ export class LMScriptProvider implements VideoProvider {
     timeout = 10000;
 
     constructor(config?: ProviderConfig) {
+        if (config?.label !== undefined) this.label = config.label;
         if (config?.priority !== undefined) this.priority = config.priority;
         if (config?.enabled !== undefined) this.enabled = config.enabled;
         if (config?.timeout !== undefined) this.timeout = config.timeout;
@@ -21,7 +22,11 @@ export class LMScriptProvider implements VideoProvider {
             }
 
             const apiKey = getTmdbApiKey();
-            const tmdbRes = await fetch(`https://api.themoviedb.org/3/movie/${id}?api_key=${apiKey}`);
+            if (!apiKey) return { success: false, source: this.key, error: 'TMDB API key not configured' };
+
+            const tmdbRes = await fetch(`https://api.themoviedb.org/3/movie/${id}?api_key=${apiKey}`, {
+                signal: AbortSignal.timeout(4000)
+            });
             if (!tmdbRes.ok) return { success: false, source: this.key, error: 'Failed to fetch TMDB info' };
             const tmdbData = await tmdbRes.json();
             const name = tmdbData.title || tmdbData.original_title;

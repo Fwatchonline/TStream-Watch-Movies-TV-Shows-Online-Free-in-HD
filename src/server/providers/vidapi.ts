@@ -28,6 +28,7 @@ export class VidAPIProvider implements VideoProvider {
     timeout = 10000;
 
     constructor(config?: ProviderConfig) {
+        if (config?.label !== undefined) this.label = config.label;
         if (config?.priority !== undefined) this.priority = config.priority;
         if (config?.enabled !== undefined) this.enabled = config.enabled;
         if (config?.timeout !== undefined) this.timeout = config.timeout;

@@ -42,12 +42,15 @@ interface StreamingPlayerProps {
 }
 
 const HLS_CLUSTERS = [
-  { id: 'vidapi', name: 'Vector (Primary)', desc: 'Direct HLS Multi-bitrate 1080p/720p', badge: 'Priority 1' },
-  { id: 'lmscript', name: 'Valence (Direct)', desc: '1080p MP4 / HLS High Speed', badge: 'Priority 2' },
-  { id: 'eclipse', name: 'Eclipse (Direct)', desc: 'Direct 1080p MP4 Stream', badge: 'Priority 3' },
-  { id: 'boxmovie', name: 'BoxMovie (CDN)', desc: 'Direct AoNeRoom 1080p MP4', badge: 'Priority 4' },
-  { id: 'meowtv', name: 'Apex (Multi-Audio)', desc: 'Multi-lingual HLS Stream', badge: 'Priority 5' },
-  { id: 'all', name: 'Auto Sweep & Failover', desc: 'Parallel Discovery & Failover', badge: 'Auto' }
+  { id: 'all', name: 'Auto Fastest First', desc: 'Parallel Speed Benchmark & Failover', badge: 'Fastest' },
+  { id: 'vidapi', name: 'Vector (1-Hop HLS)', desc: 'Direct HLS Multi-bitrate 1080p/720p', badge: 'Priority 1' },
+  { id: 'eclipse', name: 'Eclipse (1-Hop MP4)', desc: 'Direct 1080p MP4 Stream', badge: 'Priority 2' },
+  { id: 'boxmovie', name: 'BoxMovie (CDN MP4)', desc: 'Direct 1080p / 720p MP4 CDN', badge: 'Priority 3' },
+  { id: 'vidrock', name: 'Core (AES-GCM HLS)', desc: 'Verified Multi-Bitrate 1080p HLS', badge: 'Priority 4' },
+  { id: 'vidrift', name: 'Orion (1080p HLS)', desc: 'Direct 1080p Embed HLS Extraction', badge: 'Priority 5' },
+  { id: 'vidlink', name: 'Pulse (1080p HLS/MP4)', desc: 'Multi-Quality 1080p/720p Stream', badge: 'Priority 6' },
+  { id: 'lmscript', name: 'Valence (Movies)', desc: '1080p MP4 / HLS High Speed', badge: 'Priority 7' },
+  { id: 'meowtv', name: 'Apex (Multi-Audio)', desc: 'Multi-lingual HLS Stream', badge: 'Priority 8' }
 ];
 
 export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({

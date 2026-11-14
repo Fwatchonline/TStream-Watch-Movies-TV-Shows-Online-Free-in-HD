@@ -5,7 +5,7 @@
 **Configured Target Runtime:** Node.js `>=24.12.0` (`.nvmrc`, `package.json`, `.github/workflows/deploy-tstream.yml`, `scripts/update-vps.sh`)  
 **Actual Execution Container Runtime:** Node.js `v22.23.2` (container limitation — see Section 6), TypeScript `7.0.2`, Vite `8.3.4`, React `19.3.1`  
 **Commands Executed:** `npm test && npm run lint && npm run build` and `tsx scripts/verify-production.ts --base-url=http://127.0.0.1:3099` against `node dist/server.mjs`  
-**Overall Status:** PASSED (`6/6` test suites — `172/172` assertions, `0` TypeScript errors, `142/142` prerendered HTML routes, `98` sitemap URLs, `104/104` live HTTP verification checks)
+**Overall Status:** PASSED (`6/6` test suites — `179/179` assertions, `0` TypeScript errors, `142/142` prerendered HTML routes, `98` sitemap URLs, `104/104` live HTTP verification checks)
 
 ---
 
@@ -16,7 +16,7 @@
 | `src/services/__tests__/pagination.test.ts` | Pagination, clamping, media-type filters, subtitle language codes | 5 | 0 | **PASS** |
 | `src/services/__tests__/seo.test.ts` | Canonicals, kebab tags, TMDB keyword spaces, cross-media `/genre/:slug`, zero `<lastmod>`, strict episode validation/bounds/noindex/ratings, `verifyNoInternalArtifacts`, dotenv/build parity, SSR/CSR parity | 107 | 0 | **PASS** |
 | `src/services/__tests__/subtitles.test.ts` | VTT/SRT cue parsing, BOM, Windows-1250 Ex-Yu encoding, ISO-639 normalization | 6 | 0 | **PASS** |
-| `src/services/__tests__/server.test.ts` | Zero `VITE_TMDB_API_KEY` exposure, TMDB proxy allowlist/coalescing/cache, SSRF/CORS blocks, sliding rate limiter, 400/403/404/405/503 | 37 | 0 | **PASS** |
+| `src/services/__tests__/server.test.ts` | Zero `VITE_TMDB_API_KEY` exposure, TMDB proxy allowlist/coalescing/cache, SSRF/CORS blocks, sliding rate limiter, 8-provider fastest-first orchestrator, VidRock AES-GCM, `validateSourceUrl` | 44 | 0 | **PASS** |
 | `src/services/__tests__/retries.test.ts` | Season & platform failure recovery, concurrent request coalescing, rapid tab switching, unmount safety | 10 | 0 | **PASS** |
 | `src/services/__tests__/deploy.test.ts` | `ecosystem.config.cjs`, deterministic Node `<24.12.0` (`22.23.2` preload) gate rejection, PM2 ownership guard, atomic symlink switch, `commitSha` & SEO auto-rollback | 7 | 0 | **PASS** |
 | **Static Type Check (`npm run lint`)** | `tsc --noEmit` across client, server, scripts, and tests | 0 errors | 0 | **PASS** |
@@ -51,11 +51,12 @@
 ### Suite 3: Subtitle Parsing & Encoding (`subtitles.test.ts` — 6/6 PASS)
 - WebVTT cue settings/multiline, SRT HTML tag stripping, compact OpenSubtitles cue spacing, UTF-8 BOM, Windows-1250 diacritics (`čćšžđ`), and 3-letter OpenSubtitles code normalization (`srp->sr`, `hrv->hr`, `bos->bs`, `eng->en`).
 
-### Suite 4: Server Security, Proxy, Rate Limiter & CORS (`server.test.ts` — 37/37 PASS)
+### Suite 4: Server Security, Proxy, Rate Limiter & Streaming Orchestrator (`server.test.ts` — 44/44 PASS)
 - Browser `getTmdbApiKey()` always returns empty string; zero `VITE_TMDB_API_KEY` references in source or CI env.
 - `/api/tmdb/*` proxy enforces endpoint allowlist, strips client `api_key`, returns `503` + `Cache-Control: no-store` if unconfigured, coalesces concurrent requests, handles `HEAD`, rejects `POST` (`405`).
 - `/api/stream`, `/api/proxy`, `/api/subtitle-proxy`, and legacy routes enforce numeric ID / URL validation (`400`), method restrictions (`405`), and SSRF blocking (`127.0.0.1`, `169.254.169.254`, RFC1918 private LAN -> `403`).
 - Sliding-window rate limiter enforces `429` + `Retry-After` even on cache hits and ignores spoofed `X-Forwarded-For` when `TRUST_PROXY` is false; CORS rejects untrusted origins with `403`.
+- All 8 streaming providers (`Vector/vidapi`, `Eclipse/eclipse`, `BoxMovie/boxmovie`, `Core/vidrock`, `Orion/vidrift`, `Pulse/vidlink`, `Valence/lmscript`, `Apex/meowtv`) verified in lowest-RTT order, with dynamic fastest-first sorting, rolling latency promotion, `?provider=` preference override, VidRock AES-GCM decryption, and SSRF-safe `validateSourceUrl`.
 
 ### Suite 5: Retry, Concurrency & Component Unmount Safety (`retries.test.ts` — 10/10 PASS)
 - Season/platform transient `500`/`429` failures clear permanently stuck ref locks (`src/utils/retryState.ts`), support clean manual retry, coalesce concurrent fetches, discard stale responses after rapid tab/season switching, and guard unmounted components.
@@ -75,14 +76,14 @@
   - `sitemap-episodes.xml`: **11** verified episode URLs
   - **Total Sitemap URLs:** **98** (zero `<lastmod>`, zero duplicates, zero `/watch/movie/`, zero corrupt IDs)
 - **Vite Client Bundle (`dist/`):**
-  - `dist/index.html` (prerendered root `12.87 kB` after Step 3), `dist/assets/index-BqEKF9pp.css` (`143.67 kB`), `dist/assets/index-BeLmSEEj.js` (`2,675.79 kB`), `dist/manifest.webmanifest`, `dist/sw.js` (PWA precache: `27` entries).
+  - `dist/index.html` (prerendered root `12.87 kB` after Step 3), `dist/assets/index-BqEKF9pp.css` (`143.67 kB`), `dist/assets/index-C4yxEme6.js` (`2,676.30 kB`), `dist/manifest.webmanifest`, `dist/sw.js` (PWA precache: `27` entries).
   - `public/assets/aistudio/` & `dist/assets/aistudio/` contain **only** `tstream-logo-yellow-transparent_1__d41aea4b.png` (`21,988` bytes); zero internal `Paste_*`, `AwesomeScreenshot-*`, or `Spider-Man_Streaming_Watch_Page_*` files remain.
 - **Prerender Report (`dist/prerender-report.json`):**
   - **Attempted routes:** **142**
   - **Succeeded total:** **142** (`0` failed)
     - **Indexable HTML (`200`, `index, follow`):** **127** (Homepage, `6` indexable hubs, `12` kebab tags, `14` offline-populated genres, `4` populated platforms, `13` populated A-Z letters, `29` movie details, `29` movie watch routes canonicalizing to `/movie/:slug`, `7` TV series, `11` verified TV episodes)
     - **Non-indexable / Utility / Error HTML:** **15** (`dist/404.html`, `/new-episodes`, `/people`, `/random`, `7` offline-empty genres incl. `/genre/horror`, `5` offline-empty platforms)
-- **Server Bundle:** `dist/server.mjs` (`268.2 kb`), verified zero secret leaks and zero internal artifacts across `public/` & `dist/`.
+- **Server Bundle:** `dist/server.mjs` (`285.0 kb`), verified zero secret leaks and zero internal artifacts across `public/` & `dist/`.
 
 ---
 

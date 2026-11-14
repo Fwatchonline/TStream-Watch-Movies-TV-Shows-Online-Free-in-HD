@@ -49,7 +49,10 @@ export class MeowTVProvider implements VideoProvider {
     timeout = 9000;
 
     constructor(config?: ProviderConfig) {
+        if (config?.label !== undefined) this.label = config.label;
         if (config?.priority !== undefined) this.priority = config.priority;
+        if (config?.enabled !== undefined) this.enabled = config.enabled;
+        if (config?.timeout !== undefined) this.timeout = config.timeout;
     }
 
     async getStream(id: string, type: 'movie' | 'tv', season?: number, episode?: number): Promise<StreamResult> {

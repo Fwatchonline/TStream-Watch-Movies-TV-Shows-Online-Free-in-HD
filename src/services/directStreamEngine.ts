@@ -244,7 +244,7 @@ export async function resolveVidRock(id: number | string, s?: number | null, e?:
   try {
     const isTv = s != null && e != null;
     const path = isTv ? `tv/${id}/${s}/${e || 1}` : `movie/${id}`;
-    const baseUrl = 'https://vidrock.ru/';
+    const baseUrl = 'https://vidrock.net/';
 
     const res = await fetch(`${baseUrl}api/${path}`, {
       headers: {
