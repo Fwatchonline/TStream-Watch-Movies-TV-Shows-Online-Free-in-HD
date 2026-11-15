@@ -1,9 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Play, Star, Plus, Check } from 'lucide-react';
 import { MediaItem, MediaType } from '../types/media';
 import { isInWatchlist, toggleWatchlist } from '../services/storage';
 import { useAuth } from '../context/AuthContext';
 import { QualityBadge } from './QualityBadge';
+import {
+  buildImageProxyUrl,
+  isProxiedImagePath,
+  resolveSafeImageSrc,
+  unwrapImageProxyUrl
+} from '../utils/imageUrl';
 
 interface MediaCardProps {
   item: MediaItem;
@@ -14,9 +20,43 @@ interface MediaCardProps {
 export const MediaCard: React.FC<MediaCardProps> = ({ item, onSelect, onWatch }) => {
   const { user, isInWatchlist: isCloudInWatchlist, toggleWatchlist: toggleCloudWatchlist } = useAuth();
   const [inWatchlist, setInWatchlist] = useState(() => (user ? isCloudInWatchlist(item.id) : isInWatchlist(item.id)));
-  const [imageError, setImageError] = useState(false);
+  const [imgSrc, setImgSrc] = useState<string>(() => resolveSafeImageSrc(item.posterPath || item.backdropPath));
+  const [fallbackStage, setFallbackStage] = useState<'poster' | 'poster-proxy' | 'backdrop' | 'backdrop-proxy' | 'failed'>('poster');
 
-  React.useEffect(() => {
+  useEffect(() => {
+    const initial = resolveSafeImageSrc(item.posterPath || item.backdropPath);
+    setImgSrc(initial);
+    setFallbackStage(item.posterPath ? 'poster' : item.backdropPath ? 'backdrop' : 'failed');
+  }, [item.id, item.posterPath, item.backdropPath]);
+
+  const handleImageError = () => {
+    const rawPoster = unwrapImageProxyUrl(item.posterPath);
+    const rawBackdrop = unwrapImageProxyUrl(item.backdropPath);
+
+    if (fallbackStage === 'poster' && rawPoster && !isProxiedImagePath(imgSrc) && rawPoster.startsWith('http')) {
+      setFallbackStage('poster-proxy');
+      setImgSrc(buildImageProxyUrl(rawPoster));
+      return;
+    }
+
+    if ((fallbackStage === 'poster' || fallbackStage === 'poster-proxy') && rawBackdrop && rawBackdrop !== rawPoster) {
+      const nextBackdrop = resolveSafeImageSrc(rawBackdrop);
+      setFallbackStage(isProxiedImagePath(nextBackdrop) ? 'backdrop-proxy' : 'backdrop');
+      setImgSrc(nextBackdrop);
+      return;
+    }
+
+    if (fallbackStage === 'backdrop' && rawBackdrop && !isProxiedImagePath(imgSrc) && rawBackdrop.startsWith('http')) {
+      setFallbackStage('backdrop-proxy');
+      setImgSrc(buildImageProxyUrl(rawBackdrop));
+      return;
+    }
+
+    setFallbackStage('failed');
+    setImgSrc('');
+  };
+
+  useEffect(() => {
     if (user) {
       const next = isCloudInWatchlist(item.id);
       setInWatchlist(prev => (prev === next ? prev : next));
@@ -62,11 +102,11 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onSelect, onWatch })
     >
       {/* Poster Media Box */}
       <div className="relative aspect-[2/3] w-full overflow-hidden bg-[#29292D]">
-        {!imageError && item.posterPath ? (
+        {fallbackStage !== 'failed' && imgSrc ? (
           <img
-            src={item.posterPath}
+            src={imgSrc}
             alt={item.title}
-            onError={() => setImageError(true)}
+            onError={handleImageError}
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
             loading="lazy"

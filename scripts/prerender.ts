@@ -430,7 +430,11 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
   console.log(`- Succeeded total:    ${report.succeeded}`);
   console.log(`  - Indexable HTML:   ${report.indexableSucceeded}`);
   console.log(`  - Noindex/404 HTML: ${report.noindexSucceeded}`);
-  console.log(`- Failed routes:      ${report.failed}`);
+  if (report.failed > 0) {
+    console.log(`- Failed routes:      ${report.failed}`);
+  } else {
+    console.log(`- Verification check: All ${report.succeeded} routes passed cleanly`);
+  }
   console.log(`- Output directory:   ${distDir}`);
   console.log(`- Report written:     ${path.join(distDir, 'prerender-report.json')}`);
   console.log(`--------------------------------------------------`);

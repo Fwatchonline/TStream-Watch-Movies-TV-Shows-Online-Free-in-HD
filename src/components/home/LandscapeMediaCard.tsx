@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Play, Star, Calendar } from 'lucide-react';
 import { MediaItem } from '../../types/media';
 import { QualityBadge } from '../QualityBadge';
+import { buildImageProxyUrl, isProxiedImagePath, resolveSafeImageSrc } from '../../utils/imageUrl';
 
 interface LandscapeMediaCardProps {
   item: MediaItem;
@@ -20,6 +21,30 @@ export const LandscapeMediaCard: React.FC<LandscapeMediaCardProps> = ({
   const year = item.releaseDate ? new Date(item.releaseDate).getFullYear() : '2026';
   const genreName = item.genres?.[0]?.name || (isMovie ? 'Cinema' : 'Series');
 
+  const rawPrimary = item.backdropPath || item.posterPath;
+  const rawSecondary = item.posterPath;
+  const [imgSrc, setImgSrc] = useState<string>(() => resolveSafeImageSrc(rawPrimary));
+  const [fallbackStep, setFallbackStep] = useState(0);
+
+  useEffect(() => {
+    setImgSrc(resolveSafeImageSrc(rawPrimary));
+    setFallbackStep(0);
+  }, [item.id, rawPrimary]);
+
+  const handleImageError = () => {
+    if (fallbackStep === 0 && rawPrimary && !isProxiedImagePath(imgSrc)) {
+      setImgSrc(buildImageProxyUrl(rawPrimary));
+      setFallbackStep(1);
+      return;
+    }
+    if (fallbackStep <= 1 && rawSecondary && rawSecondary !== rawPrimary) {
+      setImgSrc(resolveSafeImageSrc(rawSecondary));
+      setFallbackStep(2);
+      return;
+    }
+    setFallbackStep(3);
+  };
+
   const handleWatch = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onWatchMedia) onWatchMedia(item);
@@ -33,13 +58,16 @@ export const LandscapeMediaCard: React.FC<LandscapeMediaCardProps> = ({
     >
       {/* 16:9 Backdrop Image */}
       <div className="relative aspect-video w-full bg-[#1b1b20] overflow-hidden">
-        <img
-          src={item.backdropPath || item.posterPath}
-          alt={item.title}
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-          loading="lazy"
-          referrerPolicy="no-referrer"
-        />
+        {imgSrc && fallbackStep < 3 ? (
+          <img
+            src={imgSrc}
+            alt={item.title}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={handleImageError}
+          />
+        ) : null}
 
         {/* Gradient Scrim */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />

@@ -29,6 +29,7 @@ import { PlatformSection } from '../components/home/PlatformSection';
 import { GenreCard, POPULAR_GENRES } from '../components/home/GenreCard';
 import { genreToSlug } from '../utils/genres';
 import { PageLoadingIndicator } from '../components/PageLoadingIndicator';
+import { resolveSafeImageSrc } from '../utils/imageUrl';
 
 interface HomePageProps {
   onSelectMedia: (item: MediaItem) => void;
@@ -177,7 +178,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             <div className="relative h-[360px] sm:h-[400px] lg:h-[440px] w-full overflow-hidden select-none">
               {/* TMDB Backdrop Artwork */}
               <img
-                src={currentHero.backdropPath || currentHero.posterPath}
+                src={resolveSafeImageSrc(currentHero.backdropPath || currentHero.posterPath)}
                 alt={currentHero.title}
                 className="w-full h-full object-cover object-top filter brightness-65 transition-transform duration-700"
                 referrerPolicy="no-referrer"

@@ -40,6 +40,41 @@ function canUseClientTmdbProxy(): boolean {
   return typeof window !== 'undefined';
 }
 
+async function tryFetchLiveCatalog(
+  category: string,
+  page: number,
+  extraFilters: Partial<FilterOptions>
+): Promise<PaginatedResponse<MediaItem> | null> {
+  if (!canUseClientTmdbProxy()) return null;
+  try {
+    const params = new URLSearchParams();
+    params.set('category', category);
+    params.set('page', String(page));
+    if (extraFilters.mediaType) params.set('mediaType', extraFilters.mediaType);
+    if (extraFilters.genreId) params.set('genreId', String(extraFilters.genreId));
+    if (extraFilters.year) params.set('year', String(extraFilters.year));
+    if (extraFilters.minRating) params.set('minRating', String(extraFilters.minRating));
+    if (extraFilters.sortBy) params.set('sortBy', extraFilters.sortBy);
+    if (extraFilters.query && extraFilters.query.trim()) params.set('query', extraFilters.query.trim());
+    if (extraFilters.letter && extraFilters.letter !== 'All') params.set('letter', extraFilters.letter);
+
+    const res = await fetch(`/api/catalog/live?${params.toString()}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (Array.isArray(data?.results) && data.results.length > 0) {
+      return {
+        page: data.page || page,
+        totalPages: data.totalPages || 1,
+        totalResults: data.totalResults || data.results.length,
+        results: data.results
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Deprecated: TMDB API keys are never exposed in browser bundles.
  * Live requests from the browser transparently go through /api/tmdb on the server.
@@ -83,7 +118,7 @@ export function normalizeTMDBItem(raw: any, category?: string): MediaItem {
       ? `https://image.tmdb.org/t/p/original${raw.backdrop_path}`
       : raw.poster_path
       ? `https://image.tmdb.org/t/p/original${raw.poster_path}`
-      : 'https://images.unsplash.com/photo-1518173946687-a4c8a383392e?w=1280&auto=format&fit=crop&q=80',
+      : 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1280&auto=format&fit=crop&q=80',
     releaseDate: raw.release_date || raw.first_air_date || '2026',
     voteAverage: Number((raw.vote_average || 0).toFixed(1)),
     voteCount: raw.vote_count || 0,
@@ -405,6 +440,29 @@ export async function fetchCatalog(
         matchedItems.sort((a, b) => b.popularity - a.popularity);
       }
 
+      if (rawItems.length === 0 && !requestOpts.fetchImpl && !requestOpts.throwOnError) {
+        const liveAz = await tryFetchLiveCatalog('az', safePage, {
+          ...extraFilters,
+          letter: targetLetter,
+          mediaType: targetType
+        });
+        if (liveAz && liveAz.results.length > 0) {
+          for (const item of liveAz.results) {
+            const key = `${item.mediaType}-${item.id}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              matchedItems.push(item);
+            }
+          }
+          return {
+            page: liveAz.page,
+            totalPages: liveAz.totalPages,
+            totalResults: Math.max(liveAz.totalResults, matchedItems.length),
+            results: matchedItems.slice(0, 18)
+          };
+        }
+      }
+
       const PAGE_SIZE_AZ = 18;
       const totalResults = matchedItems.length;
       const totalPages = Math.max(1, Math.ceil(totalResults / PAGE_SIZE_AZ));
@@ -448,6 +506,10 @@ export async function fetchCatalog(
           totalResults: data.total_results || results.length,
           results
         };
+      }
+      if (!requestOpts.fetchImpl && !requestOpts.throwOnError) {
+        const liveSearch = await tryFetchLiveCatalog('search', safePage, extraFilters);
+        if (liveSearch) return liveSearch;
       }
     }
 
@@ -612,6 +674,18 @@ export async function fetchCatalog(
         };
       }
     }
+
+    // TMDB proxy unavailable (e.g. TMDB_API_KEY not configured -> 503):
+    // Try live Cinemeta catalog fallback in browser before falling back to small local dataset.
+    if (!requestOpts.fetchImpl && !requestOpts.throwOnError && !extraFilters.platform) {
+      const liveFallback = await tryFetchLiveCatalog(category, safePage, {
+        ...extraFilters,
+        mediaType: targetType
+      });
+      if (liveFallback) {
+        return liveFallback;
+      }
+    }
   } catch (err) {
     if (requestOpts.throwOnError) {
       throw err;
@@ -719,7 +793,7 @@ export async function getMediaDetail(id: number, type: MediaType): Promise<Media
     }
   }
 
-  // Fallback to local curated items when offline or unmatched
+  // Fallback to local curated items first, then live Cinemeta metadata detail
   if (type === 'movie') {
     const foundMovie = DETAILED_MOVIES.find(m => m.id === id || m.tmdbId === id);
     if (foundMovie) return foundMovie;
@@ -730,6 +804,20 @@ export async function getMediaDetail(id: number, type: MediaType): Promise<Media
     if (foundTV) return foundTV;
     const basic = EXPANDED_CATALOG.find(t => (t.id === id || t.tmdbId === id) && mTypeMatches(t, 'tv'));
     if (basic) return createDefaultTVDetail(basic);
+  }
+
+  if (canUseClientTmdbProxy()) {
+    try {
+      const liveRes = await fetch(`/api/catalog/live/detail?type=${type}&id=${id}`);
+      if (liveRes.ok) {
+        const liveDetail = await liveRes.json();
+        if (liveDetail && liveDetail.id) {
+          return liveDetail as MediaDetail;
+        }
+      }
+    } catch {
+      // ignore live detail error
+    }
   }
 
   // Genuine 404: do NOT substitute another movie/show
@@ -846,6 +934,20 @@ export async function fetchSeasonEpisodesStrict(
       const foundTV = DETAILED_TV_SHOWS.find(t => t.id === tvId || t.tmdbId === tvId);
       const foundSeason = foundTV?.seasons?.find(s => s.seasonNumber === seasonNumber);
       return foundSeason?.episodes || [];
+    }
+    if (res.status === 503 && fetchImpl === fetch && canUseClientTmdbProxy()) {
+      try {
+        const liveRes = await fetch(`/api/catalog/live/detail?type=tv&id=${tvId}`);
+        if (liveRes.ok) {
+          const liveDetail = await liveRes.json();
+          const liveSeason = liveDetail?.seasons?.find((s: any) => s.seasonNumber === seasonNumber);
+          if (Array.isArray(liveSeason?.episodes) && liveSeason.episodes.length > 0) {
+            return liveSeason.episodes;
+          }
+        }
+      } catch {
+        // fall through to strict error / local fallback
+      }
     }
     if (!res.ok) {
       const err: any = new Error(`Failed loading season ${seasonNumber} episodes (HTTP ${res.status})`);
@@ -1192,6 +1294,20 @@ export async function fetchRandomMedia(
     } catch (err) {
       console.warn('fetchRandomMedia failed, using catalog fallback:', err);
     }
+
+    const liveRand = await tryFetchLiveCatalog(
+      mediaType === 'tv' ? 'popular-tv' : mediaType === 'movie' ? 'popular-movies' : 'trending',
+      Math.floor(Math.random() * 5) + 1,
+      { mediaType, genreId }
+    );
+    if (liveRand && liveRand.results.length > 0) {
+      const pool = [...liveRand.results];
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      return pool.slice(0, count);
+    }
   }
 
   // Fallback to shuffled EXPANDED_CATALOG
@@ -1235,7 +1351,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 1136406,
     name: 'Tom Holland',
-    profilePath: 'https://image.tmdb.org/t/p/w500/bBRqqoK5p3aHqFXn6kLgQ2pBv6V.jpg',
+    profilePath: null,
     knownForDepartment: 'Acting',
     popularity: 98.4,
     knownFor: ['Spider-Man: Brand New Day', 'Spider-Man: No Way Home', 'Uncharted']
@@ -1243,7 +1359,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 505710,
     name: 'Zendaya',
-    profilePath: 'https://image.tmdb.org/t/p/w500/r2GQgZ4m3U1Q3z5v8Y7X4pZ3Q5a.jpg',
+    profilePath: null,
     knownForDepartment: 'Acting',
     popularity: 96.2,
     knownFor: ['Dune: Part Two', 'Euphoria', 'Challengers']
@@ -1251,7 +1367,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 525,
     name: 'Christopher Nolan',
-    profilePath: 'https://image.tmdb.org/t/p/w500/xuAIuYSmsUzKlUMBFGVZaWsY3Z5.jpg',
+    profilePath: null,
     knownForDepartment: 'Directing',
     popularity: 95.8,
     knownFor: ['Oppenheimer', 'Interstellar', 'Inception', 'The Dark Knight']
@@ -1259,7 +1375,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 2037,
     name: 'Cillian Murphy',
-    profilePath: 'https://image.tmdb.org/t/p/w500/llk2SmSp101BtZNV7sq51ZtFfVO.jpg',
+    profilePath: null,
     knownForDepartment: 'Acting',
     popularity: 94.7,
     knownFor: ['Oppenheimer', 'Peaky Blinders', 'Inception', '28 Days Later']
@@ -1267,7 +1383,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 138,
     name: 'Quentin Tarantino',
-    profilePath: 'https://image.tmdb.org/t/p/w500/9shFNfTls8N1q6eG356K80Wp1f5.jpg',
+    profilePath: null,
     knownForDepartment: 'Directing',
     popularity: 93.9,
     knownFor: ['Pulp Fiction', 'Inglourious Basterds', 'Django Unchained', 'Kill Bill']
@@ -1275,7 +1391,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 137427,
     name: 'Denis Villeneuve',
-    profilePath: 'https://image.tmdb.org/t/p/w500/zp4u12f1E5G3a2W1Y8X4pZ3Q5a.jpg',
+    profilePath: null,
     knownForDepartment: 'Directing',
     popularity: 92.5,
     knownFor: ['Dune: Part Two', 'Blade Runner 2049', 'Arrival', 'Sicario']
@@ -1283,7 +1399,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 6193,
     name: 'Leonardo DiCaprio',
-    profilePath: 'https://image.tmdb.org/t/p/w500/wo2hxAz6fGh25P0qBPu8VoOI2te.jpg',
+    profilePath: null,
     knownForDepartment: 'Acting',
     popularity: 91.8,
     knownFor: ['Inception', 'Titanic', 'The Wolf of Wall Street', 'The Revenant']
@@ -1299,7 +1415,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 2710,
     name: 'James Cameron',
-    profilePath: 'https://image.tmdb.org/t/p/w500/9naovEsGvKn5qvZFFM5L9qZf1Wp.jpg',
+    profilePath: null,
     knownForDepartment: 'Directing',
     popularity: 90.4,
     knownFor: ['Avatar: The Way of Water', 'Titanic', 'Terminator 2', 'Aliens']
@@ -1307,7 +1423,7 @@ const FALLBACK_POPULAR_PEOPLE: PersonSummary[] = [
   {
     id: 1032,
     name: 'Martin Scorsese',
-    profilePath: 'https://image.tmdb.org/t/p/w500/99hFNfTls8N1q6eG356K80Wp1f5.jpg',
+    profilePath: null,
     knownForDepartment: 'Directing',
     popularity: 89.6,
     knownFor: ['Killers of the Flower Moon', 'Goodfellas', 'Taxi Driver', 'The Departed']

@@ -1,6 +1,12 @@
 import React from 'react';
 import { Layers, ChevronRight } from 'lucide-react';
 import { DiscoveredCollection } from '../../services/collectionStore';
+import {
+  buildImageProxyUrl,
+  isProxiedImagePath,
+  resolveSafeImageSrc,
+  unwrapImageProxyUrl
+} from '../../utils/imageUrl';
 
 interface CollectionCardProps {
   collection: DiscoveredCollection;
@@ -16,9 +22,34 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
 
   // Extract up to 3 posters for the fanned artwork
   const fallbackPoster = 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=500&auto=format&fit=crop&q=80';
-  const posterCenter = (parts[0]?.posterPath || collection.posterPath) || fallbackPoster;
-  const posterLeft = (parts[1]?.posterPath || parts[0]?.posterPath || collection.posterPath) || fallbackPoster;
-  const posterRight = (parts[2]?.posterPath || parts[1]?.posterPath || collection.posterPath) || fallbackPoster;
+  const collectionPoster = resolveSafeImageSrc(collection.posterPath) || fallbackPoster;
+  const posterCenter = resolveSafeImageSrc(parts[0]?.posterPath) || collectionPoster;
+  const posterLeft = resolveSafeImageSrc(parts[1]?.posterPath || parts[0]?.posterPath) || collectionPoster;
+  const posterRight = resolveSafeImageSrc(parts[2]?.posterPath || parts[1]?.posterPath) || collectionPoster;
+  const safeBackdrop = resolveSafeImageSrc(collection.backdropPath);
+
+  const handlePosterError = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (img.dataset.fallbackStage === 'done') return;
+
+    const currentUrl = img.getAttribute('src') || '';
+    if (!img.dataset.proxyTried && currentUrl.startsWith('http') && !isProxiedImagePath(currentUrl)) {
+      img.dataset.proxyTried = '1';
+      img.src = buildImageProxyUrl(currentUrl);
+      return;
+    }
+
+    if (!img.dataset.fallbackStage && unwrapImageProxyUrl(currentUrl) !== unwrapImageProxyUrl(collectionPoster)) {
+      img.dataset.fallbackStage = 'collection';
+      img.dataset.proxyTried = '';
+      img.src = collectionPoster;
+      return;
+    }
+    if (currentUrl !== fallbackPoster) {
+      img.dataset.fallbackStage = 'done';
+      img.src = fallbackPoster;
+    }
+  };
 
   return (
     <div
@@ -28,14 +59,17 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
       {/* Visual Area: 3 Fanned / Overlapping Posters */}
       <div className="relative h-[190px] sm:h-[200px] w-full overflow-hidden bg-gradient-to-b from-[#1c1c22] via-[#22222a] to-[#29292D] flex items-center justify-center pt-2">
         {/* Subtle Backdrop Ambient Glow */}
-        {collection.backdropPath && (
+        {safeBackdrop && (
           <div className="absolute inset-0 z-0 opacity-15 overflow-hidden">
             <img
-              src={collection.backdropPath}
+              src={safeBackdrop}
               alt=""
               className="w-full h-full object-cover filter blur-md"
               loading="lazy"
               referrerPolicy="no-referrer"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
             />
           </div>
         )}
@@ -43,37 +77,40 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
         {/* 3-Poster Layered Stack Container */}
         <div className="relative z-10 flex items-center justify-center w-full h-full pb-3">
           {/* Left Poster (tilted left) */}
-          <div className="absolute w-[85px] sm:w-[95px] aspect-[2/3] rounded-md overflow-hidden shadow-lg border border-white/10 transform -rotate-10 -translate-x-8 sm:-translate-x-9 translate-y-1 group-hover:-translate-x-11 group-hover:-rotate-14 transition-all duration-300 opacity-75">
+          <div className="absolute w-[85px] sm:w-[95px] aspect-[2/3] rounded-md overflow-hidden shadow-lg border border-white/10 transform -rotate-10 -translate-x-8 sm:-translate-x-9 translate-y-1 group-hover:-translate-x-11 group-hover:-rotate-14 transition-all duration-300 opacity-75 bg-[#18181c]">
             <img
               src={posterLeft}
               alt=""
               className="w-full h-full object-cover"
               loading="lazy"
               referrerPolicy="no-referrer"
+              onError={handlePosterError}
             />
             <div className="absolute inset-0 bg-black/25" />
           </div>
 
           {/* Right Poster (tilted right) */}
-          <div className="absolute w-[85px] sm:w-[95px] aspect-[2/3] rounded-md overflow-hidden shadow-lg border border-white/10 transform rotate-10 translate-x-8 sm:translate-x-9 translate-y-1 group-hover:translate-x-11 group-hover:rotate-14 transition-all duration-300 opacity-75">
+          <div className="absolute w-[85px] sm:w-[95px] aspect-[2/3] rounded-md overflow-hidden shadow-lg border border-white/10 transform rotate-10 translate-x-8 sm:translate-x-9 translate-y-1 group-hover:translate-x-11 group-hover:rotate-14 transition-all duration-300 opacity-75 bg-[#18181c]">
             <img
               src={posterRight}
               alt=""
               className="w-full h-full object-cover"
               loading="lazy"
               referrerPolicy="no-referrer"
+              onError={handlePosterError}
             />
             <div className="absolute inset-0 bg-black/25" />
           </div>
 
           {/* Center Poster (straight, elevated in front) */}
-          <div className="relative z-20 w-[100px] sm:w-[110px] aspect-[2/3] rounded-md overflow-hidden shadow-2xl border border-[#F5C400]/40 group-hover:border-[#F5C400] transform group-hover:scale-105 group-hover:-translate-y-1 transition-all duration-300">
+          <div className="relative z-20 w-[100px] sm:w-[110px] aspect-[2/3] rounded-md overflow-hidden shadow-2xl border border-[#F5C400]/40 group-hover:border-[#F5C400] transform group-hover:scale-105 group-hover:-translate-y-1 transition-all duration-300 bg-[#18181c]">
             <img
               src={posterCenter}
               alt={collection.name}
               className="w-full h-full object-cover"
               loading="lazy"
               referrerPolicy="no-referrer"
+              onError={handlePosterError}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
           </div>

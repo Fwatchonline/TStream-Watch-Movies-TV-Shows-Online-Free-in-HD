@@ -819,11 +819,17 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                       src={
                         ep.stillPath ||
                         detail.backdropPath ||
-                        'https://images.unsplash.com/photo-1518173946687-a4c8a383392e?w=600&auto=format&fit=crop&q=80'
+                        'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=600&auto=format&fit=crop&q=80'
                       }
                       alt={ep.name}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const fallback = 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=600&auto=format&fit=crop&q=80';
+                        if (e.currentTarget.src !== fallback) {
+                          e.currentTarget.src = fallback;
+                        }
+                      }}
                     />
                     <div className="absolute inset-0 bg-black/40 group-hover:bg-black/20 flex items-center justify-center transition-colors">
                       <div className="w-10 h-10 rounded-full bg-[#F5C400] flex items-center justify-center text-black shadow-lg group-hover:scale-110 transition-transform">

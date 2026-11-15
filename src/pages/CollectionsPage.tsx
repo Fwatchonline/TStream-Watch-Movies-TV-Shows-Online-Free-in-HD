@@ -21,6 +21,12 @@ import {
   VERIFIED_COLLECTION_IMAGES
 } from '../services/collectionStore';
 
+import {
+  buildImageProxyUrl,
+  isProxiedImagePath,
+  resolveSafeImageSrc
+} from '../utils/imageUrl';
+
 interface CollectionsPageProps {
   onSelectMedia: (item: MediaItem) => void;
   onWatchMedia: (item: MediaItem) => void;
@@ -31,22 +37,43 @@ const CollectionCoverImage: React.FC<{
   col: DiscoveredCollection;
 }> = ({ col }) => {
   const verified = VERIFIED_COLLECTION_IMAGES[col.id];
-  const primary = verified?.backdrop || col.backdropPath || verified?.poster || col.posterPath || col.parts?.[0]?.backdropPath;
-  const secondary = verified?.poster || col.posterPath || col.parts?.[0]?.backdropPath || col.parts?.[0]?.posterPath;
+  const rawPrimary = verified?.backdrop || col.backdropPath || verified?.poster || col.posterPath || col.parts?.[0]?.backdropPath || '';
+  const rawSecondary = verified?.poster || col.posterPath || col.parts?.[0]?.backdropPath || col.parts?.[0]?.posterPath || '';
+  const primary = resolveSafeImageSrc(rawPrimary);
+  const secondary = resolveSafeImageSrc(rawSecondary);
 
   const [currentSrc, setCurrentSrc] = useState<string | null>(primary || null);
   const [step, setStep] = useState(0);
 
+  useEffect(() => {
+    setCurrentSrc(primary || secondary || null);
+    setStep(0);
+  }, [col.id, primary, secondary]);
+
   const handleError = () => {
-    if (step === 0 && secondary && secondary !== currentSrc) {
-      setCurrentSrc(secondary);
+    if (step === 0 && currentSrc && !isProxiedImagePath(currentSrc) && currentSrc.startsWith('http')) {
+      setCurrentSrc(buildImageProxyUrl(currentSrc));
       setStep(1);
-    } else if (step <= 1 && col.parts?.[0]?.backdropPath && col.parts[0].backdropPath !== currentSrc) {
-      setCurrentSrc(col.parts[0].backdropPath);
+    } else if (step <= 1 && secondary && secondary !== currentSrc) {
+      setCurrentSrc(secondary);
       setStep(2);
-    } else if (step <= 2 && col.parts?.[0]?.posterPath && col.parts[0].posterPath !== currentSrc) {
-      setCurrentSrc(col.parts[0].posterPath);
+    } else if (step <= 2 && col.parts?.[0]?.backdropPath) {
+      const partBg = resolveSafeImageSrc(col.parts[0].backdropPath);
+      if (partBg && partBg !== currentSrc) {
+        setCurrentSrc(partBg);
+        setStep(3);
+        return;
+      }
       setStep(3);
+      handleError();
+    } else if (step <= 3 && col.parts?.[0]?.posterPath) {
+      const partPoster = resolveSafeImageSrc(col.parts[0].posterPath);
+      if (partPoster && partPoster !== currentSrc) {
+        setCurrentSrc(partPoster);
+        setStep(4);
+        return;
+      }
+      setCurrentSrc(null);
     } else {
       setCurrentSrc(null);
     }
@@ -90,11 +117,11 @@ export const CollectionsPage: React.FC<CollectionsPageProps> = ({
   const [sortBy, setSortBy] = useState<'curated' | 'films' | 'title'>('curated');
   const [isSearchingOnline, setIsSearchingOnline] = useState(false);
 
-  const ACTION_COLLECTION_IDS = [10, 2344, 726871, 8650, 87096, 328, 8945, 531241, 86311, 448150, 645, 748, 284433, 131292, 131296, 528, 173710, 264, 391860, 558216, 573436, 14890];
-  const FANTASY_COLLECTION_IDS = [119, 1241, 295, 84, 131635, 33514, 121938, 495527, 2980];
-  const CRIME_COLLECTION_IDS = [404609, 263, 87359, 9485, 230, 31562, 1575, 1570, 304, 553717, 86119];
-  const FAMILY_COLLECTION_IDS = [2150, 10194, 8354, 86066, 77816, 87118, 14740, 89137, 720879];
-  const HORROR_COLLECTION_IDS = [656, 2602, 228446, 521226, 8091, 399];
+  const ACTION_COLLECTION_IDS = [10, 2344, 726871, 8650, 87096, 328, 8945, 531241, 86311, 448150, 645, 748, 284433, 131292, 131296, 528, 173710, 264, 391860, 558216, 573436, 14890, 131295, 529892, 535313, 531330, 523855, 135483, 422837, 2883, 86055, 90863, 324991];
+  const FANTASY_COLLECTION_IDS = [119, 1241, 295, 84, 131635, 33514, 121938, 495527, 2980, 1733, 420, 85943];
+  const CRIME_COLLECTION_IDS = [404609, 263, 87359, 9485, 230, 31562, 1575, 1570, 304, 553717, 86119, 102322, 722971, 523855, 135483, 2883];
+  const FAMILY_COLLECTION_IDS = [2150, 10194, 8354, 86066, 77816, 87118, 14740, 89137, 720879, 468222, 137697, 1022790, 386382, 185103];
+  const HORROR_COLLECTION_IDS = [656, 2602, 228446, 521226, 8091, 399, 313086, 17255];
 
   const loadCollections = () => {
     const list = getDiscoveredCollections();

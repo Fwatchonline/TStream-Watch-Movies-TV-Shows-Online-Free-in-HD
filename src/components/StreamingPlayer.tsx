@@ -468,7 +468,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
 
       <div
         ref={playerContainerRef}
-        className="relative z-10 w-full rounded-2xl overflow-hidden bg-[#0a0a0d] border border-[#3A3A40] shadow-2xl transition-all duration-300 ring-1 ring-white/5"
+        className="relative z-10 w-full rounded-xl sm:rounded-2xl overflow-hidden bg-[#0a0a0d] border border-[#3A3A40] shadow-2xl transition-all duration-300 ring-1 ring-white/5"
       >
         {/* =========================================================================
             PLAYER STAGE: DIRECT NATIVE HLS OR WEB EMBED (16:9 CINEMATIC)
@@ -478,13 +478,13 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
             /* Web Embed Player View with strictly 3 requested providers */
             <div className="w-full h-full flex flex-col bg-black relative">
               {/* Top Bar for Web Server Selection */}
-              <div className="h-10.5 bg-[#141418] border-b border-[#303036] px-3 sm:px-4 flex items-center justify-between gap-2 z-10 shrink-0">
+              <div className="h-10.5 bg-[#141418] border-b border-[#303036] px-2.5 sm:px-4 flex items-center justify-between gap-2 z-10 shrink-0">
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
                   <span className="text-[10px] uppercase font-bold text-[#A6A6AC] mr-1 hidden sm:inline">Web Provider:</span>
                   <button
                     type="button"
                     onClick={() => setWebServer('fmov')}
-                    className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                       webServer === 'fmov'
                         ? 'bg-[#F5C400] text-black shadow-sm font-black'
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
@@ -497,7 +497,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                   <button
                     type="button"
                     onClick={() => setWebServer('movietvapi')}
-                    className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                       webServer === 'movietvapi'
                         ? 'bg-[#F5C400] text-black shadow-sm font-black'
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
@@ -510,7 +510,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                   <button
                     type="button"
                     onClick={() => setWebServer('vidsrc')}
-                    className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                       webServer === 'vidsrc'
                         ? 'bg-[#F5C400] text-black shadow-sm font-black'
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
@@ -550,10 +550,11 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                         setPlayerMode('direct');
                         loadDirectStreams();
                       }}
-                      className="px-3 py-1 rounded-lg bg-[#25252b] hover:bg-[#303038] text-[#F5C400] text-[11px] font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#F5C400]/40 shadow-sm"
+                      className="px-2.5 sm:px-3 py-1 rounded-lg bg-[#25252b] hover:bg-[#303038] text-[#F5C400] text-[11px] font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#F5C400]/40 shadow-sm whitespace-nowrap"
                     >
                       <Zap className="w-3.5 h-3.5" />
-                      <span>Switch to Direct Player</span>
+                      <span className="sm:hidden">Direct</span>
+                      <span className="hidden sm:inline">Switch to Direct Player</span>
                     </button>
                   )}
                 </div>
@@ -610,15 +611,15 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
             />
           ) : (
             /* Direct HLS Stream Busy State with One-Click Fallback */
-            <div className="flex flex-col items-center justify-center p-6 sm:p-8 text-center max-w-xl bg-gradient-to-b from-[#121215] to-[#0a0a0d] w-full h-full relative overflow-y-auto no-scrollbar">
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-3 text-[#F5C400]">
-                <AlertTriangle className="w-6 h-6 text-[#F5C400]" />
+            <div className="flex flex-col items-center justify-start sm:justify-center p-3.5 sm:p-8 text-center max-w-xl bg-gradient-to-b from-[#121215] to-[#0a0a0d] w-full h-full relative overflow-y-auto no-scrollbar">
+              <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-2 sm:mb-3 text-[#F5C400] shrink-0">
+                <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6 text-[#F5C400]" />
               </div>
 
-              <h3 className="text-base sm:text-lg font-black text-white mb-1 uppercase tracking-wider">
+              <h3 className="text-xs sm:text-lg font-black text-white mb-1 uppercase tracking-wider">
                 Direct HLS Stream Currently Busy
               </h3>
-              <p className="text-xs text-[#A6A6AC] mb-5 max-w-md leading-relaxed">
+              <p className="text-[11px] sm:text-xs text-[#A6A6AC] mb-3 sm:mb-5 max-w-md leading-relaxed">
                 No working stream responded on the selected server. Select an alternative direct server cluster below or rescan all servers:
               </p>
 
@@ -675,16 +676,16 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
         {/* =========================================================================
             PLAYER SUB-BAR: MODE & AMBIENT CONTROLS
            ========================================================================= */}
-        <div className="px-4 py-2.5 bg-[#121215] border-t border-[#3A3A40]/60 flex items-center justify-between text-[11px] text-[#A6A6AC] flex-wrap gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_#34d399]" />
-            <span className="font-bold text-white">
+        <div className="px-3 sm:px-4 py-2 sm:py-2.5 bg-[#121215] border-t border-[#3A3A40]/60 flex items-center justify-between text-[11px] text-[#A6A6AC] flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+            <span className="font-bold text-white truncate">
               {playerMode === 'direct'
                 ? `Direct Native Player (${HLS_CLUSTERS.find(c => c.id === activeCluster)?.name || 'Core (Default)'})`
                 : `Embed Player · ${webServer.replace(/^server_\d+_/, '').toUpperCase()}`}
             </span>
-            <span className="text-[#3A3A40]">|</span>
-            <span className="font-mono text-emerald-400 font-bold">
+            <span className="hidden sm:inline text-[#3A3A40]">|</span>
+            <span className="hidden sm:inline font-mono text-emerald-400 font-bold">
               {playerMode === 'direct'
                 ? `${(HLS_CLUSTERS.find(c => c.id === activeCluster)?.name.split(' ')[0] || 'Core')} First + Background Failover`
                 : 'Embed Mode Active'}

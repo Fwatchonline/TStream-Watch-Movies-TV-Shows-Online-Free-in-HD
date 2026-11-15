@@ -16,10 +16,10 @@ export const PlayerLoadingSpinner: React.FC<PlayerLoadingSpinnerProps> = ({
 }) => {
   return (
     <div
-      className={`flex flex-col items-center justify-center p-6 sm:p-8 text-center bg-[#0a0a0d] w-full h-full select-none ${className}`}
+      className={`flex flex-col items-center justify-center p-3 sm:p-8 text-center bg-[#0a0a0d] w-full h-full select-none ${className}`}
     >
       {/* Harmonious, mathematically proportioned cinema spinner */}
-      <div className="relative w-48 h-48 sm:w-52 sm:h-52 flex items-center justify-center mb-6">
+      <div className="relative w-24 h-24 sm:w-52 sm:h-52 flex items-center justify-center mb-2.5 sm:mb-6">
         {/* Ambient radial golden halo glow */}
         <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle,rgba(245,196,0,0.22)_0%,rgba(245,196,0,0.06)_45%,transparent_72%)] pointer-events-none animate-pulse-glow" />
 
@@ -164,17 +164,17 @@ export const PlayerLoadingSpinner: React.FC<PlayerLoadingSpinnerProps> = ({
         </svg>
 
         {/* Center Floating Glassmorphic Cinema Disc with Play Badge */}
-        <div className="relative w-22 h-22 sm:w-24 sm:h-24 rounded-full bg-gradient-to-br from-[#24242d] via-[#15151a] to-[#0a0a0d] border border-[#F5C400]/45 flex flex-col items-center justify-center shadow-[0_0_32px_rgba(245,196,0,0.32)] transition-transform duration-300">
+        <div className="relative w-12 h-12 sm:w-24 sm:h-24 rounded-full bg-gradient-to-br from-[#24242d] via-[#15151a] to-[#0a0a0d] border border-[#F5C400]/45 flex flex-col items-center justify-center shadow-[0_0_32px_rgba(245,196,0,0.32)] transition-transform duration-300">
           {/* Subtle breathing golden aura */}
           <div className="absolute inset-1 rounded-full bg-[#F5C400]/10 animate-pulse pointer-events-none" />
 
           {/* Golden Play Icon with specular reflection */}
-          <div className="relative z-10 w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-[#F5C400]/25 to-black/60 border border-[#F5C400]/30 flex items-center justify-center shadow-inner">
-            <Play className="w-5 h-5 sm:w-6 sm:h-6 text-[#F5C400] fill-[#F5C400] translate-x-0.5 filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]" />
+          <div className="relative z-10 w-6 h-6 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-[#F5C400]/25 to-black/60 border border-[#F5C400]/30 flex items-center justify-center shadow-inner">
+            <Play className="w-3 h-3 sm:w-6 sm:h-6 text-[#F5C400] fill-[#F5C400] translate-x-0.5 filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]" />
           </div>
 
           {/* Mini dynamic audio/decoding equalizer bars */}
-          <div className="relative z-10 flex items-end gap-1 mt-1.5 h-2.5">
+          <div className="relative z-10 hidden sm:flex items-end gap-1 mt-1.5 h-2.5">
             <span className="w-0.5 bg-[#F5C400] rounded-full animate-[soundWave_0.8s_ease-in-out_infinite]" />
             <span className="w-0.5 bg-[#F5C400] rounded-full animate-[soundWave_0.8s_ease-in-out_0.2s_infinite]" />
             <span className="w-0.5 bg-[#F5C400] rounded-full animate-[soundWave_0.8s_ease-in-out_0.4s_infinite]" />
@@ -204,18 +204,18 @@ export const PlayerLoadingSpinner: React.FC<PlayerLoadingSpinnerProps> = ({
 
       {/* Subtitle / Streaming Features Bar */}
       {subtitle && (
-        <div className="flex flex-wrap items-center justify-center gap-2 text-xs sm:text-[13px] text-[#A6A6AC] font-medium max-w-lg leading-relaxed px-4">
-          <span className="inline-flex items-center gap-1.5 text-[#F3F3F3]">
+        <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 text-[10px] sm:text-[13px] text-[#A6A6AC] font-medium max-w-lg leading-snug sm:leading-relaxed px-2 sm:px-4">
+          <span className="inline-flex items-center gap-1 text-[#F3F3F3]">
             <span className="w-1.5 h-1.5 rounded-full bg-[#F5C400]" />
-            Fast multi-server HLS playback
+            Fast HLS playback
           </span>
           <span className="text-[#555560]">·</span>
-          <span className="inline-flex items-center gap-1.5 text-[#F3F3F3]">
+          <span className="inline-flex items-center gap-1 text-[#F3F3F3]">
             <span className="w-1.5 h-1.5 rounded-full bg-[#F5C400]" />
-            Multilingual subtitles
+            Subtitles
           </span>
           <span className="text-[#555560]">·</span>
-          <span className="inline-flex items-center gap-1.5 text-[#F5C400] font-semibold">
+          <span className="inline-flex items-center gap-1 text-[#F5C400] font-semibold">
             <span className="w-1.5 h-1.5 rounded-full bg-[#F5C400]" />
             Zero ads
           </span>

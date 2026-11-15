@@ -128,6 +128,10 @@ export const PersonPage: React.FC<PersonPageProps> = ({
                   src={person.profilePath}
                   alt={person.name}
                   className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-gradient-to-tr from-[#16161c] to-[#252532] text-slate-500">

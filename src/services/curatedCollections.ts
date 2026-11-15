@@ -4131,6 +4131,1249 @@ export const EXPANDED_CURATED_COLLECTIONS: DiscoveredCollection[] = [
         "mediaType": "movie"
       }
     ]
+  },
+  {
+    "id": 131295,
+    "name": "Captain America Collection",
+    "filmCountBadge": "4 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt1843866/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt1843866/img",
+    "overview": "The Marvel Cinematic Universe trilogy and legacy saga following Steve Rogers and Sam Wilson as the shield-bearing symbol of freedom and courage.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 1771,
+        "tmdbId": 1771,
+        "imdbId": "tt0458339",
+        "title": "Captain America: The First Avenger",
+        "overview": "Steve Rogers, a rejected military soldier, transforms into Captain America after taking a dose of a \"Super-Soldier serum\". But being Captain America comes at a price as he attempts to take down a warmonger and a terrorist organiza...",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0458339/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0458339/img",
+        "releaseDate": "2011-07-22",
+        "voteAverage": 6.9,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 100402,
+        "tmdbId": 100402,
+        "imdbId": "tt1843866",
+        "title": "Captain America: The Winter Soldier",
+        "overview": "As Steve Rogers struggles to embrace his role in the modern world, he teams up with a fellow Avenger and S.H.I.E.L.D agent, Black Widow, to battle a new threat from history: an assassin known as the Winter Soldier.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1843866/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1843866/img",
+        "releaseDate": "2014-04-04",
+        "voteAverage": 7.7,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 271110,
+        "tmdbId": 271110,
+        "imdbId": "tt3498820",
+        "title": "Captain America: Civil War",
+        "overview": "Political involvement in the Avengers' affairs causes a rift between Captain America and Iron Man.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt3498820/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt3498820/img",
+        "releaseDate": "2016-05-06",
+        "voteAverage": 7.8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 822119,
+        "tmdbId": 822119,
+        "imdbId": "tt14513804",
+        "title": "Captain America: Brave New World",
+        "overview": "Sam Wilson, the new Captain America, finds himself in the middle of an international incident and must discover the motive behind a nefarious global plan.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt14513804/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt14513804/img",
+        "releaseDate": "2025-02-14",
+        "voteAverage": 5.6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 529892,
+    "name": "Black Panther Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt1825683/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt1825683/img",
+    "overview": "The acclaimed Marvel Cinematic Universe saga set in the technologically advanced African nation of Wakanda, chronicling the legacy of King T'Challa and his successors.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 284054,
+        "tmdbId": 284054,
+        "imdbId": "tt1825683",
+        "title": "Black Panther",
+        "overview": "T'Challa, heir to the hidden but advanced kingdom of Wakanda, must step forward to lead his people into a new future and must confront a challenger from his country's past.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1825683/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1825683/img",
+        "releaseDate": "2018-02-16",
+        "voteAverage": 7.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 505642,
+        "tmdbId": 505642,
+        "imdbId": "tt9114286",
+        "title": "Black Panther: Wakanda Forever",
+        "overview": "The people of Wakanda fight to protect their home from intervening world powers as they mourn the death of King T'Challa.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt9114286/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt9114286/img",
+        "releaseDate": "2022-11-11",
+        "voteAverage": 6.6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 535313,
+    "name": "MonsterVerse Collection",
+    "filmCountBadge": "5 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt5034838/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt5034838/img",
+    "overview": "Legendary's shared cinematic universe of colossal Titans starring Godzilla and King Kong as ancient apex predators clash for dominance over Earth and the Hollow Earth.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 124905,
+        "tmdbId": 124905,
+        "imdbId": "tt0831387",
+        "title": "Godzilla",
+        "overview": "Following the 1999 Janjira nuclear disaster that claimed his wife Sandra, Joe Brody seeks answers. His Navy officer son Ford accompanies him to Japan, where they discover the devastating truth and see ancient monsters emerge.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0831387/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0831387/img",
+        "releaseDate": "2014-05-16",
+        "voteAverage": 6.4,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 293167,
+        "tmdbId": 293167,
+        "imdbId": "tt3731562",
+        "title": "Kong: Skull Island",
+        "overview": "After the Vietnam war, a team of scientists explores an uncharted island in the Pacific, venturing into the domain of the mighty Kong and must fight to escape a primal Eden.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt3731562/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt3731562/img",
+        "releaseDate": "2017-03-10",
+        "voteAverage": 6.7,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 373571,
+        "tmdbId": 373571,
+        "imdbId": "tt3741700",
+        "title": "Godzilla: King of the Monsters",
+        "overview": "The crypto-zoological agency Monarch faces off against a battery of god-sized monsters, including the mighty Godzilla, who collides with Mothra, Rodan, and his ultimate nemesis, the three-headed King Ghidorah.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt3741700/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt3741700/img",
+        "releaseDate": "2019-05-31",
+        "voteAverage": 6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 399566,
+        "tmdbId": 399566,
+        "imdbId": "tt5034838",
+        "title": "Godzilla vs. Kong",
+        "overview": "The epic next chapter in the cinematic Monsterverse pits two of the greatest icons in motion picture history against each other--the fearsome Godzilla and the mighty Kong--with humanity caught in the balance.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt5034838/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt5034838/img",
+        "releaseDate": "2021-03-31",
+        "voteAverage": 6.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 823464,
+        "tmdbId": 823464,
+        "imdbId": "tt14539740",
+        "title": "Godzilla X Kong: The New Empire",
+        "overview": "Two ancient titans, Godzilla and Kong, clash in an epic battle as humans unravel their intertwined origins and connection to Skull Island's mysteries.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt14539740/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt14539740/img",
+        "releaseDate": "2024-03-29",
+        "voteAverage": 6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 531330,
+    "name": "Top Gun Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt1745960/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt1745960/img",
+    "overview": "High-altitude naval aviation action saga centered on elite fighter pilot Pete 'Maverick' Mitchell and the next generation of TOPGUN graduates.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 744,
+        "tmdbId": 744,
+        "imdbId": "tt0092099",
+        "title": "Top Gun",
+        "overview": "The Top Gun Naval Fighter Weapons School is where the best of the best train to refine their elite flying skills. When hotshot fighter pilot Maverick is sent to the school, his reckless attitude and cocky demeanor put him at odds ...",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0092099/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0092099/img",
+        "releaseDate": "1986-05-16",
+        "voteAverage": 7,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 361743,
+        "tmdbId": 361743,
+        "imdbId": "tt1745960",
+        "title": "Top Gun: Maverick",
+        "overview": "The story involves Maverick confronting his past while training a group of younger Top Gun graduates, including the son of his deceased best friend, for a dangerous mission.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1745960/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1745960/img",
+        "releaseDate": "2022-05-27",
+        "voteAverage": 8.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 523855,
+    "name": "The Equalizer Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0455944/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0455944/img",
+    "overview": "A vigilante action-thriller trilogy starring Denzel Washington as Robert McCall, a retired black-ops operative delivering swift justice for the exploited.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 156022,
+        "tmdbId": 156022,
+        "imdbId": "tt0455944",
+        "title": "The Equalizer",
+        "overview": "A man who believes he has put his mysterious past behind him cannot stand idly by when he meets a young girl under the control of ultra-violent Russian gangsters.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0455944/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0455944/img",
+        "releaseDate": "2014-09-26",
+        "voteAverage": 7.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 345887,
+        "tmdbId": 345887,
+        "imdbId": "tt3766354",
+        "title": "The Equalizer 2",
+        "overview": "Robert McCall serves an unflinching justice for the exploited and oppressed, but how far will he go when that is someone he loves?",
+        "posterPath": "https://images.metahub.space/poster/medium/tt3766354/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt3766354/img",
+        "releaseDate": "2018-07-20",
+        "voteAverage": 6.7,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 926393,
+        "tmdbId": 926393,
+        "imdbId": "tt17024450",
+        "title": "The Equalizer 3",
+        "overview": "Robert McCall finds himself at home in Southern Italy but he discovers his friends are under the control of local crime bosses. As events turn deadly, McCall knows what he has to do: become his friends' protector by taking on the ...",
+        "posterPath": "https://images.metahub.space/poster/medium/tt17024450/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt17024450/img",
+        "releaseDate": "2023-09-01",
+        "voteAverage": 6.8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 135483,
+    "name": "Taken Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0936501/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0936501/img",
+    "overview": "Relentless international action-thriller series starring Liam Neeson as former CIA operative Bryan Mills using his particular set of skills to protect his family.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 8681,
+        "tmdbId": 8681,
+        "imdbId": "tt0936501",
+        "title": "Taken",
+        "overview": "A retired CIA agent travels across Europe and relies on his old skills to save his estranged daughter, who has been kidnapped while on a trip to Paris.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0936501/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0936501/img",
+        "releaseDate": "2009-01-30",
+        "voteAverage": 7.7,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 82675,
+        "tmdbId": 82675,
+        "imdbId": "tt1397280",
+        "title": "Taken 2",
+        "overview": "In Istanbul, retired CIA operative Bryan Mills and his wife are taken hostage by the father of a kidnapper Mills killed while rescuing his daughter.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1397280/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1397280/img",
+        "releaseDate": "2012-10-05",
+        "voteAverage": 6.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 260346,
+        "tmdbId": 260346,
+        "imdbId": "tt2446042",
+        "title": "Taken 3",
+        "overview": "Framed for his ex-Wife's murder, Bryan Mills sets out to take revenge on the real killers.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt2446042/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt2446042/img",
+        "releaseDate": "2015-01-09",
+        "voteAverage": 6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 422837,
+    "name": "Blade Runner Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt1856101/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt1856101/img",
+    "overview": "Visionary neo-noir sci-fi saga exploring humanity, memory, and bioengineered replicants in a rain-soaked cyberpunk future.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 78,
+        "tmdbId": 78,
+        "imdbId": "tt0083658",
+        "title": "Blade Runner",
+        "overview": "A blade runner must pursue and terminate four replicants who stole a ship in space and have returned to Earth to find their creator.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0083658/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0083658/img",
+        "releaseDate": "1982-06-25",
+        "voteAverage": 8.1,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 335984,
+        "tmdbId": 335984,
+        "imdbId": "tt1856101",
+        "title": "Blade Runner 2049",
+        "overview": "Young Blade Runner K's discovery of a long-buried secret leads him to track down former Blade Runner Rick Deckard, who's been missing for thirty years.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1856101/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1856101/img",
+        "releaseDate": "2017-10-06",
+        "voteAverage": 8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 2883,
+    "name": "Kill Bill Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0266697/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0266697/img",
+    "overview": "Quentin Tarantino's stylized two-part martial arts revenge epic following Beatrix Kiddo's relentless hunt for the Deadly Viper Assassination Squad.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 24,
+        "tmdbId": 24,
+        "imdbId": "tt0266697",
+        "title": "Kill Bill: Vol. 1",
+        "overview": "After waking from a four-year coma, a former assassin wreaks vengeance on the team of assassins who betrayed her.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0266697/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0266697/img",
+        "releaseDate": "2003-10-10",
+        "voteAverage": 8.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 393,
+        "tmdbId": 393,
+        "imdbId": "tt0378194",
+        "title": "Kill Bill: Vol. 2",
+        "overview": "The Bride continues her quest for vengeance, tracking the remaining Deadly Viper assassins and closing in on the man who betrayed her.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0378194/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0378194/img",
+        "releaseDate": "2004-04-16",
+        "voteAverage": 8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 86055,
+    "name": "Men in Black Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0119654/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0119654/img",
+    "overview": "Sci-fi action-comedy franchise following Agents J and K of a top-secret agency policing extraterrestrial life hidden on Earth.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 607,
+        "tmdbId": 607,
+        "imdbId": "tt0119654",
+        "title": "Men in Black",
+        "overview": "An agent from a secret organization that monitors alien activity on Earth recruits a street-smart NYPD cop to help him recover an item that has been stolen by an intergalactic criminal.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0119654/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0119654/img",
+        "releaseDate": "1997-07-02",
+        "voteAverage": 7.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 608,
+        "tmdbId": 608,
+        "imdbId": "tt0120912",
+        "title": "Men in Black II",
+        "overview": "Agent J is sent to find Agent K and restore his memory after the re-appearance of a case from K's past.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0120912/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0120912/img",
+        "releaseDate": "2002-07-03",
+        "voteAverage": 6.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 41154,
+        "tmdbId": 41154,
+        "imdbId": "tt1409024",
+        "title": "Men in Black 3",
+        "overview": "Agent J travels in time to M.I.B.'s early days in 1969 to stop an alien from assassinating his friend Agent K and changing history.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1409024/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1409024/img",
+        "releaseDate": "2012-05-25",
+        "voteAverage": 6.8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 90863,
+    "name": "Rush Hour Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0120812/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0120812/img",
+    "overview": "Classic buddy-cop martial arts comedy trilogy pairing Hong Kong Inspector Lee with fast-talking LAPD Detective James Carter.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 2109,
+        "tmdbId": 2109,
+        "imdbId": "tt0120812",
+        "title": "Rush Hour",
+        "overview": "A loyal and dedicated Hong Kong Inspector teams up with a reckless and loudmouthed L.A.P.D. detective to rescue the Chinese Consul's kidnapped daughter, while trying to arrest a dangerous crime lord along the way.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0120812/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0120812/img",
+        "releaseDate": "1998-09-18",
+        "voteAverage": 7.1,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 5175,
+        "tmdbId": 5175,
+        "imdbId": "tt0266915",
+        "title": "Rush Hour 2",
+        "overview": "Carter and Lee head to Hong Kong for a vacation, but become embroiled in a counterfeit money scam.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0266915/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0266915/img",
+        "releaseDate": "2001-08-03",
+        "voteAverage": 6.7,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 5174,
+        "tmdbId": 5174,
+        "imdbId": "tt0293564",
+        "title": "Rush Hour 3",
+        "overview": "After an attempted assassination on Ambassador Han, Lee and Carter head to Paris to protect a French woman with knowledge of the Triads' secret leaders.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0293564/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0293564/img",
+        "releaseDate": "2007-08-10",
+        "voteAverage": 6.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 324991,
+    "name": "The Maze Runner Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt1790864/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt1790864/img",
+    "overview": "Dystopian sci-fi adventure trilogy adapted from James Dashner's novels, following Thomas and the Gladers escaping WCKD's deadly trials.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 198663,
+        "tmdbId": 198663,
+        "imdbId": "tt1790864",
+        "title": "The Maze Runner",
+        "overview": "A teen with no memory of the outside world awakens in a gigantic maze guarded by deadly creatures, and plots a daring escape.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1790864/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1790864/img",
+        "releaseDate": "2014-09-19",
+        "voteAverage": 6.8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 294254,
+        "tmdbId": 294254,
+        "imdbId": "tt4046784",
+        "title": "Maze Runner: The Scorch Trials",
+        "overview": "After having escaped the Maze, the Gladers face a new set of challenges on the open roads of a desolate landscape filled with unimaginable obstacles.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt4046784/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt4046784/img",
+        "releaseDate": "2015-09-18",
+        "voteAverage": 6.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 336843,
+        "tmdbId": 336843,
+        "imdbId": "tt4500922",
+        "title": "Maze Runner: The Death Cure",
+        "overview": "In a desperate attempt to save their friends, the Gladers try to infiltrate a fortified city and make it out alive.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt4500922/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt4500922/img",
+        "releaseDate": "2018-01-26",
+        "voteAverage": 6.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 102322,
+    "name": "Sherlock Holmes Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0988045/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0988045/img",
+    "overview": "Guy Ritchie's kinetic Victorian mystery-adventure saga starring Robert Downey Jr. and Jude Law as Sherlock Holmes and Dr. John Watson.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 10528,
+        "tmdbId": 10528,
+        "imdbId": "tt0988045",
+        "title": "Sherlock Holmes",
+        "overview": "Detective Sherlock Holmes and his stalwart partner Watson engage in a battle of wits and brawn with a nemesis whose plot is a threat to all of England.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0988045/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0988045/img",
+        "releaseDate": "2009-12-25",
+        "voteAverage": 7.5,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 58574,
+        "tmdbId": 58574,
+        "imdbId": "tt1515091",
+        "title": "Sherlock Holmes: A Game of Shadows",
+        "overview": "Detective Sherlock Holmes is on the trail of criminal mastermind Professor Moriarty, who is carrying out a string of random crimes across Europe.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1515091/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1515091/img",
+        "releaseDate": "2011-12-16",
+        "voteAverage": 7.4,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 722971,
+    "name": "Knives Out Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt8946378/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt8946378/img",
+    "overview": "Rian Johnson's razor-sharp whodunit murder mystery series featuring eccentric Southern detective Benoit Blanc unraveling elite conspiracies.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 546554,
+        "tmdbId": 546554,
+        "imdbId": "tt8946378",
+        "title": "Knives Out",
+        "overview": "When renowned crime novelist Harlan Thrombey is found dead at his estate just after his 85th birthday, the inquisitive and debonair Detective Benoit Blanc is mysteriously enlisted to investigate.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt8946378/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt8946378/img",
+        "releaseDate": "2019-11-27",
+        "voteAverage": 7.9,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 661374,
+        "tmdbId": 661374,
+        "imdbId": "tt11564570",
+        "title": "Glass Onion",
+        "overview": "Tech billionaire Miles Bron invites his friends for a getaway on his private Greek island. When someone turns up dead, Detective Benoit Blanc is put on the case.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt11564570/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt11564570/img",
+        "releaseDate": "2022-12-23",
+        "voteAverage": 7.1,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 1733,
+    "name": "The Mummy Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0120616/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0120616/img",
+    "overview": "Swashbuckling supernatural adventure trilogy starring Brendan Fraser as explorer Rick O'Connell battling ancient curses and resurrected pharaohs.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 564,
+        "tmdbId": 564,
+        "imdbId": "tt0120616",
+        "title": "The Mummy",
+        "overview": "At an archaeological dig in the ancient city of Hamunaptra, an American serving in the French Foreign Legion accidentally awakens a mummy who begins to wreak havoc as he searches for the reincarnation of his long-lost love.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0120616/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0120616/img",
+        "releaseDate": "1999-05-07",
+        "voteAverage": 7.1,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 1734,
+        "tmdbId": 1734,
+        "imdbId": "tt0209163",
+        "title": "The Mummy Returns",
+        "overview": "The mummified body of Imhotep is shipped to a museum in London, where he once again wakes and begins his campaign of rage and terror.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0209163/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0209163/img",
+        "releaseDate": "2001-05-04",
+        "voteAverage": 6.4,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 1735,
+        "tmdbId": 1735,
+        "imdbId": "tt0859163",
+        "title": "The Mummy: Tomb of the Dragon Emperor",
+        "overview": "Two retired explorers travel to 1946 Shanghai to return a mystical relic. They find their son has unearthed a cursed terracotta emperor; sparking a race to a Himalayan paradise before an invincible army rises to enslave humanity.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0859163/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0859163/img",
+        "releaseDate": "2008-08-01",
+        "voteAverage": 5.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 420,
+    "name": "The Chronicles of Narnia Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0363771/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0363771/img",
+    "overview": "Epic fantasy adventure series adapted from C.S. Lewis's beloved novels, following the Pevensie siblings across the magical realm of Narnia.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 411,
+        "tmdbId": 411,
+        "imdbId": "tt0363771",
+        "title": "The Chronicles of Narnia: The Lion, the Witch and the Wardrobe",
+        "overview": "Four siblings wind up entering the magical land of Narnia. Once there, they discover a world inhabited by fantastical creatures and find themselves in a battle to defeat a witch.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0363771/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0363771/img",
+        "releaseDate": "2005-12-09",
+        "voteAverage": 6.9,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 2454,
+        "tmdbId": 2454,
+        "imdbId": "tt0499448",
+        "title": "The Chronicles of Narnia: Prince Caspian",
+        "overview": "The Pevensie siblings return to Narnia, where they are enlisted to help ward off an evil king and restore the rightful heir to the land's throne, Prince Caspian.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0499448/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0499448/img",
+        "releaseDate": "2008-05-16",
+        "voteAverage": 6.5,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 10140,
+        "tmdbId": 10140,
+        "imdbId": "tt0980970",
+        "title": "The Chronicles of Narnia: The Voyage of the Dawn Treader",
+        "overview": "Lucy and Edmund Pevensie return to Narnia with their cousin Eustace where they sail with King Caspian to help Narnian lords banished by an evil usurper of the throne.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0980970/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0980970/img",
+        "releaseDate": "2010-12-10",
+        "voteAverage": 6.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 85943,
+    "name": "Night at the Museum Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0477347/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0477347/img",
+    "overview": "Family fantasy comedy trilogy starring Ben Stiller as museum night guard Larry Daley trying to keep historical exhibits alive until sunrise.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 1593,
+        "tmdbId": 1593,
+        "imdbId": "tt0477347",
+        "title": "Night at the Museum",
+        "overview": "A newly recruited night security guard at the Museum of Natural History discovers that an ancient curse causes the animals and exhibits on display to come to life and wreak havoc.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0477347/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0477347/img",
+        "releaseDate": "2006-12-22",
+        "voteAverage": 6.5,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 18360,
+        "tmdbId": 18360,
+        "imdbId": "tt1078912",
+        "title": "Night at the Museum: Battle of the Smithsonian",
+        "overview": "Security guard Larry Daley infiltrates the Smithsonian Institution in order to rescue Jedediah and Octavius, who have been shipped to the museum by mistake.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1078912/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1078912/img",
+        "releaseDate": "2009-05-22",
+        "voteAverage": 6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 181533,
+        "tmdbId": 181533,
+        "imdbId": "tt2692250",
+        "title": "Night at the Museum: Secret of the Tomb",
+        "overview": "Larry Daley and his heroic friends embark on the greatest adventure of their lives, as they travel to London to save the magic that, after dark, allows the museum's exhibits to come to life.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt2692250/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt2692250/img",
+        "releaseDate": "2014-12-19",
+        "voteAverage": 6.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 313086,
+    "name": "The Conjuring Collection",
+    "filmCountBadge": "3 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt1457767/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt1457767/img",
+    "overview": "Terrifying supernatural horror franchise based on the real-life paranormal case files of demonologists Ed and Lorraine Warren.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 138843,
+        "tmdbId": 138843,
+        "imdbId": "tt1457767",
+        "title": "The Conjuring",
+        "overview": "Paranormal investigators Ed and Lorraine Warren work to help a family terrorized by a dark presence in their farmhouse.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1457767/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1457767/img",
+        "releaseDate": "2013-07-19",
+        "voteAverage": 7.5,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 259693,
+        "tmdbId": 259693,
+        "imdbId": "tt3065204",
+        "title": "The Conjuring 2",
+        "overview": "Ed and Lorraine Warren travel to North London to help a single mother raising four children alone in a house plagued by a supernatural spirit.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt3065204/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt3065204/img",
+        "releaseDate": "2016-06-10",
+        "voteAverage": 7.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 423108,
+        "tmdbId": 423108,
+        "imdbId": "tt7069210",
+        "title": "The Conjuring: The Devil Made Me Do It",
+        "overview": "Arne Cheyenne Johnson stabs and murders his landlord, claiming to be under demonic possession while Ed and Lorraine Warren investigate the case and try to prove his innocence.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt7069210/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt7069210/img",
+        "releaseDate": "2021-06-04",
+        "voteAverage": 6.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 17255,
+    "name": "Resident Evil Collection",
+    "filmCountBadge": "6 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0120804/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0120804/img",
+    "overview": "Action-horror survival saga starring Milla Jovovich as Alice fighting the Umbrella Corporation and its bio-engineered T-virus apocalypse.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 1576,
+        "tmdbId": 1576,
+        "imdbId": "tt0120804",
+        "title": "Resident Evil",
+        "overview": "A special military unit fights a powerful, out-of-control supercomputer and hundreds of scientists who have mutated into flesh-eating creatures after a laboratory accident.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0120804/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0120804/img",
+        "releaseDate": "2002-03-15",
+        "voteAverage": 6.6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 1577,
+        "tmdbId": 1577,
+        "imdbId": "tt0318627",
+        "title": "Resident Evil: Apocalypse",
+        "overview": "Alice wakes up in the Raccoon City hospital after the area has been overrun by zombies, and must now make it out of the city before a nuclear bomb is dropped.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0318627/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0318627/img",
+        "releaseDate": "2004-09-10",
+        "voteAverage": 6.1,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 7737,
+        "tmdbId": 7737,
+        "imdbId": "tt0432021",
+        "title": "Resident Evil: Extinction",
+        "overview": "Survivors of the Raccoon City catastrophe travel across the Nevada desert, hoping to make it to Alaska. Alice joins the caravan and their fight against the evil Umbrella Corp.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0432021/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0432021/img",
+        "releaseDate": "2007-09-21",
+        "voteAverage": 6.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 35791,
+        "tmdbId": 35791,
+        "imdbId": "tt1220634",
+        "title": "Resident Evil: Afterlife",
+        "overview": "Alice and her friends keep her promise to see Umbrella in Japan. After that, she continues her search for Arcadia, which leads her to LA, where she finds a small group of survivors trapped in a prison.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1220634/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1220634/img",
+        "releaseDate": "2010-09-10",
+        "voteAverage": 5.8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 71679,
+        "tmdbId": 71679,
+        "imdbId": "tt1855325",
+        "title": "Resident Evil: Retribution",
+        "overview": "Alice fights alongside a resistance movement to regain her freedom from an Umbrella Corporation testing facility.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt1855325/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt1855325/img",
+        "releaseDate": "2012-09-14",
+        "voteAverage": 5.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 173897,
+        "tmdbId": 173897,
+        "imdbId": "tt2592614",
+        "title": "Resident Evil: The Final Chapter",
+        "overview": "Alice returns to where the nightmare began: The Hive in Raccoon City, where the Umbrella Corporation is gathering its forces for a final strike against the only remaining survivors of the apocalypse.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt2592614/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt2592614/img",
+        "releaseDate": "2017-01-27",
+        "voteAverage": 5.5,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 468222,
+    "name": "The Incredibles Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0317705/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0317705/img",
+    "overview": "Pixar's acclaimed superhero animated franchise chronicling the Parr family balancing suburban life with world-saving missions.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 9806,
+        "tmdbId": 9806,
+        "imdbId": "tt0317705",
+        "title": "The Incredibles",
+        "overview": "While trying to lead a quiet suburban life, a family of undercover superheroes are forced into action to save the world.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0317705/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0317705/img",
+        "releaseDate": "2004-11-05",
+        "voteAverage": 8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 260513,
+        "tmdbId": 260513,
+        "imdbId": "tt3606756",
+        "title": "Incredibles 2",
+        "overview": "The Incredibles family takes on a new mission which involves a change in family roles: Bob Parr (Mr. Incredible) must manage the house while his wife Helen (Elastigirl) goes out to save the world.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt3606756/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt3606756/img",
+        "releaseDate": "2018-06-15",
+        "voteAverage": 7.5,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 137697,
+    "name": "Finding Nemo Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0266543/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0266543/img",
+    "overview": "Heartwarming Pixar underwater adventure series following Marlin, Nemo, and Dory across the Great Barrier Reef and Pacific Ocean.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 12,
+        "tmdbId": 12,
+        "imdbId": "tt0266543",
+        "title": "Finding Nemo",
+        "overview": "After his son is captured in the Great Barrier Reef and taken to Sydney, a timid clownfish sets out on a journey to bring him home.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0266543/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0266543/img",
+        "releaseDate": "2003-05-30",
+        "voteAverage": 8.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 127380,
+        "tmdbId": 127380,
+        "imdbId": "tt2277860",
+        "title": "Finding Dory",
+        "overview": "Friendly but forgetful blue tang Dory begins a search for her long-lost parents and everyone learns a few things about the real meaning of family along the way.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt2277860/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt2277860/img",
+        "releaseDate": "2016-06-17",
+        "voteAverage": 7.2,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 1022790,
+    "name": "Inside Out Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt2096673/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt2096673/img",
+    "overview": "Academy Award-winning Pixar animated saga exploring the vibrant world inside Riley's mind as her emotions navigate growing up.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 150540,
+        "tmdbId": 150540,
+        "imdbId": "tt2096673",
+        "title": "Inside Out",
+        "overview": "After a young girl is uprooted from her Midwest life and moved to San Francisco, her emotions conflict on how best to navigate her new reality.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt2096673/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt2096673/img",
+        "releaseDate": "2015-06-19",
+        "voteAverage": 8.1,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 1022789,
+        "tmdbId": 1022789,
+        "imdbId": "tt22022452",
+        "title": "Inside Out 2",
+        "overview": "A sequel that features Riley entering puberty and experiencing brand new, more complex emotions as a result. As Riley tries to adapt to her teenage years, her old emotions try to adapt to the possibility of being replaced.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt22022452/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt22022452/img",
+        "releaseDate": "2024-06-14",
+        "voteAverage": 7.5,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 386382,
+    "name": "Frozen Collection",
+    "filmCountBadge": "2 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt2294629/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt2294629/img",
+    "overview": "Disney's musical fantasy phenomenon following sisters Elsa and Anna of Arendelle, Olaf, and Kristoff through enchanted kingdoms.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 109445,
+        "tmdbId": 109445,
+        "imdbId": "tt2294629",
+        "title": "Frozen",
+        "overview": "Fearless optimist Anna teams up with rugged mountain man Kristoff and his loyal reindeer Sven in an epic journey to find Anna's sister Elsa, whose icy powers have trapped the kingdom of Arendelle in eternal winter.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt2294629/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt2294629/img",
+        "releaseDate": "2013-11-27",
+        "voteAverage": 7.4,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 330457,
+        "tmdbId": 330457,
+        "imdbId": "tt4520988",
+        "title": "Frozen II",
+        "overview": "Anna, Elsa, Kristoff, Olaf and Sven leave Arendelle to travel to the ancient autumnal forest of an enchanted land. They set out to find the origin of Elsa's powers in order to save their kingdom.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt4520988/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt4520988/img",
+        "releaseDate": "2019-11-22",
+        "voteAverage": 6.8,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
+  },
+  {
+    "id": 185103,
+    "name": "Hotel Transylvania Collection",
+    "filmCountBadge": "4 FILMS",
+    "backdropPath": "https://images.metahub.space/background/medium/tt0837562/img",
+    "posterPath": "https://images.metahub.space/poster/medium/tt0837562/img",
+    "overview": "Animated monster-comedy saga centered on Count Dracula, his daughter Mavis, and their lavish resort for monsters.",
+    "autoDiscovered": true,
+    "parts": [
+      {
+        "id": 76492,
+        "tmdbId": 76492,
+        "imdbId": "tt0837562",
+        "title": "Hotel Transylvania",
+        "overview": "Dracula, who operates a high-end resort away from the human world, goes into overprotective mode when a boy discovers the resort and falls for the count's teenaged daughter.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt0837562/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt0837562/img",
+        "releaseDate": "2012-09-28",
+        "voteAverage": 7.1,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 159824,
+        "tmdbId": 159824,
+        "imdbId": "tt2510894",
+        "title": "Hotel Transylvania 2",
+        "overview": "Dracula and his friends try to bring out the monster in his half human, half vampire grandson in order to keep Mavis from leaving the hotel.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt2510894/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt2510894/img",
+        "releaseDate": "2015-09-25",
+        "voteAverage": 6.6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 400155,
+        "tmdbId": 400155,
+        "imdbId": "tt5220122",
+        "title": "Hotel Transylvania 3: Summer Vacation",
+        "overview": "Count Dracula and company participate in a cruise for sea-loving monsters, unaware that their boat is being commandeered by the monster-hating Van Helsing family.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt5220122/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt5220122/img",
+        "releaseDate": "2018-07-13",
+        "voteAverage": 6.3,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      },
+      {
+        "id": 585083,
+        "tmdbId": 585083,
+        "imdbId": "tt9848626",
+        "title": "Hotel Transylvania 4: Transformania",
+        "overview": "After one experiment, Johnny turns into a monster and everyone else becomes human. Now it has to be seen whether they will be able to reverse this experiment.",
+        "posterPath": "https://images.metahub.space/poster/medium/tt9848626/img",
+        "backdropPath": "https://images.metahub.space/background/medium/tt9848626/img",
+        "releaseDate": "2022-01-14",
+        "voteAverage": 6,
+        "voteCount": 3500,
+        "popularity": 25,
+        "genres": [],
+        "mediaType": "movie"
+      }
+    ]
   }
 ];
 
@@ -4338,5 +5581,97 @@ export const EXTRA_VERIFIED_IMAGES: Record<number, { backdrop: string; poster: s
   495527: {
     backdrop: "https://image.tmdb.org/t/p/original/lk1rUYIZZ8yBIfkPhr0Llwdda28.jpg",
     poster: "https://image.tmdb.org/t/p/w500/AetcZzB9dcbzEWmnvvTF74HjCOU.jpg"
+  },
+  131295: {
+    backdrop: "https://images.metahub.space/background/medium/tt1843866/img",
+    poster: "https://images.metahub.space/poster/medium/tt1843866/img"
+  },
+  529892: {
+    backdrop: "https://images.metahub.space/background/medium/tt1825683/img",
+    poster: "https://images.metahub.space/poster/medium/tt1825683/img"
+  },
+  535313: {
+    backdrop: "https://images.metahub.space/background/medium/tt5034838/img",
+    poster: "https://images.metahub.space/poster/medium/tt5034838/img"
+  },
+  531330: {
+    backdrop: "https://images.metahub.space/background/medium/tt1745960/img",
+    poster: "https://images.metahub.space/poster/medium/tt1745960/img"
+  },
+  523855: {
+    backdrop: "https://images.metahub.space/background/medium/tt0455944/img",
+    poster: "https://images.metahub.space/poster/medium/tt0455944/img"
+  },
+  135483: {
+    backdrop: "https://images.metahub.space/background/medium/tt0936501/img",
+    poster: "https://images.metahub.space/poster/medium/tt0936501/img"
+  },
+  422837: {
+    backdrop: "https://images.metahub.space/background/medium/tt1856101/img",
+    poster: "https://images.metahub.space/poster/medium/tt1856101/img"
+  },
+  2883: {
+    backdrop: "https://images.metahub.space/background/medium/tt0266697/img",
+    poster: "https://images.metahub.space/poster/medium/tt0266697/img"
+  },
+  86055: {
+    backdrop: "https://images.metahub.space/background/medium/tt0119654/img",
+    poster: "https://images.metahub.space/poster/medium/tt0119654/img"
+  },
+  90863: {
+    backdrop: "https://images.metahub.space/background/medium/tt0120812/img",
+    poster: "https://images.metahub.space/poster/medium/tt0120812/img"
+  },
+  324991: {
+    backdrop: "https://images.metahub.space/background/medium/tt1790864/img",
+    poster: "https://images.metahub.space/poster/medium/tt1790864/img"
+  },
+  102322: {
+    backdrop: "https://images.metahub.space/background/medium/tt0988045/img",
+    poster: "https://images.metahub.space/poster/medium/tt0988045/img"
+  },
+  722971: {
+    backdrop: "https://images.metahub.space/background/medium/tt8946378/img",
+    poster: "https://images.metahub.space/poster/medium/tt8946378/img"
+  },
+  1733: {
+    backdrop: "https://images.metahub.space/background/medium/tt0120616/img",
+    poster: "https://images.metahub.space/poster/medium/tt0120616/img"
+  },
+  420: {
+    backdrop: "https://images.metahub.space/background/medium/tt0363771/img",
+    poster: "https://images.metahub.space/poster/medium/tt0363771/img"
+  },
+  85943: {
+    backdrop: "https://images.metahub.space/background/medium/tt0477347/img",
+    poster: "https://images.metahub.space/poster/medium/tt0477347/img"
+  },
+  313086: {
+    backdrop: "https://images.metahub.space/background/medium/tt1457767/img",
+    poster: "https://images.metahub.space/poster/medium/tt1457767/img"
+  },
+  17255: {
+    backdrop: "https://images.metahub.space/background/medium/tt0120804/img",
+    poster: "https://images.metahub.space/poster/medium/tt0120804/img"
+  },
+  468222: {
+    backdrop: "https://images.metahub.space/background/medium/tt0317705/img",
+    poster: "https://images.metahub.space/poster/medium/tt0317705/img"
+  },
+  137697: {
+    backdrop: "https://images.metahub.space/background/medium/tt0266543/img",
+    poster: "https://images.metahub.space/poster/medium/tt0266543/img"
+  },
+  1022790: {
+    backdrop: "https://images.metahub.space/background/medium/tt2096673/img",
+    poster: "https://images.metahub.space/poster/medium/tt2096673/img"
+  },
+  386382: {
+    backdrop: "https://images.metahub.space/background/medium/tt2294629/img",
+    poster: "https://images.metahub.space/poster/medium/tt2294629/img"
+  },
+  185103: {
+    backdrop: "https://images.metahub.space/background/medium/tt0837562/img",
+    poster: "https://images.metahub.space/poster/medium/tt0837562/img"
   },
 };

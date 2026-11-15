@@ -676,6 +676,7 @@ export default function App() {
 
         {currentView === 'az' && (
           <CatalogPage
+            key={`az-${navKey}-${selectedLetter || 'A'}`}
             category="az"
             initialLetter={selectedLetter}
             onSelectMedia={handleSelectMedia}
@@ -685,6 +686,7 @@ export default function App() {
 
         {currentView === 'platform' && (
           <CatalogPage
+            key={`platform-${navKey}-${selectedPlatform || 'netflix'}`}
             category="platform"
             initialPlatform={selectedPlatform || 'netflix'}
             onSelectMedia={handleSelectMedia}
@@ -695,6 +697,7 @@ export default function App() {
 
         {currentView === 'search' && (
           <CatalogPage
+            key={`search-${navKey}-${searchQuery}`}
             category="search"
             initialQuery={searchQuery}
             onSelectMedia={handleSelectMedia}

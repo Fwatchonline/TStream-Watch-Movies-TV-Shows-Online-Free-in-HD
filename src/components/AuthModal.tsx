@@ -34,25 +34,25 @@ const POSTER_COLUMNS = [
     'https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg', // The Dark Knight
     'https://image.tmdb.org/t/p/w500/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg', // Interstellar
     'https://image.tmdb.org/t/p/w500/1pdfLvkbY9ohJlCjQH2CZjjYVvJ.jpg', // Dune 1
-    'https://image.tmdb.org/t/p/w500/r2J02Z2OpNTctfOSN2Ydgii51I3.jpg'  // Guardians
+    'https://images.metahub.space/poster/medium/tt2015381/img'        // Guardians of the Galaxy
   ],
   // Column 2 (Scrolls DOWN)
   [
     'https://image.tmdb.org/t/p/w500/fiVW06jE7z9YnO4trhaMEdclSiC.jpg', // Fast X
     'https://image.tmdb.org/t/p/w500/kDp1vUBnMpe8ak4rjgl3cLELqjU.jpg', // Kung Fu Panda 4
-    'https://image.tmdb.org/t/p/w500/vZloFAK7NKnMGKEslUsZ2bOGaVh.jpg', // Spider-Man No Way Home
+    'https://image.tmdb.org/t/p/w500/1g0dhYtq4irTY1GPXvft6k4YLjm.jpg', // Spider-Man No Way Home
     'https://image.tmdb.org/t/p/w500/t6HIqrRAclMCA60NsSmeqe9RmNV.jpg', // Avatar Way of Water
     'https://image.tmdb.org/t/p/w500/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg', // Fight Club
-    'https://image.tmdb.org/t/p/w500/cxevDYdeFUr4kVW7ca6VtRSTdA5.jpg'  // Air
+    'https://images.metahub.space/poster/medium/tt16419074/img'        // Air
   ],
   // Column 3 (Scrolls UP)
   [
     'https://image.tmdb.org/t/p/w500/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg', // Oppenheimer
-    'https://image.tmdb.org/t/p/w500/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg', // Jurassic World
+    'https://image.tmdb.org/t/p/w500/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg', // Pulp Fiction
     'https://image.tmdb.org/t/p/w500/NNxYkU70HPurnNCSiCjYAmacwm.jpg', // Mission Impossible
-    'https://image.tmdb.org/t/p/w500/ngl2FKBlU4fhbdsrtdom9LVLBXw.jpg', // Arcane
-    'https://image.tmdb.org/t/p/w500/7iiTTgloJzvGI1TAYymCfbfl3vT.jpg', // Parasite
-    'https://image.tmdb.org/t/p/w500/reKs8y4mPwXZZG99vDrF3M1pmw5.jpg'  // Gladiator
+    'https://image.tmdb.org/t/p/w500/ngl2FKBlU4fhbdsrtdom9LVLBXw.jpg', // Ant-Man Quantumania
+    'https://images.metahub.space/poster/medium/tt6751668/img',        // Parasite
+    'https://images.metahub.space/poster/medium/tt0172495/img'         // Gladiator
   ]
 ];
 

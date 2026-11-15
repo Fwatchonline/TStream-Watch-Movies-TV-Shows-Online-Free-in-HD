@@ -1,4 +1,9 @@
 import React from 'react';
+import {
+  buildImageProxyUrl,
+  isProxiedImagePath,
+  resolveSafeImageSrc
+} from '../../utils/imageUrl';
 
 export interface GenreItem {
   id: number;
@@ -17,7 +22,7 @@ export const POPULAR_GENRES: GenreItem[] = [
   {
     id: 878,
     name: 'Science Fiction',
-    backdrop: 'https://image.tmdb.org/t/p/w780/rAiYTsqJJR9voeh1Nt077z0mOPm.jpg',
+    backdrop: 'https://image.tmdb.org/t/p/w780/jYEW5xZkZk2WTrdbMGAPFuBqbDc.jpg',
     accentColor: 'from-cyan-600/30'
   },
   {
@@ -35,7 +40,7 @@ export const POPULAR_GENRES: GenreItem[] = [
   {
     id: 16,
     name: 'Animation',
-    backdrop: 'https://image.tmdb.org/t/p/w780/9faGSFi5jam6pDWGNd0p8J25jh5.jpg',
+    backdrop: 'https://image.tmdb.org/t/p/w780/xLg6LRJ6VqwJX3ZiB6mRhLYAg3I.jpg',
     accentColor: 'from-purple-600/30'
   },
   {
@@ -71,13 +76,13 @@ export const POPULAR_GENRES: GenreItem[] = [
   {
     id: 14,
     name: 'Fantasy',
-    backdrop: 'https://image.tmdb.org/t/p/w780/8eJf0hV2fuQBsRNaWxsSpvl2Ce7.jpg',
+    backdrop: 'https://image.tmdb.org/t/p/w780/4gV0rKUjB1nLUdZB4zIltLvNZZr.jpg',
     accentColor: 'from-indigo-600/30'
   },
   {
     id: 99,
     name: 'Documentary',
-    backdrop: 'https://image.tmdb.org/t/p/w780/9zcbqSxdsRMZWHYtyCd1QO296Rt.jpg',
+    backdrop: 'https://images.metahub.space/background/medium/tt0795176/img',
     accentColor: 'from-teal-600/30'
   }
 ];
@@ -88,19 +93,38 @@ interface GenreCardProps {
 }
 
 export const GenreCard: React.FC<GenreCardProps> = ({ genre, onClick }) => {
+  const [imgSrc, setImgSrc] = React.useState(() => resolveSafeImageSrc(genre.backdrop));
+  const [imgError, setImgError] = React.useState(false);
+
+  React.useEffect(() => {
+    setImgSrc(resolveSafeImageSrc(genre.backdrop));
+    setImgError(false);
+  }, [genre.id, genre.backdrop]);
+
+  const handleImgError = () => {
+    if (genre.backdrop && !isProxiedImagePath(imgSrc) && genre.backdrop.startsWith('http')) {
+      setImgSrc(buildImageProxyUrl(genre.backdrop));
+    } else {
+      setImgError(true);
+    }
+  };
+
   return (
     <div
       onClick={() => onClick(genre.id)}
       className="shrink-0 snap-start w-[170px] sm:w-[210px] h-[100px] sm:h-[115px] group cursor-pointer relative rounded-xl overflow-hidden bg-[#29292D] border border-[#3A3A40] hover:border-[#F5C400] transition-all duration-300 select-none hover:-translate-y-1 shadow-md hover:shadow-xl"
     >
       {/* Background Artwork */}
-      <img
-        src={genre.backdrop}
-        alt={genre.name}
-        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500 filter brightness-65 group-hover:brightness-75"
-        loading="lazy"
-        referrerPolicy="no-referrer"
-      />
+      {!imgError && imgSrc && (
+        <img
+          src={imgSrc}
+          alt={genre.name}
+          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500 filter brightness-65 group-hover:brightness-75"
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={handleImgError}
+        />
+      )}
 
       {/* Dark Ambient Gradient */}
       <div className={`absolute inset-0 bg-gradient-to-t ${genre.accentColor} via-black/50 to-black/30 pointer-events-none`} />

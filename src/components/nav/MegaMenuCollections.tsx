@@ -19,7 +19,7 @@ const TOP_FRANCHISES: FranchiseItem[] = [
     id: 86311,
     name: 'Marvel Universe (MCU)',
     count: '4+ Films',
-    image: 'https://image.tmdb.org/t/p/w500/yFSIUVTCvgYr05wt7QWv3nR5612.jpg',
+    image: 'https://image.tmdb.org/t/p/w500/yFSIUVTCvgYrpalUktulvk3Gi5Y.jpg',
     desc: 'Avengers, Iron Man, Thor, Captain America & the Multiverse'
   },
   {
@@ -33,7 +33,7 @@ const TOP_FRANCHISES: FranchiseItem[] = [
     id: 1241,
     name: 'Harry Potter Wizarding World',
     count: '8 Films',
-    image: 'https://image.tmdb.org/t/p/w500/eVPs2Y0LyvTLZn6AP5Z6taTyMvf.jpg',
+    image: 'https://image.tmdb.org/t/p/w500/eVPs2Y0LyvTLZn6AP5Z6O2rtiGB.jpg',
     desc: 'The complete Hogwarts saga from Sorcerer’s Stone to Deathly Hallows'
   },
   {
@@ -47,7 +47,7 @@ const TOP_FRANCHISES: FranchiseItem[] = [
     id: 9485,
     name: 'Fast & Furious Franchise',
     count: '10 Films',
-    image: 'https://image.tmdb.org/t/p/w500/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg',
+    image: 'https://image.tmdb.org/t/p/w500/zOCnMPoUxgJK1RFPfN4PcnT16gr.jpg',
     desc: 'High-octane street racing and international heist action'
   },
   {
@@ -167,7 +167,7 @@ export const MegaMenuCollections: React.FC<MegaMenuCollectionsProps> = ({
           onClick={() => handleSelectCollection()}
           className="px-3 py-1.5 rounded-lg bg-[#F5C400] hover:bg-[#e0b400] text-black font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
         >
-          <span>View All 50+ Sagas</span>
+          <span>View All 80 Sagas</span>
           <ArrowRight className="w-3 h-3" />
         </button>
       </div>

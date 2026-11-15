@@ -264,8 +264,44 @@ export const INITIAL_CURATED_COLLECTIONS: DiscoveredCollection[] = [
   ...EXPANDED_CURATED_COLLECTIONS
 ];
 
+const CURATED_COLLECTION_MAP = new Map<number, DiscoveredCollection>(
+  INITIAL_CURATED_COLLECTIONS.map(c => [c.id, c])
+);
+
+const BROKEN_IMAGE_MARKERS = [
+  'undefined',
+  'null',
+  '71tq7340g0b503798a',
+  'tLScZr5hx1a2btI1j2d70882e9e',
+  'z8onk7LV9Mpk6zpmUmvh4c',
+  '8h58673752',
+  'waFr57385903b',
+  '9738593740',
+  'sdEOH09929r5YZgZ01340b39',
+  '1stUIsjawROZxjiCMtqqXqgfZWC',
+  'aWxHgWom9Bv3n019a',
+  'obKmfVyCNSl9uzSI13303k795',
+  'hziiv14OpD73u9gAak4XDDMu0i7',
+  'RYMX2wcKCBAr242PD7xwmjaTn9',
+  '4ssDuvEDkS9NvmR19PJSl2onA9U',
+  'xnqustnn244ty7f58n08L1ek8p0',
+  'lmZFxVIz3uj7vxh8z12y30a8',
+  '4q2hz2m8hubgvij98EzW4P8Yal9',
+  'ng6SS99k30Kq127BgcjYvU1x',
+  '14QbnygCuTO0vl7bM29w4hW0uWv',
+  'fn4n6uOYcB6Uh89nbNPo0vAcwAc'
+];
+
+function isCorruptImageUrl(url?: string | null): boolean {
+  if (!url || typeof url !== 'string' || !url.trim()) return true;
+  return BROKEN_IMAGE_MARKERS.some(marker => url.includes(marker));
+}
+
 export function sanitizeCollectionImages(col: DiscoveredCollection): DiscoveredCollection {
   const verified = VERIFIED_COLLECTION_IMAGES[col.id];
+  const curated = CURATED_COLLECTION_MAP.get(col.id);
+  const curatedPartsMap = new Map((curated?.parts || []).map(p => [p.id, p]));
+
   let backdrop = col.backdropPath;
   let poster = col.posterPath;
 
@@ -273,21 +309,46 @@ export function sanitizeCollectionImages(col: DiscoveredCollection): DiscoveredC
     backdrop = verified.backdrop;
     poster = verified.poster;
   } else {
-    const isCorrupt = (url?: string | null) =>
-      !url || url.includes('undefined') || url.includes('null') || url.includes('71tq7340g0b503798a') || url.includes('tLScZr5hx1a2btI1j2d70882e9e');
-
-    if (isCorrupt(backdrop)) {
+    if (isCorruptImageUrl(backdrop)) {
       backdrop = col.parts?.[0]?.backdropPath || col.parts?.[0]?.posterPath || poster;
     }
-    if (isCorrupt(poster)) {
+    if (isCorruptImageUrl(poster)) {
       poster = col.parts?.[0]?.posterPath || backdrop;
     }
   }
 
+  const sanitizedParts = Array.isArray(col.parts)
+    ? col.parts.map((part) => {
+        const curatedPart = curatedPartsMap.get(part.id);
+        let partPoster = part.posterPath;
+        let partBackdrop = part.backdropPath;
+
+        if (isCorruptImageUrl(partPoster)) {
+          partPoster =
+            (curatedPart && !isCorruptImageUrl(curatedPart.posterPath) ? curatedPart.posterPath : undefined) ||
+            poster ||
+            partPoster;
+        }
+        if (isCorruptImageUrl(partBackdrop)) {
+          partBackdrop =
+            (curatedPart && !isCorruptImageUrl(curatedPart.backdropPath) ? curatedPart.backdropPath : undefined) ||
+            backdrop ||
+            partBackdrop;
+        }
+
+        return {
+          ...part,
+          posterPath: partPoster,
+          backdropPath: partBackdrop
+        };
+      })
+    : col.parts;
+
   return {
     ...col,
     backdropPath: backdrop,
-    posterPath: poster
+    posterPath: poster,
+    parts: sanitizedParts
   };
 }
 
@@ -312,7 +373,29 @@ export function getDiscoveredCollections(): DiscoveredCollection[] {
     INITIAL_CURATED_COLLECTIONS.forEach(c => map.set(c.id, sanitizeCollectionImages(c)));
     stored.forEach(c => {
       const existing = map.get(c.id);
-      map.set(c.id, sanitizeCollectionImages({ ...(existing || {}), ...c } as DiscoveredCollection));
+      if (existing) {
+        // Merge stored parts with curated parts so stale cached part image URLs cannot override repaired curated artwork
+        const curatedPartsById = new Map((existing.parts || []).map(p => [p.id, p]));
+        const mergedParts = (c.parts && c.parts.length > 0 ? c.parts : existing.parts || []).map(part => {
+          const curatedPart = curatedPartsById.get(part.id);
+          if (!curatedPart) return part;
+          return {
+            ...part,
+            posterPath: isCorruptImageUrl(part.posterPath) ? curatedPart.posterPath : part.posterPath,
+            backdropPath: isCorruptImageUrl(part.backdropPath) ? curatedPart.backdropPath : part.backdropPath
+          };
+        });
+        map.set(
+          c.id,
+          sanitizeCollectionImages({
+            ...existing,
+            ...c,
+            parts: mergedParts
+          } as DiscoveredCollection)
+        );
+      } else {
+        map.set(c.id, sanitizeCollectionImages(c));
+      }
     });
 
     const result = Array.from(map.values()).map(sanitizeCollectionImages);

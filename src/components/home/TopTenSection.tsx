@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { ChevronLeft, ChevronRight, Play, Flame } from 'lucide-react';
 import { MediaItem } from '../../types/media';
 import { QualityBadge } from '../QualityBadge';
+import { buildImageProxyUrl, isProxiedImagePath, resolveSafeImageSrc } from '../../utils/imageUrl';
 
 interface TopTenSectionProps {
   items: MediaItem[];
@@ -107,11 +108,22 @@ export const TopTenSection: React.FC<TopTenSectionProps> = ({
               {/* Right Column: Poster with HD badge and Hover Play overlay */}
               <div className="relative aspect-[2/3] w-[125px] sm:w-[138px] rounded-lg overflow-hidden bg-[#232326] shrink-0 border border-[#3A3A40]/60">
                 <img
-                  src={item.posterPath}
+                  src={resolveSafeImageSrc(item.posterPath || item.backdropPath)}
                   alt={item.title}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   loading="lazy"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const img = e.currentTarget;
+                    const currentSrc = img.getAttribute('src') || '';
+                    if (item.posterPath && !isProxiedImagePath(currentSrc)) {
+                      img.src = buildImageProxyUrl(item.posterPath);
+                      return;
+                    }
+                    if (item.backdropPath && !currentSrc.includes(encodeURIComponent(item.backdropPath))) {
+                      img.src = resolveSafeImageSrc(item.backdropPath);
+                    }
+                  }}
                 />
 
                 {/* Gradient Scrim */}

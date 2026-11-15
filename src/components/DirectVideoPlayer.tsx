@@ -226,8 +226,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [showControls, setShowControls] = useState<boolean>(true);
+  const [isTouchMode, setIsTouchMode] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const lastTouchTimeRef = useRef<number>(0);
 
   // Scrubber Hover
   const [hoverPosition, setHoverPosition] = useState<number | null>(null);
@@ -582,6 +584,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     const onPlay = () => setIsPlaying(true);
     const onPause = () => {
       setIsPlaying(false);
+      setShowControls(true);
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
       if (onProgressUpdate && video.currentTime > 3) {
         onProgressUpdate(video.currentTime, video.duration || 0);
       }
@@ -620,7 +624,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     };
   }, [activeStream, resumeKey, autoplayNext, hasNextEpisode, onNextEpisode, onProgressUpdate, triggerFailover]);
 
-  // Auto-hide controls after inactivity
+  // Auto-hide controls after inactivity (mouse & touch safe)
   const handleMouseMove = useCallback(() => {
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -631,6 +635,27 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     }, 3500);
   }, [isPlaying, activeModal]);
 
+  const handleTouchActivity = useCallback(() => {
+    lastTouchTimeRef.current = Date.now();
+    setIsTouchMode(true);
+    handleMouseMove();
+  }, [handleMouseMove]);
+
+  useEffect(() => {
+    if (isPlaying && activeModal === 'none') {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+      controlsTimeoutRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, 3500);
+    } else if (!isPlaying) {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+      setShowControls(true);
+    }
+    return () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    };
+  }, [isPlaying, activeModal]);
+
   // Play / Pause toggle
   const togglePlay = () => {
     const video = videoRef.current;
@@ -638,8 +663,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     if (video.paused) {
       video.play();
       triggerHud('play', 'Playing');
+      handleMouseMove();
     } else {
       video.pause();
+      setShowControls(true);
       triggerHud('pause', 'Paused');
     }
   };
@@ -679,23 +706,53 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     setIsMuted(val === 0);
   };
 
-  // Fullscreen
+  // Fullscreen (with iOS Safari webkitEnterFullscreen fallback)
   const toggleFullscreen = () => {
-    const container = containerRef.current;
+    const container = containerRef.current as (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
+    const video = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void; webkitDisplayingFullscreen?: boolean; webkitExitFullscreen?: () => void }) | null;
     if (!container) return;
-    if (!document.fullscreenElement) {
-      container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+
+    const fsDoc = document as Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => Promise<void> | void };
+    const activeFs = document.fullscreenElement || fsDoc.webkitFullscreenElement;
+
+    if (!activeFs) {
+      if (container.requestFullscreen) {
+        container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {
+          if (video?.webkitEnterFullscreen) {
+            try {
+              video.webkitEnterFullscreen();
+            } catch {}
+          }
+        });
+      } else if (container.webkitRequestFullscreen) {
+        container.webkitRequestFullscreen();
+        setIsFullscreen(true);
+      } else if (video?.webkitEnterFullscreen) {
+        try {
+          video.webkitEnterFullscreen();
+        } catch {}
+      }
     } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+      if (document.exitFullscreen) {
+        document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+      } else if (fsDoc.webkitExitFullscreen) {
+        fsDoc.webkitExitFullscreen();
+        setIsFullscreen(false);
+      }
     }
   };
 
   useEffect(() => {
     const handleFsChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      const fsDoc = document as Document & { webkitFullscreenElement?: Element | null };
+      setIsFullscreen(Boolean(document.fullscreenElement || fsDoc.webkitFullscreenElement));
     };
     document.addEventListener('fullscreenchange', handleFsChange);
-    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+    };
   }, []);
 
   // PiP toggle
@@ -800,7 +857,40 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     setHoverTime(pos * duration);
   };
 
-  // Double click on surface
+  const handleScrubberTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!e.touches.length) return;
+    e.stopPropagation();
+    isDraggingScrubberRef.current = true;
+    handleTouchActivity();
+    const clientX = e.touches[0].clientX;
+    handleSeekFromEvent(clientX);
+    if (duration && scrubberRef.current) {
+      const rect = scrubberRef.current.getBoundingClientRect();
+      const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      setHoverPosition(pos);
+      setHoverTime(pos * duration);
+    }
+  };
+
+  const handleScrubberTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isDraggingScrubberRef.current || !e.touches.length) return;
+    e.stopPropagation();
+    const clientX = e.touches[0].clientX;
+    handleSeekFromEvent(clientX);
+    if (duration && scrubberRef.current) {
+      const rect = scrubberRef.current.getBoundingClientRect();
+      const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      setHoverPosition(pos);
+      setHoverTime(pos * duration);
+    }
+  };
+
+  const handleScrubberTouchEnd = () => {
+    isDraggingScrubberRef.current = false;
+    setHoverPosition(null);
+  };
+
+  // Double click / tap on surface
   const lastClickRef = useRef<{ time: number; x: number }>({ time: 0, x: 0 });
   const handleSurfaceClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (activeModal !== 'none') {
@@ -812,6 +902,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     const rect = e.currentTarget.getBoundingClientRect();
     const relativeX = (e.clientX - rect.left) / rect.width;
     const timeDiff = now - lastClickRef.current.time;
+    const isRecentTouch = now - lastTouchTimeRef.current < 1000;
 
     if (timeDiff < 280) {
       if (relativeX < 0.35) {
@@ -819,12 +910,27 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       } else if (relativeX > 0.65) {
         handleSkip(15);
       } else {
-        toggleFullscreen();
+        if (isRecentTouch) {
+          togglePlay();
+        } else {
+          toggleFullscreen();
+        }
       }
       lastClickRef.current = { time: 0, x: 0 };
     } else {
       lastClickRef.current = { time: now, x: e.clientX };
-      togglePlay();
+      if (isRecentTouch) {
+        if (!showControls) {
+          handleMouseMove();
+        } else if (isPlaying) {
+          if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+          setShowControls(false);
+        } else {
+          togglePlay();
+        }
+      } else {
+        togglePlay();
+      }
     }
   };
 
@@ -1284,7 +1390,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     <div
       ref={containerRef}
       onMouseMove={handleMouseMove}
-      className="relative w-full aspect-video bg-black select-none overflow-hidden group/player rounded-2xl shadow-2xl font-sans"
+      onTouchStart={handleTouchActivity}
+      className="relative w-full aspect-video bg-black select-none overflow-hidden group/player rounded-xl sm:rounded-2xl shadow-2xl font-sans touch-manipulation"
     >
       {/* Hidden File Input for Subtitle Upload (image_66a8b767.png) */}
       <input
@@ -1324,17 +1431,17 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         aria-label="Video Playback Surface"
       />
 
-      {/* Subtitles Overlay with Live Customization (image_659a6ea3.png, image_d377490c.png) */}
+      {/* Subtitles Overlay with Live Customization */}
       {customSubtitleText && (
         <div
-          className={`absolute inset-x-0 z-20 flex justify-center px-4 sm:px-8 pointer-events-none transition-all duration-200 ${
-            showControls ? 'bottom-24 sm:bottom-28' : 'bottom-8 sm:bottom-12'
+          className={`absolute inset-x-0 z-20 flex justify-center px-3 sm:px-8 pointer-events-none transition-all duration-200 ${
+            showControls ? 'bottom-16 sm:bottom-28' : 'bottom-4 sm:bottom-12'
           }`}
         >
           <div
-            className="text-center max-w-[92%] sm:max-w-[80%] whitespace-pre-line leading-snug font-semibold transition-all drop-shadow-lg select-none"
+            className="text-center max-w-[94%] sm:max-w-[80%] whitespace-pre-line leading-snug font-semibold transition-all drop-shadow-lg select-none"
             style={{
-              fontSize: `calc(clamp(1.05rem, 1.8vw, 1.65rem) * ${subFontSize / 100})`,
+              fontSize: `calc(clamp(0.85rem, 2.2vw, 1.65rem) * ${subFontSize / 100})`,
               color: subTextColor,
               backgroundColor:
                 subBgColor === 'transparent' || subBgOpacity === 0
@@ -1394,16 +1501,27 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Top Header Controls (Cloud Servers Icon, Theater, Lights) - image_12a0d412.png */}
+      {/* Top Header Controls (Mobile Title + Cloud Servers Icon + Theater) */}
       <div
-        className={`absolute top-0 inset-x-0 z-30 p-4 bg-gradient-to-b from-black/80 via-black/30 to-transparent transition-opacity duration-300 flex items-center justify-between ${
+        className={`absolute top-0 inset-x-0 z-30 p-2.5 sm:p-4 bg-gradient-to-b from-black/80 via-black/30 to-transparent transition-opacity duration-300 flex items-center justify-between gap-2 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
-        <div />
+        {/* Compact Title & Episode Indicator on Mobile */}
+        <div className="sm:hidden flex items-center gap-1.5 min-w-0 flex-1 pointer-events-none">
+          <span className="text-xs font-bold text-white truncate drop-shadow-md">
+            {title}
+          </span>
+          {!isMovie && (
+            <span className="px-1.5 py-0.5 rounded bg-white/15 text-[10px] font-bold text-[#F5C400] shrink-0">
+              S{currentSeason}·E{currentEpisode}
+            </span>
+          )}
+        </div>
+        <div className="hidden sm:block" />
 
-        {/* Top-Right Cloud Server Icon (image_12a0d412.png top right) */}
-        <div className="flex items-center gap-2">
+        {/* Top-Right Cloud Server Icon */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {onToggleTheater && (
             <button
               onClick={onToggleTheater}
@@ -1417,10 +1535,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           {/* Cloud Servers Popover Trigger */}
           <button
             onClick={() => setActiveModal(curr => (curr === 'servers' ? 'none' : 'servers'))}
-            className={`p-2 rounded-xl transition-all cursor-pointer backdrop-blur-md flex items-center gap-1.5 ${
+            className={`min-w-[36px] min-h-[36px] p-2 rounded-xl transition-all cursor-pointer backdrop-blur-md flex items-center justify-center gap-1.5 ${
               activeModal === 'servers'
                 ? 'bg-white text-black shadow-lg'
-                : 'bg-black/40 hover:bg-black/70 text-zinc-200 hover:text-white border border-white/10'
+                : 'bg-black/45 hover:bg-black/70 text-zinc-200 hover:text-white border border-white/10'
             }`}
             title="Servers & Sources"
             aria-label="Servers"
@@ -1431,18 +1549,28 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       </div>
 
       {/* =========================================================================
-          POPOVERS & MODALS (Match image_480f9ced, image_de22053a, image_66a8b767, etc.)
+          POPOVERS & MODALS (Responsive for mobile 360px+ & desktop)
          ========================================================================= */}
 
-      {/* 1. SERVERS POPOVER (image_480f9ced.png) */}
+      {/* 1. SERVERS POPOVER */}
       {activeModal === 'servers' && (
-        <div className="absolute top-14 right-4 sm:right-6 z-50 w-72 sm:w-80 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-4 text-left animate-in fade-in zoom-in-95 duration-150">
-          <div className="flex items-center gap-2 pb-2.5 mb-3 border-b border-white/10 text-xs font-bold text-zinc-300">
-            <Cloud className="w-4 h-4 text-zinc-300 fill-zinc-300" />
-            <span>SERVERS</span>
+        <div className="absolute top-12 sm:top-14 inset-x-2.5 sm:inset-x-auto sm:right-6 z-50 sm:w-80 max-h-[calc(100%-3.75rem)] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3 sm:p-4 text-left animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-white/10 text-xs font-bold text-zinc-300">
+            <div className="flex items-center gap-2">
+              <Cloud className="w-4 h-4 text-zinc-300 fill-zinc-300" />
+              <span>SERVERS</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveModal('none')}
+              className="sm:hidden p-1 text-zinc-400 hover:text-white cursor-pointer"
+              aria-label="Close servers"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
-          <div className="space-y-2 max-h-72 overflow-y-auto no-scrollbar">
+          <div className="space-y-2 max-h-40 sm:max-h-72 overflow-y-auto no-scrollbar">
             {allStreams.map((st, idx) => {
               const isActive = idx === selectedStreamIndex;
               return (
@@ -1487,12 +1615,28 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* 2. AUDIO POPOVER (image_de22053a.png) */}
+      {/* 2. AUDIO POPOVER */}
       {activeModal === 'audio' && (
-        <div className="absolute bottom-16 right-4 sm:right-16 z-50 w-64 sm:w-72 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3 text-left animate-in fade-in zoom-in-95 duration-150">
-          <div className="flex items-center gap-2 pb-2.5 mb-2 border-b border-white/10 text-xs font-bold text-zinc-300">
-            <Languages className="w-4 h-4 text-zinc-400" />
-            <span>AUDIO</span>
+        <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-16 z-50 sm:w-72 max-h-[calc(100%-3.75rem)] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3 text-left animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs font-bold text-zinc-300">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveModal('settings')}
+                className="p-1 hover:text-white text-zinc-400 cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+              <Languages className="w-4 h-4 text-zinc-400" />
+              <span>AUDIO</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveModal('none')}
+              className="sm:hidden p-1 text-zinc-400 hover:text-white cursor-pointer"
+              aria-label="Close audio"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
           <div className="space-y-1">
@@ -1522,17 +1666,27 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* 3. SUBTITLES POPOVER (image_66a8b767.png & image_674abbad.png) */}
+      {/* 3. SUBTITLES POPOVER */}
       {activeModal === 'subtitles' && (
-        <div className="absolute bottom-16 right-4 sm:right-12 z-50 w-80 sm:w-96 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3 text-left animate-in fade-in zoom-in-95 duration-150">
-          <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs font-bold text-zinc-300">
+        <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-12 z-50 sm:w-96 max-h-[calc(100%-3.5rem)] flex flex-col bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3 text-left animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs font-bold text-zinc-300 shrink-0">
             <div className="flex items-center gap-2">
               <Subtitles className="w-4 h-4 text-zinc-400" />
               <span>SUBTITLES</span>
             </div>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-zinc-300 font-medium">
-              {combinedSubtitles.length} available
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-zinc-300 font-medium">
+                {combinedSubtitles.length} available
+              </span>
+              <button
+                type="button"
+                onClick={() => setActiveModal('none')}
+                className="sm:hidden p-1 text-zinc-400 hover:text-white cursor-pointer"
+                aria-label="Close subtitles"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Quick Search Filter across all subtitle tracks */}
@@ -1568,7 +1722,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           </button>
 
           {/* Subtitle Track List */}
-          <div className="space-y-1 max-h-64 sm:max-h-72 overflow-y-auto no-scrollbar pr-0.5">
+          <div className="space-y-1 flex-1 min-h-0 max-h-36 sm:max-h-72 overflow-y-auto no-scrollbar pr-0.5">
             {/* Off Option */}
             <button
               onClick={() => {
@@ -1689,9 +1843,9 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* 4. SUBTITLE STYLE MENU (image_659a6ea3.png) */}
+      {/* 4. SUBTITLE STYLE MENU */}
       {activeModal === 'subtitle-style' && (
-        <div className="absolute bottom-16 right-4 sm:right-12 z-50 w-72 sm:w-80 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-4 text-left animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-12 z-50 sm:w-80 max-h-[calc(100%-3.5rem)] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3.5 sm:p-4 text-left animate-in fade-in zoom-in-95 duration-150">
           <div className="flex items-center gap-2 pb-2.5 mb-3 border-b border-white/10 text-xs font-bold text-white">
             <button
               onClick={() => setActiveModal('subtitles')}
@@ -1800,9 +1954,9 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* 5. SUBTITLE DELAY MENU (image_d377490c.png) */}
+      {/* 5. SUBTITLE DELAY MENU */}
       {activeModal === 'subtitle-delay' && (
-        <div className="absolute bottom-16 right-4 sm:right-12 z-50 w-72 sm:w-80 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-4 text-left animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-12 z-50 sm:w-80 max-h-[calc(100%-3.5rem)] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3.5 sm:p-4 text-left animate-in fade-in zoom-in-95 duration-150">
           <div className="flex items-center gap-2 pb-2.5 mb-2 border-b border-white/10 text-xs font-bold text-white">
             <button
               onClick={() => setActiveModal('subtitles')}
@@ -1853,9 +2007,9 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* 6. PLAYER SETTINGS DRAWER (image_2d037829.png) */}
+      {/* 6. PLAYER SETTINGS DRAWER */}
       {activeModal === 'settings' && (
-        <div className="absolute bottom-16 right-4 sm:right-10 z-50 w-72 sm:w-84 max-h-[80%] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-4 text-left animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-10 z-50 sm:w-84 max-h-[calc(100%-3.5rem)] sm:max-h-[80%] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3.5 sm:p-4 text-left animate-in fade-in zoom-in-95 duration-150">
           <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-3" />
 
           <div className="mb-3">
@@ -2049,9 +2203,9 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* 7. VIDEO QUALITY SUBMENU (image__1__9106897c.png) */}
+      {/* 7. VIDEO QUALITY SUBMENU */}
       {activeModal === 'quality' && (
-        <div className="absolute bottom-16 right-4 sm:right-10 z-50 w-72 sm:w-80 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-4 text-left animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-10 z-50 sm:w-80 max-h-[calc(100%-3.5rem)] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3.5 sm:p-4 text-left animate-in fade-in zoom-in-95 duration-150">
           <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-3" />
 
           <div className="flex items-center gap-2 pb-2.5 mb-3 border-b border-white/10 text-xs font-bold text-white">
@@ -2117,7 +2271,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
       {/* 8. PLAYBACK SPEED SUBMENU */}
       {activeModal === 'speed' && (
-        <div className="absolute bottom-16 right-4 sm:right-10 z-50 w-72 sm:w-80 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-4 text-left animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-10 z-50 sm:w-80 max-h-[calc(100%-3.5rem)] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3.5 sm:p-4 text-left animate-in fade-in zoom-in-95 duration-150">
           <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-3" />
 
           <div className="flex items-center gap-2 pb-2.5 mb-3 border-b border-white/10 text-xs font-bold text-white">
@@ -2162,7 +2316,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
       {/* 9. VOLUME BOOST SUBMENU */}
       {activeModal === 'volume-boost' && (
-        <div className="absolute bottom-16 right-4 sm:right-10 z-50 w-72 sm:w-80 bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-4 text-left animate-in fade-in zoom-in-95 duration-150">
+        <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-10 z-50 sm:w-80 max-h-[calc(100%-3.5rem)] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3.5 sm:p-4 text-left animate-in fade-in zoom-in-95 duration-150">
           <div className="w-10 h-1 bg-white/20 rounded-full mx-auto mb-3" />
 
           <div className="flex items-center gap-2 pb-2.5 mb-3 border-b border-white/10 text-xs font-bold text-white">
@@ -2205,36 +2359,47 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Center Big Play Button when Paused */}
-      {!isPlaying && !isLoading && !loadError && activeModal === 'none' && (
+      {/* Center Play / Pause Button on the Player */}
+      {!isLoading && !loadError && activeModal === 'none' && (!isPlaying || (isTouchMode && showControls)) && (
         <button
-          onClick={togglePlay}
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/15 hover:bg-white/25 border border-white/20 text-white flex items-center justify-center backdrop-blur-md shadow-2xl transition-all hover:scale-110 active:scale-95 cursor-pointer ring-1 ring-white/10"
-          aria-label="Play Video"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            togglePlay();
+          }}
+          className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-14 h-14 sm:w-20 sm:h-20 rounded-full flex items-center justify-center backdrop-blur-md shadow-2xl transition-all hover:scale-110 active:scale-95 cursor-pointer ${
+            !isPlaying
+              ? 'bg-black/75 hover:bg-black/90 border-2 border-[#F5C400] text-white ring-4 ring-[#F5C400]/20'
+              : 'bg-black/60 hover:bg-black/80 border border-white/25 text-white'
+          }`}
+          aria-label={isPlaying ? 'Pause Video' : 'Play Video'}
         >
-          <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-white ml-1 text-white" />
+          {isPlaying ? (
+            <Pause className="w-6 h-6 sm:w-9 sm:h-9 fill-white text-white" />
+          ) : (
+            <Play className="w-7 h-7 sm:w-10 sm:h-10 fill-[#F5C400] text-[#F5C400] ml-1" />
+          )}
         </button>
       )}
 
       {/* =========================================================================
-          BOTTOM CONTROLS BAR: "You're Watching", Scrubber, & Control Buttons
-          (Matches image_12a0d412.png)
+          BOTTOM CONTROLS BAR: Scrubber & Clean Control Buttons (Mobile Optimized)
          ========================================================================= */}
       <div
-        className={`absolute bottom-0 inset-x-0 z-30 p-4 sm:p-6 bg-gradient-to-t from-black/95 via-black/70 to-transparent transition-opacity duration-300 flex flex-col justify-end ${
+        className={`absolute bottom-0 inset-x-0 z-30 px-3 pb-2.5 pt-8 sm:p-6 bg-gradient-to-t from-black/95 via-black/70 to-transparent transition-opacity duration-300 flex flex-col justify-end ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
-        {/* Top of Bottom Section: "You're Watching" (image_12a0d412.png) */}
-        <div className="flex flex-col gap-1 max-w-[75%] sm:max-w-md pointer-events-none mb-3">
+        {/* "You're Watching" Metadata (shown on sm+ desktop/tablet; mobile shows compact title at top) */}
+        <div className="hidden sm:flex flex-col gap-1 max-w-md pointer-events-none mb-3">
           <div className="flex items-center gap-1.5">
             <span className="w-1 h-3.5 bg-red-600 rounded-full shrink-0" />
-            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-zinc-400">
+            <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
               You're Watching
             </span>
           </div>
 
-          <h2 className="text-base sm:text-xl font-black text-white truncate drop-shadow-md tracking-tight leading-tight">
+          <h2 className="text-xl font-black text-white truncate drop-shadow-md tracking-tight leading-tight">
             {title}
           </h2>
 
@@ -2255,9 +2420,9 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           </div>
         </div>
 
-        {/* Scrubber Bar with Left and Right Timestamps (image_12a0d412.png) */}
-        <div className="w-full flex items-center gap-3 mb-3">
-          <span className="text-[11px] font-mono text-zinc-400 select-none shrink-0 w-10 text-left">
+        {/* Scrubber Bar with Mouse + Mobile Touch Drag Support */}
+        <div className="w-full flex items-center gap-2 sm:gap-3 mb-1.5 sm:mb-3">
+          <span className="text-[10px] sm:text-[11px] font-mono text-zinc-300 sm:text-zinc-400 select-none shrink-0 w-9 sm:w-10 text-left">
             {formatTime(currentTime)}
           </span>
 
@@ -2266,47 +2431,54 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
             onMouseDown={handleScrubberMouseDown}
             onMouseMove={handleScrubberMouseMove}
             onMouseLeave={() => setHoverPosition(null)}
-            className="relative flex-1 h-1 hover:h-1.5 rounded-full cursor-pointer transition-all flex items-center group/bar bg-white/20"
+            onTouchStart={handleScrubberTouchStart}
+            onTouchMove={handleScrubberTouchMove}
+            onTouchEnd={handleScrubberTouchEnd}
+            onTouchCancel={handleScrubberTouchEnd}
+            className="relative flex-1 py-3 -my-3 cursor-pointer flex items-center group/bar touch-none"
           >
-            {/* Buffered Bar */}
-            <div
-              className="absolute left-0 top-0 bottom-0 bg-white/30 rounded-full transition-all"
-              style={{ width: `${duration ? (bufferedTime / duration) * 100 : 0}%` }}
-            />
-
-            {/* Current Progress Bar */}
-            <div
-              className="absolute left-0 top-0 bottom-0 bg-white rounded-full flex items-center justify-end"
-              style={{ width: `${progressPercent}%` }}
-            >
-              {/* White Round Scrubber Thumb */}
-              <div className="w-3 h-3 bg-white rounded-full shadow-lg -mr-1.5 scale-0 group-hover/bar:scale-100 transition-transform" />
-            </div>
-
-            {/* Hover Tooltip */}
-            {hoverPosition !== null && (
+            <div className="relative w-full h-1 sm:h-1 group-hover/bar:h-1.5 rounded-full bg-white/25 transition-all flex items-center">
+              {/* Buffered Bar */}
               <div
-                className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 bg-black/90 text-white text-[10px] font-mono font-bold rounded border border-white/20 pointer-events-none shadow-md"
-                style={{ left: `${hoverPosition * 100}%` }}
+                className="absolute left-0 top-0 bottom-0 bg-white/30 rounded-full transition-all"
+                style={{ width: `${duration ? (bufferedTime / duration) * 100 : 0}%` }}
+              />
+
+              {/* Current Progress Bar */}
+              <div
+                className="absolute left-0 top-0 bottom-0 bg-[#F5C400] sm:bg-white rounded-full flex items-center justify-end"
+                style={{ width: `${progressPercent}%` }}
               >
-                {formatTime(hoverTime)}
+                {/* Round Scrubber Thumb (Always visible on mobile touch, hover-revealed on desktop) */}
+                <div className="w-3 h-3 bg-[#F5C400] sm:bg-white rounded-full shadow-lg -mr-1.5 scale-100 sm:scale-0 sm:group-hover/bar:scale-100 transition-transform" />
               </div>
-            )}
+
+              {/* Hover / Touch Seek Tooltip */}
+              {hoverPosition !== null && (
+                <div
+                  className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 bg-black/90 text-white text-[10px] font-mono font-bold rounded border border-white/20 pointer-events-none shadow-md"
+                  style={{ left: `${hoverPosition * 100}%` }}
+                >
+                  {formatTime(hoverTime)}
+                </div>
+              )}
+            </div>
           </div>
 
-          <span className="text-[11px] font-mono text-zinc-400 select-none shrink-0 w-12 text-right">
+          <span className="text-[10px] sm:text-[11px] font-mono text-zinc-300 sm:text-zinc-400 select-none shrink-0 w-10 sm:w-12 text-right">
             {formatTime(duration)}
           </span>
         </div>
 
-        {/* Bottom Row Controls: Play/Pause, 15s Skip, Volume, Audio, Subtitles, Settings, Fullscreen */}
-        <div className="w-full flex items-center justify-between">
+        {/* Bottom Row Controls: Play/Pause, 15s Skip, Volume, Subtitles, Settings, Fullscreen */}
+        <div className="w-full flex items-center justify-between gap-1">
           {/* Left Controls */}
-          <div className="flex items-center gap-3 sm:gap-4">
+          <div className="flex items-center gap-1 sm:gap-3.5">
             {/* Play / Pause Button */}
             <button
+              type="button"
               onClick={togglePlay}
-              className="text-white hover:text-zinc-200 transition-transform active:scale-90 cursor-pointer"
+              className="min-w-[36px] min-h-[36px] sm:min-w-[38px] sm:min-h-[38px] flex items-center justify-center rounded-lg text-white hover:text-zinc-200 active:bg-white/15 transition-all active:scale-90 cursor-pointer"
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
               {isPlaying ? (
@@ -2316,31 +2488,34 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               )}
             </button>
 
-            {/* Skip Backward 15s (RotateCcw15Icon) */}
+            {/* Skip Backward 15s */}
             <button
+              type="button"
               onClick={() => handleSkip(-15)}
-              className="text-white hover:text-zinc-200 transition-transform active:scale-90 cursor-pointer"
+              className="min-w-[36px] min-h-[36px] sm:min-w-[38px] sm:min-h-[38px] flex items-center justify-center rounded-lg text-white hover:text-zinc-200 active:bg-white/15 transition-all active:scale-90 cursor-pointer"
               title="Skip backward 15s"
               aria-label="Rewind 15 seconds"
             >
               <RotateCcw15Icon className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
 
-            {/* Skip Forward 15s (RotateCw15Icon) */}
+            {/* Skip Forward 15s */}
             <button
+              type="button"
               onClick={() => handleSkip(15)}
-              className="text-white hover:text-zinc-200 transition-transform active:scale-90 cursor-pointer"
+              className="min-w-[36px] min-h-[36px] sm:min-w-[38px] sm:min-h-[38px] flex items-center justify-center rounded-lg text-white hover:text-zinc-200 active:bg-white/15 transition-all active:scale-90 cursor-pointer"
               title="Skip forward 15s"
               aria-label="Fast forward 15 seconds"
             >
               <RotateCw15Icon className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
 
-            {/* Volume with Smooth Hover Reveal */}
+            {/* Volume with Desktop Hover Reveal */}
             <div className="flex items-center group/vol gap-2">
               <button
+                type="button"
                 onClick={toggleMute}
-                className="text-white hover:text-zinc-200 transition-colors cursor-pointer"
+                className="min-w-[36px] min-h-[36px] sm:min-w-[38px] sm:min-h-[38px] flex items-center justify-center rounded-lg text-white hover:text-zinc-200 active:bg-white/15 transition-colors cursor-pointer"
                 title={isMuted ? 'Unmute' : 'Mute'}
                 aria-label="Volume"
               >
@@ -2353,7 +2528,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                 )}
               </button>
 
-              <div className="w-0 group-hover/vol:w-16 sm:group-hover/vol:w-20 overflow-hidden transition-all duration-200 flex items-center">
+              <div className="hidden sm:flex w-0 group-hover/vol:w-20 overflow-hidden transition-all duration-200 items-center">
                 <input
                   type="range"
                   min="0"
@@ -2361,43 +2536,20 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                   step="0.05"
                   value={isMuted ? 0 : volume}
                   onChange={handleVolumeChange}
-                  className="w-16 sm:w-20 accent-white h-1 bg-white/30 rounded-full cursor-pointer"
+                  className="w-20 accent-white h-1 bg-white/30 rounded-full cursor-pointer"
                 />
               </div>
             </div>
           </div>
 
-          {/* Right Controls: Quality [4K/1080p], Audio [A文], Subtitles [=], Settings [⚙️], Fullscreen [⤢] */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Live Stream Quality Badge / Quick-Selector Button */}
+          {/* Right Controls: Subtitles [=], Settings [⚙️], Fullscreen [⤢] */}
+          <div className="flex items-center gap-1 sm:gap-2.5">
+            {/* Subtitles Button */}
             <button
-              onClick={() => setActiveModal(curr => (curr === 'quality' ? 'none' : 'quality'))}
-              className={`p-1 rounded-lg transition-all cursor-pointer hover:opacity-90 active:scale-95 flex items-center ${
-                activeModal === 'quality' ? 'ring-1 ring-white/30' : ''
-              }`}
-              title={`Video Quality: ${streamQuality.fullLabel} (${streamResolution ? `${streamResolution.width}×${streamResolution.height}` : streamQuality.resolution})`}
-              aria-label="Video Quality"
-            >
-              <QualityBadge quality={streamQuality} variant="player" />
-            </button>
-
-            {/* Audio Button (image_de22053a.png) */}
-            <button
-              onClick={() => setActiveModal(curr => (curr === 'audio' ? 'none' : 'audio'))}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                activeModal === 'audio' ? 'bg-white/20 text-white' : 'text-zinc-300 hover:text-white'
-              }`}
-              title="Audio Tracks"
-              aria-label="Audio"
-            >
-              <Languages className="w-5 h-5 sm:w-6 sm:h-6" />
-            </button>
-
-            {/* Subtitles Button (image_66a8b767.png) */}
-            <button
+              type="button"
               onClick={() => setActiveModal(curr => (curr === 'subtitles' ? 'none' : 'subtitles'))}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                activeModal === 'subtitles' || activeSubTrackUrl ? 'text-white' : 'text-zinc-400 hover:text-white'
+              className={`min-w-[36px] min-h-[36px] sm:min-w-[38px] sm:min-h-[38px] flex items-center justify-center rounded-lg transition-colors cursor-pointer active:bg-white/15 ${
+                activeModal === 'subtitles' || activeSubTrackUrl ? 'text-white' : 'text-zinc-300 sm:text-zinc-400 hover:text-white'
               }`}
               title="Subtitles"
               aria-label="Subtitles"
@@ -2405,10 +2557,11 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               <Subtitles className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
 
-            {/* Settings Button (image_2d037829.png) */}
+            {/* Settings Button */}
             <button
+              type="button"
               onClick={() => setActiveModal(curr => (curr === 'settings' ? 'none' : 'settings'))}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+              className={`min-w-[36px] min-h-[36px] sm:min-w-[38px] sm:min-h-[38px] flex items-center justify-center rounded-lg transition-colors cursor-pointer active:bg-white/15 ${
                 activeModal === 'settings' ? 'bg-white/20 text-white' : 'text-zinc-300 hover:text-white'
               }`}
               title="Player Settings"
@@ -2419,12 +2572,17 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
             {/* Fullscreen Button */}
             <button
+              type="button"
               onClick={toggleFullscreen}
-              className="text-zinc-300 hover:text-white transition-colors cursor-pointer p-1.5"
+              className="min-w-[36px] min-h-[36px] sm:min-w-[38px] sm:min-h-[38px] flex items-center justify-center text-zinc-300 hover:text-white active:bg-white/15 transition-colors cursor-pointer rounded-lg"
               title={isFullscreen ? 'Exit full screen (f)' : 'Full screen (f)'}
               aria-label="Fullscreen"
             >
-              <Maximize className="w-5 h-5 sm:w-6 sm:h-6" />
+              {isFullscreen ? (
+                <Minimize className="w-5 h-5 sm:w-6 sm:h-6" />
+              ) : (
+                <Maximize className="w-5 h-5 sm:w-6 sm:h-6" />
+              )}
             </button>
           </div>
         </div>
