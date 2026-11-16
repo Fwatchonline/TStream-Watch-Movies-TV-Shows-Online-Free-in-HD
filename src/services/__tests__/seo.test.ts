@@ -1504,6 +1504,297 @@ async function runTests() {
     clearSeoPluginCaches();
   }
 
+  // =======================================================================
+  // TMDB 401/403 AUTHENTICATION & UNEXPECTED 4XX REGRESSION TESTS
+  // =======================================================================
+  const mockAuth401Fetch = (async () =>
+    new Response('{"status_code":7,"status_message":"Invalid API key"}', { status: 401 })) as typeof fetch;
+  const mockAuth403Fetch = (async () =>
+    new Response('{"status_code":3,"status_message":"Authentication failed"}', { status: 403 })) as typeof fetch;
+  const mockBad400Fetch = (async () =>
+    new Response('{"status_message":"Invalid parameters"}', { status: 400 })) as typeof fetch;
+
+  // Test 1: HTTP 401 with a missing local season -> HTTP 503 + noindex (never false 404)
+  const auth401MissingSeasonEp = await (async () => {
+    try {
+      return await fetchServerEpisode(partialShow, 2, 1, mockAuth401Fetch, 'test-key');
+    } catch (err: any) {
+      return { thrownStatus: err?.status };
+    }
+  })();
+  const auth401MissingSeasonSsr = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/the-last-of-us-100088/2/1',
+    {
+      preloadedMedia: partialShow,
+      fetchImpl: mockAuth401Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  assert(
+    (auth401MissingSeasonEp as any)?.thrownStatus === 503 &&
+      auth401MissingSeasonSsr.status === 503 &&
+      auth401MissingSeasonSsr.isNoindex &&
+      auth401MissingSeasonSsr.canonicalUrl !== 'https://tstream.online/404' &&
+      !auth401MissingSeasonSsr.html.includes('Future Days'),
+    'Auth Ep Test 1: HTTP 401 with missing local season returns HTTP 503 + noindex (never false 404 or /404 canonical)'
+  );
+
+  // Test 2: HTTP 403 with a missing local season -> HTTP 503 + noindex (never false 404)
+  const auth403MissingSeasonSsr = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/the-last-of-us-100088/2/1',
+    {
+      preloadedMedia: partialShow,
+      fetchImpl: mockAuth403Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  assert(
+    auth403MissingSeasonSsr.status === 503 &&
+      auth403MissingSeasonSsr.isNoindex &&
+      auth403MissingSeasonSsr.canonicalUrl !== 'https://tstream.online/404' &&
+      !auth403MissingSeasonSsr.html.includes('Future Days'),
+    'Auth Ep Test 2: HTTP 403 with missing local season returns HTTP 503 + noindex (never false 404)'
+  );
+
+  // Also ensure dynamic show not in local catalog returns 503 (never 404) when TMDB returns 401/403
+  const auth401DynamicShowSsr = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/dynamic-unlisted-show-999888/1/1',
+    {
+      fetchImpl: mockAuth401Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  assert(
+    auth401DynamicShowSsr.status === 503 &&
+      auth401DynamicShowSsr.isNoindex &&
+      auth401DynamicShowSsr.canonicalUrl !== 'https://tstream.online/404',
+    'Auth Ep Test 2b: Dynamic unlisted show returns HTTP 503 (never 404) on TMDB HTTP 401'
+  );
+
+  // Test 3: HTTP 401 with known local episode boundaries (/watch/tv/breaking-bad-1396/1/6)
+  const localBoundedEp401 = await fetchServerEpisode(mockSeries, 1, 6, mockAuth401Fetch, 'test-key');
+  const localBoundedSsr401 = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/breaking-bad-1396/1/6',
+    {
+      preloadedMedia: mockSeries,
+      fetchImpl: mockAuth401Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  const localBoundedCatalogSsr401 = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/breaking-bad-1396/1/6',
+    {
+      fetchImpl: mockAuth401Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  assert(
+    Boolean(localBoundedEp401) &&
+      localBoundedEp401?.isVerified === false &&
+      localBoundedEp401?.hasGenuineName === false &&
+      localBoundedEp401?.overview === '' &&
+      localBoundedEp401?.voteAverage === undefined &&
+      localBoundedEp401?.source === 'local' &&
+      localBoundedSsr401.status === 200 &&
+      localBoundedSsr401.isNoindex &&
+      localBoundedSsr401.html.includes('content="noindex, follow"') &&
+      !localBoundedSsr401.html.includes('cooking meth') &&
+      !localBoundedSsr401.html.includes('"ratingCount":13500') &&
+      localBoundedCatalogSsr401.status === 200 &&
+      localBoundedCatalogSsr401.isNoindex &&
+      !localBoundedCatalogSsr401.html.includes('Stage III cancer') &&
+      !localBoundedCatalogSsr401.html.includes('"ratingCount":14800'),
+    'Auth Ep Test 3: HTTP 401 within known local episode bounds returns thin 200 noindex fallback without copying series overview or rating'
+  );
+
+  // Test 4: HTTP 403 with known local episode boundaries (/watch/tv/breaking-bad-1396/1/6)
+  const localBoundedEp403 = await fetchServerEpisode(mockSeries, 1, 6, mockAuth403Fetch, 'test-key');
+  const localBoundedSsr403 = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/breaking-bad-1396/1/6',
+    {
+      preloadedMedia: mockSeries,
+      fetchImpl: mockAuth403Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  assert(
+    Boolean(localBoundedEp403) &&
+      localBoundedEp403?.isVerified === false &&
+      localBoundedEp403?.hasGenuineName === false &&
+      localBoundedEp403?.overview === '' &&
+      localBoundedEp403?.source === 'local' &&
+      localBoundedSsr403.status === 200 &&
+      localBoundedSsr403.isNoindex &&
+      localBoundedSsr403.html.includes('content="noindex, follow"') &&
+      !localBoundedSsr403.html.includes('cooking meth') &&
+      !localBoundedSsr403.html.includes('"ratingCount":13500'),
+    'Auth Ep Test 4: HTTP 403 within known local episode bounds returns safe thin 200 noindex fallback'
+  );
+
+  // Guard: Missing numberOfSeasons + missing seasonObj must NOT assume a season exists on HTTP 401
+  const showWithoutSeasons = {
+    id: 555777,
+    mediaType: 'tv',
+    name: 'No Season Bounds',
+    overview: 'Series without season metadata.',
+    seasons: []
+  };
+  let threwWithoutSeasons = false;
+  try {
+    await fetchServerEpisode(showWithoutSeasons, 1, 1, mockAuth401Fetch, 'test-key');
+  } catch (err: any) {
+    threwWithoutSeasons = err?.status === 503;
+  }
+  assert(
+    threwWithoutSeasons,
+    'Auth Ep Test 4b: Missing numberOfSeasons and missing seasonObj throw HTTP 503 on 401 without inventing episode <= 25 bounds'
+  );
+
+  // Test 5: Genuine HTTP 404 remains a real HTTP 404 + /404 canonical + noindex
+  const genuine404MissingSeasonSsr = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/the-last-of-us-100088/2/1',
+    {
+      preloadedMedia: partialShow,
+      fetchImpl: mock404Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  assert(
+    genuine404MissingSeasonSsr.status === 404 &&
+      genuine404MissingSeasonSsr.isNoindex &&
+      genuine404MissingSeasonSsr.canonicalUrl === 'https://tstream.online/404' &&
+      !genuine404MissingSeasonSsr.html.includes('Future Days'),
+    'Auth Ep Test 5: Genuine TMDB HTTP 404 continues returning HTTP 404, /404 canonical, and noindex'
+  );
+
+  // Test 6 & Test 7: Stale cached episode during HTTP 401 and HTTP 403
+  for (const authFailureStatus of [401, 403] as const) {
+    clearSeoPluginCaches();
+    const origFetch = globalThis.fetch;
+    const origNow = Date.now;
+    let clockMs = 1_760_000_000_000;
+    let mode: 'ok' | 'unverified_ok' | 'auth_fail' = 'ok';
+    try {
+      Date.now = () => clockMs;
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        const u = String(input);
+        if (mode === 'auth_fail') {
+          return new Response(JSON.stringify({ status_code: authFailureStatus === 401 ? 7 : 3 }), {
+            status: authFailureStatus
+          });
+        }
+        if (u.includes('/season/2/episode/2')) {
+          // Deliberately generic title/empty overview so isVerified=false when primed
+          return new Response(
+            JSON.stringify({
+              id: 5517229,
+              season_number: 2,
+              episode_number: 2,
+              name: 'Episode 2',
+              overview: ''
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(JSON.stringify(tlouSeason2Payloads['2:1']), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }) as typeof fetch;
+
+      // Prime verified 2:1 and unverified 2:2 in real serverEpisodeCache
+      const primedVerified = await fetchServerEpisode(partialShow, 2, 1, fetch, 'test-key');
+      const primedUnverified = await fetchServerEpisode(partialShow, 2, 2, fetch, 'test-key');
+
+      // Advance clock 20 minutes (past 15m fresh TTL, inside 6h stale TTL) & trigger 401/403
+      clockMs += 20 * 60 * 1000;
+      mode = 'auth_fail';
+
+      const staleVerified = await fetchServerEpisode(partialShow, 2, 1, fetch, 'test-key');
+      const staleUnverified = await fetchServerEpisode(partialShow, 2, 2, fetch, 'test-key');
+      const staleSsr = await renderSeoResult(
+        sampleHtmlWithPreExistingCanonical,
+        '/watch/tv/the-last-of-us-100088/2/1',
+        {
+          preloadedMedia: partialShow,
+          tmdbApiKey: 'test-key'
+        }
+      );
+
+      // Also verify an uncached episode (2:3) throws 503 on 401/403 and does NOT poison cache
+      let uncachedThrew503 = false;
+      try {
+        await fetchServerEpisode(partialShow, 2, 3, fetch, 'test-key');
+      } catch (err: any) {
+        uncachedThrew503 = err?.status === 503;
+      }
+
+      // Now recover TMDB and confirm 2:3 wasn't poisoned in cache
+      mode = 'ok';
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify(tlouSeason2Payloads['2:3']), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })) as typeof fetch;
+      const recoveredS2E3 = await fetchServerEpisode(partialShow, 2, 3, fetch, 'test-key');
+
+      assert(
+        primedVerified?.isVerified === true &&
+          staleVerified?.episodeId === 5517228 &&
+          staleVerified?.name === 'Future Days' &&
+          staleVerified?.isVerified === true &&
+          primedUnverified?.isVerified === false &&
+          staleUnverified?.episodeId === 5517229 &&
+          staleUnverified?.isVerified === false &&
+          staleSsr.status === 200 &&
+          !staleSsr.isNoindex &&
+          staleSsr.html.includes('Future Days') &&
+          uncachedThrew503 &&
+          recoveredS2E3?.episodeId === 5994269 &&
+          recoveredS2E3?.name === 'The Path',
+        `Auth Ep Test ${authFailureStatus === 401 ? 6 : 7}: Stale cached episode is preserved cleanly during HTTP ${authFailureStatus} without altering isVerified or poisoning cache`
+      );
+    } finally {
+      globalThis.fetch = origFetch;
+      Date.now = origNow;
+      clearSeoPluginCaches();
+    }
+  }
+
+  // Test 8: Unexpected upstream 4xx (HTTP 400) -> never false 404; bounded local fallback or stale cache, otherwise 503
+  const bad400MissingSeasonSsr = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/the-last-of-us-100088/2/1',
+    {
+      preloadedMedia: partialShow,
+      fetchImpl: mockBad400Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  const bad400BoundedSsr = await renderSeoResult(
+    sampleHtmlWithPreExistingCanonical,
+    '/watch/tv/breaking-bad-1396/1/6',
+    {
+      preloadedMedia: mockSeries,
+      fetchImpl: mockBad400Fetch,
+      tmdbApiKey: 'test-key'
+    }
+  );
+  assert(
+    bad400MissingSeasonSsr.status === 503 &&
+      bad400MissingSeasonSsr.isNoindex &&
+      bad400BoundedSsr.status === 200 &&
+      bad400BoundedSsr.isNoindex,
+    'Auth Ep Test 8: Unexpected TMDB HTTP 400 returns 503 when unverified/missing local season and safe thin 200 noindex within local bounds'
+  );
+
   console.log('\n--- ALL SEO, TAGS, GENRES, EPISODES, ARTIFACTS, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
 }
 

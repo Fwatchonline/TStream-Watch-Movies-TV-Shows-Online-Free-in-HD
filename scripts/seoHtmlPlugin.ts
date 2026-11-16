@@ -772,6 +772,14 @@ export async function fetchServerMedia(
         return null;
       }
 
+      if (res.status === 401 || res.status === 403) {
+        if (useCache) {
+          const stale = serverMediaCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
+        throw make503Error('TMDB media lookup is unauthorized or forbidden');
+      }
+
       if (res.status === 429 || res.status >= 500) {
         if (useCache) {
           const stale = serverMediaCache.getStale(cacheKey);
@@ -781,7 +789,11 @@ export async function fetchServerMedia(
       }
 
       if (!res.ok) {
-        return null;
+        if (useCache) {
+          const stale = serverMediaCache.getStale(cacheKey);
+          if (stale) return stale;
+        }
+        throw make503Error(`TMDB upstream returned HTTP ${res.status}`);
       }
 
       const json = await res.json();
@@ -877,8 +889,17 @@ export async function fetchServerEpisode(
     ? show.seasons.find((s: any) => Number(s.seasonNumber) === season)
     : undefined;
   const seasonOverview = (seasonObj?.overview || '').trim();
+  const localSeasonEpCount = Number(seasonObj?.episodeCount);
+  const hasReliableLocalEpisodeBounds = Boolean(
+    seasonObj &&
+      Number.isInteger(localSeasonEpCount) &&
+      localSeasonEpCount > 0 &&
+      episode <= localSeasonEpCount &&
+      (!show.numberOfSeasons || season <= Number(show.numberOfSeasons))
+  );
 
   // 1. Check local episode cache optimization when season + episode exist locally
+  let unverifiedLocalCandidate: ServerEpisodeResult | null = null;
   if (seasonObj?.episodes && Array.isArray(seasonObj.episodes)) {
     const exactEp = seasonObj.episodes.find((e: any) => Number(e.episodeNumber) === episode);
     if (exactEp) {
@@ -897,28 +918,61 @@ export async function fetchServerEpisode(
           hasValidEpId && hasGenuineName && uniqueOverview.length >= 15
         );
 
+        const localResult: ServerEpisodeResult = {
+          episodeId: hasValidEpId ? epId : undefined,
+          name: rawName || `Episode ${episode}`,
+          hasGenuineName,
+          overview: uniqueOverview,
+          airDate: exactEp.airDate || seasonObj.airDate || '',
+          voteAverage:
+            isVerified && exactEp.voteAverage && exactEp.voteAverage > 0 ? Number(exactEp.voteAverage) : undefined,
+          voteCount:
+            isVerified && (exactEp as any).voteCount && (exactEp as any).voteCount > 0
+              ? Number((exactEp as any).voteCount)
+              : undefined,
+          isVerified,
+          source: 'local'
+        };
+
         if (isVerified || !effectiveKey) {
-          return {
-            episodeId: hasValidEpId ? epId : undefined,
-            name: rawName || `Episode ${episode}`,
-            hasGenuineName,
-            overview: uniqueOverview,
-            airDate: exactEp.airDate || seasonObj.airDate || '',
-            voteAverage: exactEp.voteAverage && exactEp.voteAverage > 0 ? Number(exactEp.voteAverage) : undefined,
-            voteCount: (exactEp as any).voteCount && (exactEp as any).voteCount > 0 ? Number((exactEp as any).voteCount) : undefined,
-            isVerified,
-            source: 'local'
-          };
+          return localResult;
         }
+        unverifiedLocalCandidate = localResult;
       }
     }
   }
+
+  const getBoundedLocalFallback = (): ServerEpisodeResult | null => {
+    if (unverifiedLocalCandidate) {
+      return unverifiedLocalCandidate;
+    }
+    if (hasReliableLocalEpisodeBounds) {
+      return {
+        name: `Episode ${episode}`,
+        hasGenuineName: false,
+        overview: '',
+        airDate: seasonObj?.airDate || '',
+        isVerified: false,
+        source: 'local'
+      };
+    }
+    return null;
+  };
+
+  const isUsableCachedEpisode = (rec: ServerEpisodeResult | undefined): rec is ServerEpisodeResult =>
+    Boolean(
+      rec &&
+        rec.source === 'tmdb' &&
+        typeof rec.episodeId === 'number' &&
+        Number.isInteger(rec.episodeId) &&
+        rec.episodeId > 0
+    );
 
   // 2. Live TMDB validation (authoritative for missing/partial local seasons & updated season/episode counts)
   if (effectiveKey) {
     if (useCache) {
       const fresh = serverEpisodeCache.getFresh(cacheKey);
-      if (fresh) return fresh;
+      if (isUsableCachedEpisode(fresh)) return fresh;
     }
 
     return coalesceLookup(`episode:${cacheKey}`, useCache, async () => {
@@ -932,27 +986,34 @@ export async function fetchServerEpisode(
         if (res.status === 404) {
           return null;
         }
+        if (res.status === 401 || res.status === 403) {
+          const stale = useCache ? serverEpisodeCache.getStale(cacheKey) : undefined;
+          if (isUsableCachedEpisode(stale)) {
+            return stale;
+          }
+          const localFallback = getBoundedLocalFallback();
+          if (localFallback) {
+            return localFallback;
+          }
+          throw make503Error('TMDB episode lookup is unauthorized or forbidden');
+        }
         if (res.status === 429 || res.status >= 500) {
-          if (useCache) {
-            const stale = serverEpisodeCache.getStale(cacheKey);
-            if (stale) return stale;
+          const stale = useCache ? serverEpisodeCache.getStale(cacheKey) : undefined;
+          if (isUsableCachedEpisode(stale)) {
+            return stale;
           }
           throw make503Error(`TMDB episode lookup returned HTTP ${res.status}`);
         }
         if (!res.ok) {
-          // Non-transient error (e.g. 401 test key): only allow thin unverified playback within known verified local bounds
-          const withinLocalSeasonCount = !show.numberOfSeasons || season <= show.numberOfSeasons;
-          if (withinLocalSeasonCount && seasonObj?.episodeCount && episode <= seasonObj.episodeCount) {
-            return {
-              name: `Episode ${episode}`,
-              hasGenuineName: false,
-              overview: '',
-              airDate: seasonObj.airDate || '',
-              isVerified: false,
-              source: 'local'
-            };
+          const stale = useCache ? serverEpisodeCache.getStale(cacheKey) : undefined;
+          if (isUsableCachedEpisode(stale)) {
+            return stale;
           }
-          return null;
+          const localFallback = getBoundedLocalFallback();
+          if (localFallback) {
+            return localFallback;
+          }
+          throw make503Error(`TMDB episode lookup returned HTTP ${res.status}`);
         }
 
         const epJson = await res.json();
@@ -999,9 +1060,9 @@ export async function fetchServerEpisode(
         if (useCache) serverEpisodeCache.set(cacheKey, data);
         return data;
       } catch (err: any) {
-        if (useCache) {
-          const stale = serverEpisodeCache.getStale(cacheKey);
-          if (stale) return stale;
+        const stale = useCache ? serverEpisodeCache.getStale(cacheKey) : undefined;
+        if (isUsableCachedEpisode(stale)) {
+          return stale;
         }
         if (err?.status === 503) throw err;
         throw make503Error(err?.name === 'AbortError' ? 'TMDB episode lookup timed out' : 'TMDB episode lookup failed');
@@ -1014,24 +1075,13 @@ export async function fetchServerEpisode(
   // 3. Strict offline local validation when TMDB API key is not configured:
   // Allow playback URLs only within positively known local season & episode bounds (thin/noindex).
   // Never treat a missing season as verified, and never blindly invent episode <= 25 bounds.
-  if (show.numberOfSeasons && season > show.numberOfSeasons) {
+  if (show.numberOfSeasons && season > Number(show.numberOfSeasons)) {
     return null;
   }
   if (hasPopulatedSeasons && !seasonObj) {
     return null;
   }
-  if (seasonObj?.episodeCount && episode <= seasonObj.episodeCount) {
-    return {
-      name: `Episode ${episode}`,
-      hasGenuineName: false,
-      overview: '',
-      airDate: seasonObj.airDate || '',
-      isVerified: false,
-      source: 'local'
-    };
-  }
-
-  return null;
+  return getBoundedLocalFallback();
 }
 
 /**
