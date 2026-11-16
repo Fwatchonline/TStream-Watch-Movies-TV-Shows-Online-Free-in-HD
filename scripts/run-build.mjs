@@ -109,19 +109,19 @@ export function verifyNoLeakedSecretsInDist(rootDir = process.cwd(), secretValue
     }
   }
 
-  for (const rel of [
-    'index.html',
-    '404.html',
-    'prerender-report.json',
-    'sitemap.xml',
-    'sitemap-main.xml',
-    'sitemap-movies.xml',
-    'sitemap-tv.xml',
-    'sitemap-episodes.xml'
-  ]) {
+  for (const rel of ['index.html', '404.html', 'prerender-report.json']) {
     const full = path.join(distDir, rel);
     if (fs.existsSync(full) && fs.statSync(full).isFile()) {
       scanFile(full);
+    }
+  }
+
+  for (const name of fs.readdirSync(distDir)) {
+    if (/^sitemap(?:-[a-z0-9-]+)?\.xml$/i.test(name)) {
+      const full = path.join(distDir, name);
+      if (fs.statSync(full).isFile()) {
+        scanFile(full);
+      }
     }
   }
 
@@ -143,7 +143,7 @@ export function verifyNoLeakedSecretsInDist(rootDir = process.cwd(), secretValue
 
 export function verifyDistArtifacts(rootDir = process.cwd()) {
   const distDir = path.resolve(rootDir, 'dist');
-  const requiredFiles = [
+  const requiredSet = new Set([
     'index.html',
     'server.mjs',
     'robots.txt',
@@ -152,16 +152,21 @@ export function verifyDistArtifacts(rootDir = process.cwd()) {
     'sitemap-movies.xml',
     'sitemap-tv.xml',
     'prerender-report.json'
-  ];
+  ]);
 
   const sitemapIndexPath = path.join(distDir, 'sitemap.xml');
   if (fs.existsSync(sitemapIndexPath)) {
     const sitemapIndexXml = fs.readFileSync(sitemapIndexPath, 'utf8');
-    if (sitemapIndexXml.includes('sitemap-episodes.xml')) {
-      requiredFiles.push('sitemap-episodes.xml');
+    const childLocs = Array.from(sitemapIndexXml.matchAll(/<loc>([^<]+)<\/loc>/g)).map(m => m[1]);
+    for (const loc of childLocs) {
+      const childName = loc.split('/').pop();
+      if (childName && childName.endsWith('.xml')) {
+        requiredSet.add(childName);
+      }
     }
   }
 
+  const requiredFiles = Array.from(requiredSet);
   for (const rel of requiredFiles) {
     const filePath = path.join(distDir, rel);
     if (!fs.existsSync(filePath)) {

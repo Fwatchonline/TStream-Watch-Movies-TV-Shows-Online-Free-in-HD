@@ -8,12 +8,9 @@ import {
   DETAILED_MOVIES,
   DETAILED_TV_SHOWS,
   EXPANDED_CATALOG,
-  POPULAR_TAGS,
-  SPIDERMAN_COLLECTION,
-  AVENGERS_COLLECTION,
-  HARRY_POTTER_COLLECTION,
-  PIRATES_COLLECTION
+  POPULAR_TAGS
 } from '../src/services/catalogData.ts';
+import { getDiscoveredCollections } from '../src/services/collectionStore.ts';
 import { PLATFORM_CONFIGS, type PlatformMeta } from '../src/services/platformConfig.ts';
 import { GENRE_LANDINGS, type GenreLandingMeta } from '../src/utils/genres.ts';
 import { createMediaSlug } from '../src/utils/slug.ts';
@@ -27,6 +24,12 @@ import {
   fetchServerGenreMedia,
   getServerTmdbApiKey
 } from './seoHtmlPlugin.ts';
+import {
+  discoverTmdbCatalog,
+  isValidMediaCandidate,
+  type TmdbDiscoveryOptions,
+  type TmdbDiscoveryStats
+} from './tmdbDiscovery.ts';
 
 export interface MovieInventoryEntry {
   id: number;
@@ -36,6 +39,7 @@ export interface MovieInventoryEntry {
   watchPath: string;
   canonicalUrl: string;
   media: any;
+  source?: 'curated' | 'tmdb';
 }
 
 export interface TvInventoryEntry {
@@ -45,6 +49,7 @@ export interface TvInventoryEntry {
   detailPath: string;
   canonicalUrl: string;
   media: any;
+  source?: 'curated' | 'tmdb';
 }
 
 export interface EpisodeInventoryEntry {
@@ -58,6 +63,7 @@ export interface EpisodeInventoryEntry {
   outputFileRel: string;
   canonicalUrl: string;
   show: any;
+  source?: 'curated' | 'tmdb';
 }
 
 export interface TagInventoryEntry {
@@ -94,6 +100,63 @@ export interface AzInventoryEntry {
   canonicalUrl: string;
 }
 
+export interface AuthoritativeInventoryResult {
+  movies: MovieInventoryEntry[];
+  tvShows: TvInventoryEntry[];
+  episodes: EpisodeInventoryEntry[];
+  tags: TagInventoryEntry[];
+  genres: GenreInventoryEntry[];
+  platforms: PlatformInventoryEntry[];
+  az: AzInventoryEntry[];
+  hubs: ReturnType<typeof getHubInventory>;
+  discoveryStats: TmdbDiscoveryStats;
+}
+
+function isValidInventoryMovie(id: number, m: any): boolean {
+  if (!Number.isInteger(id) || id <= 0) return false;
+  const rawTitle = (m?.title || '').trim();
+  if (!rawTitle) return false;
+  const lower = rawTitle.toLowerCase();
+  if (lower === 'undefined' || lower === 'null' || lower === 'nan' || lower === 'untitled') {
+    return false;
+  }
+  // Preserve legitimate unrelated ID 28, strictly reject bogus Homecoming mapping != 315635
+  if (lower.includes('homecoming') && id !== 315635) {
+    if (lower.includes('spider-man') || id === 28) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildMovieEntry(m: any, source: 'curated' | 'tmdb' = 'curated'): MovieInventoryEntry {
+  const slug = createMediaSlug(m.title, m.id);
+  return {
+    id: m.id,
+    title: m.title,
+    slug,
+    detailPath: `/movie/${slug}`,
+    watchPath: `/watch/movie/${slug}`,
+    canonicalUrl: `${PRIMARY_ORIGIN}/movie/${slug}`,
+    media: m,
+    source
+  };
+}
+
+function buildTvEntry(s: any, source: 'curated' | 'tmdb' = 'curated'): TvInventoryEntry {
+  const title = (s.name || s.title || '').trim();
+  const slug = createMediaSlug(title, s.id);
+  return {
+    id: s.id,
+    title,
+    slug,
+    detailPath: `/tv/${slug}`,
+    canonicalUrl: `${PRIMARY_ORIGIN}/tv/${slug}`,
+    media: { ...s, mediaType: 'tv', title, name: title },
+    source
+  };
+}
+
 export function getMovieInventory(): MovieInventoryEntry[] {
   const movieMap = new Map<number, any>();
 
@@ -103,10 +166,10 @@ export function getMovieInventory(): MovieInventoryEntry[] {
     }
   }
 
-  const collections = [SPIDERMAN_COLLECTION, AVENGERS_COLLECTION, HARRY_POTTER_COLLECTION, PIRATES_COLLECTION];
+  const collections = getDiscoveredCollections();
   for (const col of collections) {
-    for (const part of col.parts) {
-      const id = part.id || (part as any).tmdbId;
+    for (const part of col.parts || []) {
+      const id = Number(part.id || (part as any).tmdbId);
       if (id && part.title && !movieMap.has(id)) {
         movieMap.set(id, { ...part, id, mediaType: 'movie' });
       }
@@ -114,8 +177,9 @@ export function getMovieInventory(): MovieInventoryEntry[] {
   }
 
   for (const item of getAllCatalogMedia()) {
-    if (item.mediaType !== 'tv' && item.id && item.title && !movieMap.has(item.id)) {
-      movieMap.set(item.id, { ...item, mediaType: 'movie' });
+    const id = Number(item.id);
+    if (item.mediaType !== 'tv' && id && item.title && !movieMap.has(id)) {
+      movieMap.set(id, { ...item, id, mediaType: 'movie' });
     }
   }
 
@@ -137,30 +201,13 @@ export function getMovieInventory(): MovieInventoryEntry[] {
     );
   }
 
-  // Record-level validation (preserve legitimate unrelated ID 28, reject bogus Homecoming=28)
   for (const [id, m] of Array.from(movieMap.entries())) {
-    const rawTitle = (m.title || '').trim();
-    if (!Number.isInteger(id) || id <= 0 || !rawTitle) {
-      movieMap.delete(id);
-      continue;
-    }
-    if (rawTitle.toLowerCase().includes('homecoming') && id !== 315635) {
+    if (!isValidInventoryMovie(id, m)) {
       movieMap.delete(id);
     }
   }
 
-  return Array.from(movieMap.values()).map(m => {
-    const slug = createMediaSlug(m.title, m.id);
-    return {
-      id: m.id,
-      title: m.title,
-      slug,
-      detailPath: `/movie/${slug}`,
-      watchPath: `/watch/movie/${slug}`,
-      canonicalUrl: `${PRIMARY_ORIGIN}/movie/${slug}`,
-      media: m
-    };
-  });
+  return Array.from(movieMap.values()).map(m => buildMovieEntry(m, 'curated'));
 }
 
 export function getTvInventory(): TvInventoryEntry[] {
@@ -182,23 +229,11 @@ export function getTvInventory(): TvInventoryEntry[] {
     }
   }
 
-  return Array.from(tvMap.values()).map(s => {
-    const title = s.name || s.title;
-    const slug = createMediaSlug(title, s.id);
-    return {
-      id: s.id,
-      title,
-      slug,
-      detailPath: `/tv/${slug}`,
-      canonicalUrl: `${PRIMARY_ORIGIN}/tv/${slug}`,
-      media: s
-    };
-  });
+  return Array.from(tvMap.values()).map(s => buildTvEntry(s, 'curated'));
 }
 
 /**
- * Returns ONLY verified, content-rich TV episodes eligible for search engine indexing
- * and inclusion in `sitemap-episodes.xml`.
+ * Returns curated verified, content-rich TV episodes eligible for search engine indexing.
  */
 export function getVerifiedEpisodeInventory(): EpisodeInventoryEntry[] {
   const tvShows = getTvInventory();
@@ -236,7 +271,8 @@ export function getVerifiedEpisodeInventory(): EpisodeInventoryEntry[] {
           urlPath,
           outputFileRel: `watch/tv/${showEntry.slug}/${season.seasonNumber}/${ep.episodeNumber}/index.html`,
           canonicalUrl: `${PRIMARY_ORIGIN}${urlPath}`,
-          show
+          show,
+          source: 'curated'
         });
       }
     }
@@ -330,7 +366,7 @@ export async function getPlatformInventory(
 }
 
 export function getAzInventory(): AzInventoryEntry[] {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  const alphabet = ['0-9', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')];
   const entries: AzInventoryEntry[] = [];
   for (const letter of alphabet) {
     if (getMatchingCatalogForLetter(letter).length > 0) {
@@ -363,4 +399,94 @@ export function getHubInventory(): Array<{
     { url: '/random', file: 'random/index.html', can: `${PRIMARY_ORIGIN}/random`, noindex: true },
     { url: '/tags', file: 'tags/index.html', can: `${PRIMARY_ORIGIN}/tags`, noindex: false }
   ];
+}
+
+/**
+ * Single authoritative async inventory resolver shared across:
+ * - `generate-sitemaps.ts` (full curated + paginated TMDB movies, TV shows, verified episodes, main hubs)
+ * - `prerender.ts` & `verify-production.ts`
+ */
+export async function getAuthoritativeRouteInventory(
+  options: TmdbDiscoveryOptions = {}
+): Promise<AuthoritativeInventoryResult> {
+  const fetchImpl = options.fetchImpl || fetch;
+  const tmdbApiKey = options.tmdbApiKey !== undefined
+    ? options.tmdbApiKey
+    : getServerTmdbApiKey();
+
+  const curatedMovies = getMovieInventory();
+  const curatedTv = getTvInventory();
+  const curatedEpisodes = getVerifiedEpisodeInventory();
+
+  const [genres, platforms, discovery] = await Promise.all([
+    getGenreInventory(fetchImpl, tmdbApiKey),
+    getPlatformInventory(fetchImpl, tmdbApiKey),
+    discoverTmdbCatalog({
+      ...options,
+      fetchImpl,
+      tmdbApiKey,
+      seedTvShowIds: [
+        ...(options.seedTvShowIds || []),
+        ...curatedTv.map(t => t.id)
+      ]
+    })
+  ]);
+
+  // Merge movies strictly by unique TMDB movie ID (never mixing TV IDs)
+  const movieMap = new Map<number, MovieInventoryEntry>();
+  for (const m of curatedMovies) {
+    movieMap.set(m.id, m);
+  }
+  for (const liveMovie of discovery.movies) {
+    if (!movieMap.has(liveMovie.id) && isValidMediaCandidate(liveMovie, 'movie') && isValidInventoryMovie(liveMovie.id, liveMovie)) {
+      movieMap.set(liveMovie.id, buildMovieEntry(liveMovie, 'tmdb'));
+    }
+  }
+
+  // Merge TV shows strictly by unique TMDB TV ID
+  const tvMap = new Map<number, TvInventoryEntry>();
+  for (const s of curatedTv) {
+    tvMap.set(s.id, s);
+  }
+  for (const liveTv of discovery.tvShows) {
+    if (!tvMap.has(liveTv.id) && isValidMediaCandidate(liveTv, 'tv')) {
+      tvMap.set(liveTv.id, buildTvEntry(liveTv, 'tmdb'));
+    }
+  }
+
+  // Merge verified episodes strictly by canonical watch path
+  const episodeMap = new Map<string, EpisodeInventoryEntry>();
+  for (const ep of curatedEpisodes) {
+    episodeMap.set(ep.urlPath, ep);
+  }
+  for (const liveEp of discovery.episodes) {
+    const urlPath = `/watch/tv/${liveEp.showSlug}/${liveEp.seasonNumber}/${liveEp.episodeNumber}`;
+    if (!episodeMap.has(urlPath)) {
+      episodeMap.set(urlPath, {
+        showId: liveEp.showId,
+        showTitle: liveEp.showTitle,
+        showSlug: liveEp.showSlug,
+        seasonNumber: liveEp.seasonNumber,
+        episodeNumber: liveEp.episodeNumber,
+        episodeName: liveEp.episodeName,
+        urlPath,
+        outputFileRel: `watch/tv/${liveEp.showSlug}/${liveEp.seasonNumber}/${liveEp.episodeNumber}/index.html`,
+        canonicalUrl: `${PRIMARY_ORIGIN}${urlPath}`,
+        show: liveEp.show,
+        source: 'tmdb'
+      });
+    }
+  }
+
+  return {
+    movies: Array.from(movieMap.values()),
+    tvShows: Array.from(tvMap.values()),
+    episodes: Array.from(episodeMap.values()),
+    tags: getTagInventory(),
+    genres,
+    platforms,
+    az: getAzInventory(),
+    hubs: getHubInventory(),
+    discoveryStats: discovery.stats
+  };
 }

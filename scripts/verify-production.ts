@@ -192,20 +192,33 @@ async function run() {
       `HTTP ${idxRes.status}, children=${idxLocs.length}`
     );
 
-    const sitemapFiles: Array<{ path: string; required: string }> = [
-      { path: '/sitemap-main.xml', required: '<urlset' },
-      { path: '/sitemap-movies.xml', required: '<urlset' },
-      { path: '/sitemap-tv.xml', required: '<urlset' }
-    ];
-    if (idxLocs.some(u => u.endsWith('/sitemap-episodes.xml'))) {
-      sitemapFiles.push({ path: '/sitemap-episodes.xml', required: '<urlset' });
-    }
+    const childPaths = Array.from(
+      new Set([
+        '/sitemap-main.xml',
+        '/sitemap-movies.xml',
+        '/sitemap-tv.xml',
+        ...idxLocs.map(u => {
+          try {
+            return new URL(u).pathname;
+          } catch {
+            return '';
+          }
+        }).filter(Boolean)
+      ])
+    );
 
-    for (const sm of sitemapFiles) {
-      const r = await fetch(`${baseUrl}${sm.path}`);
+    const allSitemapUrlsSet = new Set<string>();
+    let crossSitemapDuplicateCount = 0;
+
+    for (const childPath of childPaths) {
+      const r = await fetch(`${baseUrl}${childPath}`);
       const xml = await r.text();
       const locs = Array.from(xml.matchAll(/<loc>([^<]+)<\/loc>/g)).map(m => m[1]);
       const uniqueLocs = new Set(locs);
+      for (const u of locs) {
+        if (allSitemapUrlsSet.has(u)) crossSitemapDuplicateCount++;
+        allSitemapUrlsSet.add(u);
+      }
       const validOrigin = locs.every(u => u.startsWith('https://tstream.online/'));
       const noDupWatch = locs.every(u => !u.includes('/watch/movie/'));
       const noBadTags = locs.every(u => !u.includes('/tags/') || (!u.includes('%20') && !/[A-Z]/.test(u)));
@@ -221,16 +234,17 @@ async function run() {
           !u.endsWith('/platform/hbo')
       );
 
-      if (sm.path === '/sitemap-main.xml') mainSitemapUrls = locs;
-      if (sm.path === '/sitemap-movies.xml') moviesSitemapUrls = locs;
-      if (sm.path === '/sitemap-tv.xml') tvSitemapUrls = locs;
-      if (sm.path === '/sitemap-episodes.xml') episodesSitemapUrls = locs;
+      if (childPath.startsWith('/sitemap-main')) mainSitemapUrls.push(...locs);
+      if (childPath.startsWith('/sitemap-movies')) moviesSitemapUrls.push(...locs);
+      if (childPath.startsWith('/sitemap-tv')) tvSitemapUrls.push(...locs);
+      if (childPath.startsWith('/sitemap-episodes')) episodesSitemapUrls.push(...locs);
 
       const ok =
         r.status === 200 &&
         xml.includes('<?xml') &&
-        xml.includes(sm.required) &&
+        xml.includes('<urlset') &&
         locs.length > 0 &&
+        locs.length <= 50000 &&
         locs.length === uniqueLocs.size &&
         validOrigin &&
         noDupWatch &&
@@ -240,7 +254,7 @@ async function run() {
         noUtility;
 
       record(
-        `Sitemap ${sm.path}`,
+        `Sitemap ${childPath}`,
         ok,
         `HTTP ${r.status}, urls=${locs.length}, unique=${uniqueLocs.size}, noFakeLastmod=${noFakeLastmod}`
       );
@@ -248,7 +262,11 @@ async function run() {
 
     const totalContentUrls =
       mainSitemapUrls.length + moviesSitemapUrls.length + tvSitemapUrls.length + episodesSitemapUrls.length;
-    record('Combined sitemap entries populated', totalContentUrls > 20, `total=${totalContentUrls}`);
+    record(
+      'Combined sitemap entries populated without cross-file duplicates',
+      totalContentUrls > 20 && crossSitemapDuplicateCount === 0,
+      `total=${totalContentUrls} (main=${mainSitemapUrls.length}, movies=${moviesSitemapUrls.length}, tv=${tvSitemapUrls.length}, episodes=${episodesSitemapUrls.length}), crossDupes=${crossSitemapDuplicateCount}`
+    );
   } catch (err: any) {
     record('Robots & Sitemaps suite', false, err.message);
   }
@@ -431,8 +449,7 @@ async function run() {
     { path: '/genre/sci-fi', expectedCanonical: 'https://tstream.online/genre/science-fiction', expectNoindex: true },
     { path: '/platform/hbo', expectedCanonical: 'https://tstream.online/platform/max', expectNoindex: true },
     { path: '/search?q=batman', expectedCanonical: 'https://tstream.online/search', expectNoindex: true },
-    { path: '/random', expectedCanonical: 'https://tstream.online/random', expectNoindex: true },
-    { path: '/az/Q', expectedCanonical: 'https://tstream.online/az/Q', expectNoindex: true }
+    { path: '/random', expectedCanonical: 'https://tstream.online/random', expectNoindex: true }
   ];
 
   for (const item of noindexChecks) {
@@ -455,11 +472,13 @@ async function run() {
     }
   }
 
-  // Parity checks for offline-empty platform (Crunchyroll) & offline-empty genres (Western, Horror)
+  // Parity checks for platforms, genres & A-Z letters (including offline-empty /az/Z & /az/Q)
   for (const parityRoute of [
     { url: '/platform/crunchyroll', fullUrl: 'https://tstream.online/platform/crunchyroll', label: 'Platform /platform/crunchyroll' },
     { url: '/genre/western', fullUrl: 'https://tstream.online/genre/western', label: 'Genre /genre/western' },
-    { url: '/genre/horror', fullUrl: 'https://tstream.online/genre/horror', label: 'Genre /genre/horror' }
+    { url: '/genre/horror', fullUrl: 'https://tstream.online/genre/horror', label: 'Genre /genre/horror' },
+    { url: '/az/Q', fullUrl: 'https://tstream.online/az/Q', label: 'A-Z /az/Q' },
+    { url: '/az/Z', fullUrl: 'https://tstream.online/az/Z', label: 'A-Z /az/Z' }
   ]) {
     try {
       const res = await fetchHtml(baseUrl, parityRoute.url, GOOGLEBOT_UA);
@@ -530,12 +549,15 @@ async function run() {
     }
   }
 
-  // 9. Bounded-Concurrency Sitemap URL Verification (all main + all episodes + sample/all movies & TV)
+  // 9. Bounded-Concurrency Sitemap URL Verification (all main + sample episodes + head/tail movies & TV)
   const samplePool = [
     ...mainSitemapUrls,
-    ...episodesSitemapUrls,
-    ...moviesSitemapUrls.slice(0, 30),
-    ...tvSitemapUrls.slice(0, 20)
+    ...episodesSitemapUrls.slice(0, 25),
+    ...episodesSitemapUrls.slice(-10),
+    ...moviesSitemapUrls.slice(0, 25),
+    ...moviesSitemapUrls.slice(-15),
+    ...tvSitemapUrls.slice(0, 15),
+    ...tvSitemapUrls.slice(-10)
   ];
   const uniqueSample = Array.from(new Set(samplePool));
   const crawlFailures: string[] = [];

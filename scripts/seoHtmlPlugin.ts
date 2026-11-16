@@ -39,6 +39,7 @@ import {
   HARRY_POTTER_COLLECTION,
   PIRATES_COLLECTION
 } from '../src/services/catalogData.ts';
+import { getDiscoveredCollections } from '../src/services/collectionStore.ts';
 
 import {
   PLATFORM_CONFIGS,
@@ -165,6 +166,15 @@ export function getAllCatalogMedia(): any[] {
       const mType = item.mediaType === 'tv' ? 'tv' : 'movie';
       if (!map.has(`${mType}:${item.id}`)) {
         map.set(`${mType}:${item.id}`, { ...item, mediaType: mType });
+      }
+    }
+  }
+
+  for (const col of getDiscoveredCollections()) {
+    for (const part of col.parts || []) {
+      const id = part.id || (part as any).tmdbId;
+      if (id && part.title && !map.has(`movie:${id}`)) {
+        map.set(`movie:${id}`, { ...part, id, mediaType: 'movie' });
       }
     }
   }
@@ -677,9 +687,9 @@ export async function fetchServerMedia(
       return data;
     }
 
-    const collections = [SPIDERMAN_COLLECTION, AVENGERS_COLLECTION, HARRY_POTTER_COLLECTION, PIRATES_COLLECTION];
+    const collections = getDiscoveredCollections();
     for (const c of collections) {
-      const part = c.parts.find(p => p.id === id || (p as any).tmdbId === id);
+      const part = (c.parts || []).find(p => p.id === id || (p as any).tmdbId === id);
       if (part) {
         const data = {
           id: part.id,
@@ -2338,7 +2348,7 @@ export async function renderSeoResult(
     pageCanonical = `${PRIMARY_ORIGIN}/collections`;
     h1Heading = 'Movie Franchises & Sagas';
     breadcrumbTitle = 'Collections';
-    const cols = [SPIDERMAN_COLLECTION, AVENGERS_COLLECTION, HARRY_POTTER_COLLECTION, PIRATES_COLLECTION];
+    const cols = getDiscoveredCollections();
     extraSectionsHtml = `
       <section class="max-w-5xl mx-auto my-6 space-y-6">
         ${cols.map(c => `
@@ -2346,7 +2356,7 @@ export async function renderSeoResult(
             <h2 class="text-lg font-bold text-white mb-1">${escapeHtml(c.name)}</h2>
             <p class="text-xs text-zinc-400 mb-3">${escapeHtml(c.overview || '')}</p>
             <div class="flex flex-wrap gap-3 text-xs">
-              ${c.parts.map(p => `<a href="/movie/${createMediaSlug(p.title, p.id)}" class="text-amber-400 hover:underline">${escapeHtml(p.title)}</a>`).join('')}
+              ${(c.parts || []).map(p => `<a href="/movie/${createMediaSlug(p.title, p.id)}" class="text-amber-400 hover:underline">${escapeHtml(p.title)}</a>`).join('')}
             </div>
           </div>
         `).join('')}

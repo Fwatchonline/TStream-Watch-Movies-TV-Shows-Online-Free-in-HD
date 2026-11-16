@@ -15,7 +15,7 @@
     "verify:seo": "tsx scripts/verify-production.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "test": "tsx src/services/__tests__/pagination.test.ts && tsx src/services/__tests__/seo.test.ts && tsx src/services/__tests__/subtitles.test.ts && tsx src/services/__tests__/server.test.ts && tsx src/services/__tests__/retries.test.ts && tsx src/services/__tests__/deploy.test.ts",
+    "test": "tsx src/services/__tests__/pagination.test.ts && tsx src/services/__tests__/seo.test.ts && tsx src/services/__tests__/sitemap.test.ts && tsx src/services/__tests__/subtitles.test.ts && tsx src/services/__tests__/server.test.ts && tsx src/services/__tests__/retries.test.ts && tsx src/services/__tests__/deploy.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

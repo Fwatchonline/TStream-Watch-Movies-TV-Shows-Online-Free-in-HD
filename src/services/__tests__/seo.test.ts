@@ -692,7 +692,7 @@ async function runTests() {
   );
 
   // 3 & 9. Sitemap Integrity: zero fake <lastmod>, kebab tags, Spider-Man 315635, no /watch/movie/, episodes parity
-  const sitemapDry = await generateSitemaps(true);
+  const sitemapDry = await generateSitemaps(true, undefined, undefined, { tmdbApiKey: '', skipEpisodeDiscovery: true });
   assert(
     !/<lastmod>/i.test(sitemapDry.mainXml) &&
       !/<lastmod>/i.test(sitemapDry.moviesXml) &&
