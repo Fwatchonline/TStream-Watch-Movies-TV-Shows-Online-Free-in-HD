@@ -15,6 +15,8 @@ import path from 'path';
 import { loadBuildEnv } from './loadEnv.mjs';
 import {
   getAuthoritativeRouteInventory,
+  getBuildInventorySnapshotPath,
+  writeBuildInventorySnapshot,
   type AuthoritativeInventoryResult
 } from './routeInventory.ts';
 import type { TmdbDiscoveryOptions, TmdbDiscoveryStats } from './tmdbDiscovery.ts';
@@ -39,6 +41,9 @@ export interface GenerateSitemapsOptions extends TmdbDiscoveryOptions {
   maxUrlsPerFile?: number;
   maxBytesPerFile?: number;
   preserveExistingOnTotalOutage?: boolean;
+  preserveExistingOnOutage?: boolean;
+  shrinkageThresholdRatio?: number;
+  inventorySnapshotPath?: string | false;
 }
 
 export interface SitemapGenerationResult {
@@ -60,6 +65,8 @@ export interface SitemapGenerationResult {
     episodes: string[];
   };
   preservedExisting: boolean;
+  mergedFromPreviousOnPartialOutage: boolean;
+  preservedUrlsAddedCount: number;
   stats: TmdbDiscoveryStats;
 }
 
@@ -263,14 +270,17 @@ export function validateSitemapIndexXml(
   return { valid: true, childFilenames };
 }
 
-function tryLoadValidExistingSitemaps(dir: string): {
+interface LoadedExistingSitemaps {
   files: Record<string, string>;
   mainCount: number;
   moviesCount: number;
   tvCount: number;
   episodesCount: number;
   chunkFiles: { main: string[]; movies: string[]; tv: string[]; episodes: string[] };
-} | null {
+  existingUrls: { main: string[]; movies: string[]; tv: string[]; episodes: string[] };
+}
+
+function tryLoadValidExistingSitemaps(dir: string): LoadedExistingSitemaps | null {
   const indexPath = path.join(dir, 'sitemap.xml');
   if (!fs.existsSync(indexPath)) return null;
   try {
@@ -278,6 +288,7 @@ function tryLoadValidExistingSitemaps(dir: string): {
     const idxCheck = validateSitemapIndexXml(indexXml);
     const files: Record<string, string> = { 'sitemap.xml': indexXml };
     const chunkFiles = { main: [] as string[], movies: [] as string[], tv: [] as string[], episodes: [] as string[] };
+    const existingUrls = { main: [] as string[], movies: [] as string[], tv: [] as string[], episodes: [] as string[] };
     let mainCount = 0;
     let moviesCount = 0;
     let tvCount = 0;
@@ -292,24 +303,52 @@ function tryLoadValidExistingSitemaps(dir: string): {
       files[filename] = xml;
       if (filename.startsWith('sitemap-main')) {
         chunkFiles.main.push(filename);
+        existingUrls.main.push(...val.urls);
         mainCount += val.count;
       } else if (filename.startsWith('sitemap-movies')) {
         chunkFiles.movies.push(filename);
+        existingUrls.movies.push(...val.urls);
         moviesCount += val.count;
       } else if (filename.startsWith('sitemap-tv')) {
         chunkFiles.tv.push(filename);
+        existingUrls.tv.push(...val.urls);
         tvCount += val.count;
       } else if (filename.startsWith('sitemap-episodes')) {
         chunkFiles.episodes.push(filename);
+        existingUrls.episodes.push(...val.urls);
         episodesCount += val.count;
       }
     }
 
     if (moviesCount === 0 || tvCount === 0 || mainCount === 0) return null;
-    return { files, mainCount, moviesCount, tvCount, episodesCount, chunkFiles };
+    return { files, mainCount, moviesCount, tvCount, episodesCount, chunkFiles, existingUrls };
   } catch {
     return null;
   }
+}
+
+function mergeWithPreviousUrls(
+  currentEntries: SitemapUrlEntry[],
+  previousUrls: string[],
+  defaultMeta: { changefreq: SitemapUrlEntry['changefreq']; priority: string }
+): { entries: SitemapUrlEntry[]; addedCount: number } {
+  if (!previousUrls || previousUrls.length === 0) {
+    return { entries: currentEntries, addedCount: 0 };
+  }
+  const seen = new Set(currentEntries.map(e => e.url));
+  const merged = [...currentEntries];
+  let addedCount = 0;
+  for (const prevUrl of previousUrls) {
+    if (!prevUrl || seen.has(prevUrl)) continue;
+    seen.add(prevUrl);
+    merged.push({
+      url: prevUrl,
+      changefreq: defaultMeta.changefreq,
+      priority: defaultMeta.priority
+    });
+    addedCount++;
+  }
+  return { entries: merged, addedCount };
 }
 
 function writeSitemapsAtomically(targetDir: string, files: Record<string, string>): void {
@@ -379,7 +418,12 @@ export async function generateSitemaps(
     512,
     Number(options.maxBytesPerFile ?? MAX_BYTES_PER_SITEMAP) || MAX_BYTES_PER_SITEMAP
   );
-  const preserveExistingOnTotalOutage = options.preserveExistingOnTotalOutage ?? true;
+  const preserveExistingOnOutage =
+    options.preserveExistingOnOutage ?? options.preserveExistingOnTotalOutage ?? true;
+  const shrinkageThresholdRatio =
+    Number.isFinite(options.shrinkageThresholdRatio) && Number(options.shrinkageThresholdRatio) > 0
+      ? Math.min(1, Number(options.shrinkageThresholdRatio))
+      : 0.85;
 
   const inventory: AuthoritativeInventoryResult = await getAuthoritativeRouteInventory(options);
   const { discoveryStats } = inventory;
@@ -391,6 +435,13 @@ export async function generateSitemaps(
   );
   if (discoveryStats.liveEnabled) {
     console.log(`[Sitemap Discovery] pagesFetchedByFeed=${JSON.stringify(discoveryStats.pagesFetchedByFeed)}`);
+    if (discoveryStats.failedFeeds.length > 0 || discoveryStats.hadPartialOutage) {
+      console.warn(
+        `[Sitemap Discovery] Partial upstream issues detected: failedFeeds=${JSON.stringify(discoveryStats.failedFeeds)}, ` +
+          `movieDegraded=${discoveryStats.movieFeedsDegraded}, tvDegraded=${discoveryStats.tvFeedsDegraded}, ` +
+          `episodeDegraded=${discoveryStats.episodeDiscoveryDegraded}, errors=${discoveryStats.errors.length}`
+      );
+    }
     console.log(
       `[Sitemap Discovery] rawMovies=${discoveryStats.rawMoviesCount}, uniqueLiveMovies=${discoveryStats.uniqueMoviesCount}, ` +
         `dupMoviesRemoved=${discoveryStats.duplicateMoviesRemoved}, invalidMoviesRejected=${discoveryStats.invalidMoviesRejected}`
@@ -407,7 +458,7 @@ export async function generateSitemaps(
 
   // If live TMDB refresh suffered a total outage (every live call failed) AND valid existing sitemaps are present on disk,
   // preserve healthy existing sitemaps instead of clobbering production coverage with a small offline fallback.
-  if (preserveExistingOnTotalOutage && discoveryStats.hadTotalLiveOutage) {
+  if (preserveExistingOnOutage && discoveryStats.hadTotalLiveOutage) {
     const existingPublic = tryLoadValidExistingSitemaps(publicDir);
     if (existingPublic) {
       console.warn(
@@ -439,13 +490,14 @@ export async function generateSitemaps(
         files: existingPublic.files,
         chunkFiles: existingPublic.chunkFiles,
         preservedExisting: true,
+        mergedFromPreviousOnPartialOutage: false,
+        preservedUrlsAddedCount: 0,
         stats: discoveryStats
       };
     }
   }
 
-  // 1. Movies from authoritative inventory
-  const movieEntries = deduplicateEntries(
+  let movieEntries = deduplicateEntries(
     inventory.movies.map(m => ({
       url: m.canonicalUrl,
       changefreq: 'weekly',
@@ -454,7 +506,7 @@ export async function generateSitemaps(
   );
 
   // 2. TV Series from authoritative inventory
-  const tvEntries = deduplicateEntries(
+  let tvEntries = deduplicateEntries(
     inventory.tvShows.map(t => ({
       url: t.canonicalUrl,
       changefreq: 'weekly',
@@ -463,7 +515,7 @@ export async function generateSitemaps(
   );
 
   // 3. Verified, content-rich TV Episodes only
-  const episodeEntries = deduplicateEntries(
+  let episodeEntries = deduplicateEntries(
     inventory.episodes.map(ep => ({
       url: ep.canonicalUrl,
       changefreq: 'weekly',
@@ -506,7 +558,79 @@ export async function generateSitemaps(
       priority: '0.6'
     }))
   ];
-  const mainEntries = deduplicateEntries(rawMainEntries);
+  let mainEntries = deduplicateEntries(rawMainEntries);
+
+  // Partial outage & shrinkage protection: if live TMDB discovery had partial errors or failed feeds,
+  // merge healthy previous snapshot URLs per degraded category so valid URLs are never discarded.
+  let mergedFromPreviousOnPartialOutage = false;
+  let preservedUrlsAddedCount = 0;
+
+  if (
+    preserveExistingOnOutage &&
+    discoveryStats.liveEnabled &&
+    (discoveryStats.hadPartialOutage || discoveryStats.hadUpstreamErrors)
+  ) {
+    const existingPublic = tryLoadValidExistingSitemaps(publicDir);
+    if (existingPublic) {
+      const movieShrinkage =
+        existingPublic.moviesCount >= 50 &&
+        movieEntries.length < Math.floor(existingPublic.moviesCount * shrinkageThresholdRatio);
+      const tvShrinkage =
+        existingPublic.tvCount >= 10 &&
+        tvEntries.length < Math.floor(existingPublic.tvCount * shrinkageThresholdRatio);
+      const episodeShrinkage =
+        existingPublic.episodesCount >= 10 &&
+        episodeEntries.length < Math.floor(existingPublic.episodesCount * shrinkageThresholdRatio);
+
+      if (discoveryStats.hadPartialOutage || discoveryStats.movieFeedsDegraded || movieShrinkage) {
+        const res = mergeWithPreviousUrls(movieEntries, existingPublic.existingUrls.movies, {
+          changefreq: 'weekly',
+          priority: '0.9'
+        });
+        movieEntries = res.entries;
+        preservedUrlsAddedCount += res.addedCount;
+      }
+
+      if (discoveryStats.hadPartialOutage || discoveryStats.tvFeedsDegraded || tvShrinkage) {
+        const res = mergeWithPreviousUrls(tvEntries, existingPublic.existingUrls.tv, {
+          changefreq: 'weekly',
+          priority: '0.9'
+        });
+        tvEntries = res.entries;
+        preservedUrlsAddedCount += res.addedCount;
+      }
+
+      if (
+        discoveryStats.hadPartialOutage ||
+        discoveryStats.episodeDiscoveryDegraded ||
+        discoveryStats.tvFeedsDegraded ||
+        episodeShrinkage
+      ) {
+        const res = mergeWithPreviousUrls(episodeEntries, existingPublic.existingUrls.episodes, {
+          changefreq: 'weekly',
+          priority: '0.7'
+        });
+        episodeEntries = res.entries;
+        preservedUrlsAddedCount += res.addedCount;
+      }
+
+      if (discoveryStats.hadPartialOutage || movieShrinkage || tvShrinkage) {
+        const res = mergeWithPreviousUrls(mainEntries, existingPublic.existingUrls.main, {
+          changefreq: 'weekly',
+          priority: '0.7'
+        });
+        mainEntries = res.entries;
+        preservedUrlsAddedCount += res.addedCount;
+      }
+
+      if (preservedUrlsAddedCount > 0) {
+        mergedFromPreviousOnPartialOutage = true;
+        console.warn(
+          `[Sitemap Safety] Partial TMDB outage merge active: preserved ${preservedUrlsAddedCount} valid previously discovered URL(s) from healthy snapshot in ${publicDir}.`
+        );
+      }
+    }
+  }
 
   // 5. Split oversized sitemaps automatically into protocol-compliant chunks
   const mainChunks = splitAndBuildUrlsetChunks('sitemap-main', mainEntries, maxUrlsPerFile, maxBytesPerFile);
@@ -571,6 +695,8 @@ export async function generateSitemaps(
       episodes: episodeChunks.map(c => c.filename)
     },
     preservedExisting: false,
+    mergedFromPreviousOnPartialOutage,
+    preservedUrlsAddedCount,
     stats: discoveryStats
   };
 
@@ -586,6 +712,19 @@ export async function generateSitemaps(
   if (fs.existsSync(distDir)) {
     writeSitemapsAtomically(distDir, generatedFiles);
     console.log(`Wrote ${Object.keys(generatedFiles).length} validated sitemap files to ${distDir}`);
+  }
+
+  // 7. Save secret-free temporary build inventory snapshot for prerender.ts reuse within the same build
+  if (options.inventorySnapshotPath !== false) {
+    const snapshotTarget =
+      typeof options.inventorySnapshotPath === 'string'
+        ? options.inventorySnapshotPath
+        : path.resolve(publicDir) === DEFAULT_PUBLIC_DIR
+          ? getBuildInventorySnapshotPath()
+          : null;
+    if (snapshotTarget) {
+      writeBuildInventorySnapshot(inventory, snapshotTarget);
+    }
   }
 
   return summary;

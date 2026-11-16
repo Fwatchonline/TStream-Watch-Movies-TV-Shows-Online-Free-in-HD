@@ -491,7 +491,11 @@ async function runTests() {
   console.log('\n--- ALL SERVER, SECURITY & STREAMING REGRESSION TESTS PASSED ---');
 }
 
-runTests().catch(err => {
-  console.error('Server test error:', err);
-  process.exit(1);
-});
+runTests()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch(err => {
+    console.error('Server test error:', err);
+    process.exit(1);
+  });

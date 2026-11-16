@@ -267,6 +267,29 @@ async function run() {
       totalContentUrls > 20 && crossSitemapDuplicateCount === 0,
       `total=${totalContentUrls} (main=${mainSitemapUrls.length}, movies=${moviesSitemapUrls.length}, tv=${tvSitemapUrls.length}, episodes=${episodesSitemapUrls.length}), crossDupes=${crossSitemapDuplicateCount}`
     );
+
+    if (checkDist) {
+      const reportPath = path.join(distDir, 'prerender-report.json');
+      try {
+        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+        const counts = report?.authoritativeInventoryCounts;
+        const hasAuthoritative = report?.inventorySource === 'getAuthoritativeRouteInventory' && Boolean(counts);
+        const countsCompatible =
+          hasAuthoritative &&
+          moviesSitemapUrls.length >= Number(counts.movies || 0) &&
+          tvSitemapUrls.length >= Number(counts.tvShows || 0) &&
+          episodesSitemapUrls.length >= Number(counts.episodes || 0);
+        record(
+          'Prerender & Sitemap authoritative inventory consistency',
+          countsCompatible,
+          `source=${report?.inventorySource || 'legacy'}, snapshot=${Boolean(report?.usedBuildSnapshot)}, ` +
+            `inv=(m:${counts?.movies}, tv:${counts?.tvShows}, ep:${counts?.episodes}), ` +
+            `sitemap=(m:${moviesSitemapUrls.length}, tv:${tvSitemapUrls.length}, ep:${episodesSitemapUrls.length})`
+        );
+      } catch (err: any) {
+        record('Prerender & Sitemap authoritative inventory consistency', false, err.message);
+      }
+    }
   } catch (err: any) {
     record('Robots & Sitemaps suite', false, err.message);
   }
@@ -549,7 +572,27 @@ async function run() {
     }
   }
 
-  // 9. Bounded-Concurrency Sitemap URL Verification (all main + sample episodes + head/tail movies & TV)
+  // 9. Bounded-Concurrency Sitemap & Dynamic Hybrid-SSR URL Verification
+  let reportSampleFullUrls: string[] = [];
+  if (checkDist) {
+    try {
+      const report = JSON.parse(fs.readFileSync(path.join(distDir, 'prerender-report.json'), 'utf8'));
+      const dyn = report?.sampleDynamicSsrRoutes;
+      if (dyn) {
+        const dynPaths = [
+          ...(Array.isArray(dyn.movies) ? dyn.movies : []),
+          ...(Array.isArray(dyn.tvShows) ? dyn.tvShows : []),
+          ...(Array.isArray(dyn.episodes) ? dyn.episodes : [])
+        ];
+        reportSampleFullUrls = dynPaths
+          .filter((p: any): p is string => typeof p === 'string' && p.startsWith('/'))
+          .map(p => `https://tstream.online${p}`);
+      }
+    } catch {
+      // ignore missing report
+    }
+  }
+
   const samplePool = [
     ...mainSitemapUrls,
     ...episodesSitemapUrls.slice(0, 25),
@@ -557,7 +600,8 @@ async function run() {
     ...moviesSitemapUrls.slice(0, 25),
     ...moviesSitemapUrls.slice(-15),
     ...tvSitemapUrls.slice(0, 15),
-    ...tvSitemapUrls.slice(-10)
+    ...tvSitemapUrls.slice(-10),
+    ...reportSampleFullUrls
   ];
   const uniqueSample = Array.from(new Set(samplePool));
   const crawlFailures: string[] = [];
@@ -572,15 +616,19 @@ async function run() {
       const robots = extractRobots(res.body);
       const title = extractTitle(res.body);
       const hasH1 = /<h1[^>]*>[\s\S]+?<\/h1>/i.test(res.body);
+      const hasSeoPrerender = res.body.includes('id="seo-prerender"');
       if (
         res.status !== 200 ||
         can.count !== 1 ||
         can.href !== fullUrl ||
         robots.includes('noindex') ||
         !title ||
-        !hasH1
+        !hasH1 ||
+        !hasSeoPrerender
       ) {
-        crawlFailures.push(`${pathname} (HTTP=${res.status}, can=${can.href}, robots=${robots})`);
+        crawlFailures.push(
+          `${pathname} (HTTP=${res.status}, can=${can.href}, robots=${robots}, h1=${hasH1}, seo=${hasSeoPrerender})`
+        );
       }
     } catch (err: any) {
       crawlFailures.push(`${pathname} (${err.message})`);
@@ -588,9 +636,9 @@ async function run() {
   });
 
   record(
-    'Bounded-concurrency sitemap URL verification',
+    'Bounded-concurrency sitemap & dynamic SSR URL verification',
     crawlFailures.length === 0 && server5xxCount === 0 && uniqueSample.length > 20,
-    `checked=${uniqueSample.length}, 5xx=${server5xxCount}, failures=${crawlFailures.length}${crawlFailures.length ? ` [${crawlFailures.slice(0, 3).join('; ')}]` : ''}`
+    `checked=${uniqueSample.length}, dynamicSamples=${reportSampleFullUrls.length}, 5xx=${server5xxCount}, failures=${crawlFailures.length}${crawlFailures.length ? ` [${crawlFailures.slice(0, 3).join('; ')}]` : ''}`
   );
 
   const failed = results.filter(r => !r.ok);

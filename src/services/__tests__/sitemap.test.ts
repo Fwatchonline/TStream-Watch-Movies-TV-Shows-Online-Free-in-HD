@@ -8,16 +8,21 @@
  */
 
 import fs from 'fs';
+import http from 'node:http';
 import os from 'os';
 import path from 'path';
 import { discoverTmdbCatalog } from '../../../scripts/tmdbDiscovery.ts';
-import { getAuthoritativeRouteInventory } from '../../../scripts/routeInventory.ts';
+import {
+  getAuthoritativeRouteInventory,
+  readFreshBuildInventorySnapshot
+} from '../../../scripts/routeInventory.ts';
 import {
   generateSitemaps,
   validateSitemapXml,
   validateSitemapIndexXml,
   splitAndBuildUrlsetChunks
 } from '../../../scripts/generate-sitemaps.ts';
+import { prerenderAll } from '../../../scripts/prerender.ts';
 import { renderSeoResult } from '../../../scripts/seoHtmlPlugin.ts';
 import { verifyDistArtifacts, verifyNoLeakedSecretsInDist } from '../../../scripts/run-build.mjs';
 
@@ -338,6 +343,37 @@ async function runTests() {
       );
     }
 
+    if (pathname.endsWith('/movie/709999')) {
+      return new Response(
+        JSON.stringify({
+          id: 709999,
+          title: 'Surviving Feed Film',
+          overview: 'A brand new movie discovered from the single surviving TMDB feed during partial outage.',
+          release_date: '2025-04-01',
+          vote_average: 7.4,
+          vote_count: 85,
+          genres: [{ id: 28, name: 'Action' }]
+        }),
+        { status: 200 }
+      );
+    }
+
+    if (pathname.endsWith('/tv/800102')) {
+      return new Response(
+        JSON.stringify({
+          id: 800102,
+          name: 'Dynamic Show Beta',
+          overview: 'Second-page TMDB TV series verified via live hybrid SSR.',
+          first_air_date: '2025-02-01',
+          vote_average: 8.1,
+          vote_count: 140,
+          number_of_seasons: 1,
+          seasons: [{ season_number: 1, episode_count: 8, name: 'Season 1' }]
+        }),
+        { status: 200 }
+      );
+    }
+
     return new Response(JSON.stringify({ results: [], total_pages: 1 }), { status: 200 });
   }) as typeof fetch;
 
@@ -610,6 +646,215 @@ async function runTests() {
     '15. Dynamically discovered sitemap URLs & curated collection movies resolve HTTP 200 with exact canonicals & metadata'
   );
 
+  // 16. Partial TMDB Outage Protection: 1 feed succeeds while multiple feeds + TV + episodes fail
+  const partialSnapshotPath = path.join(tmpSandbox, 'inventory-snapshot.json');
+  const healthyBaseline = await generateSitemaps(false, pubDir, distDir, {
+    fetchImpl: mockTmdbFetch,
+    tmdbApiKey: 'secret-test-tmdb-key-123',
+    maxPagesPerFeed: 3,
+    maxConcurrency: 3,
+    maxRetries: 1,
+    retryBaseDelayMs: 5,
+    maxEpisodeShows: 15,
+    maxEpisodeSeasonsPerShow: 2,
+    inventorySnapshotPath: partialSnapshotPath
+  });
+
+  const partialOutageFetch = (async (input: string | URL | Request) => {
+    const pathname = new URL(String(input)).pathname;
+    if (pathname.endsWith('/movie/popular')) {
+      return new Response(
+        JSON.stringify({
+          page: 1,
+          total_pages: 1,
+          results: [
+            { id: 709999, title: 'Surviving Feed Film', release_date: '2025-04-01' },
+            { id: 700201, title: 'Popular Film One' }
+          ]
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response('partial upstream failure', { status: 503 });
+  }) as typeof fetch;
+
+  const partialResult = await generateSitemaps(false, pubDir, distDir, {
+    fetchImpl: partialOutageFetch,
+    tmdbApiKey: 'secret-test-tmdb-key-123',
+    maxPagesPerFeed: 2,
+    maxRetries: 0,
+    retryBaseDelayMs: 1,
+    maxEpisodeShows: 5,
+    maxEpisodeSeasonsPerShow: 1,
+    inventorySnapshotPath: false
+  });
+
+  const diskMoviesAfterPartial = fs.readFileSync(path.join(pubDir, 'sitemap-movies.xml'), 'utf8');
+  const diskTvAfterPartial = fs.readFileSync(path.join(pubDir, 'sitemap-tv.xml'), 'utf8');
+  const diskEpisodesAfterPartial = fs.readFileSync(path.join(pubDir, 'sitemap-episodes.xml'), 'utf8');
+
+  assert(
+    partialResult.stats.hadTotalLiveOutage === false &&
+      partialResult.stats.hadPartialOutage === true &&
+      partialResult.stats.failedFeeds.length >= 6 &&
+      partialResult.stats.succeededFeeds.includes('movie:movie_popular') &&
+      partialResult.mergedFromPreviousOnPartialOutage === true &&
+      partialResult.preservedUrlsAddedCount > 0 &&
+      partialResult.moviesCount >= healthyBaseline.moviesCount &&
+      diskMoviesAfterPartial.includes('https://tstream.online/movie/surviving-feed-film-709999') &&
+      diskMoviesAfterPartial.includes('https://tstream.online/movie/dynamic-movie-gamma-700104') &&
+      diskTvAfterPartial.includes('https://tstream.online/tv/dynamic-show-beta-800102') &&
+      diskEpisodesAfterPartial.includes('https://tstream.online/watch/tv/dynamic-show-alpha-800101/1/1'),
+    '16. Partial TMDB outage (1 live feed + multiple failed feeds) merges & preserves all healthy previous URLs plus new live URLs'
+  );
+
+  // 17. Prerender uses authoritative inventory + reuses fresh build snapshot (0 redundant TMDB calls) + Hybrid SSR accounting
+  // Regenerate healthy baseline cleanly so dist & snapshot match full discovery
+  const fullGen = await generateSitemaps(false, pubDir, distDir, {
+    fetchImpl: mockTmdbFetch,
+    tmdbApiKey: 'secret-test-tmdb-key-123',
+    maxPagesPerFeed: 3,
+    maxConcurrency: 3,
+    maxRetries: 2,
+    retryBaseDelayMs: 5,
+    maxEpisodeShows: 15,
+    maxEpisodeSeasonsPerShow: 2,
+    inventorySnapshotPath: partialSnapshotPath
+  });
+
+  const loadedSnap = readFreshBuildInventorySnapshot(partialSnapshotPath);
+  assert(
+    loadedSnap !== null && !JSON.stringify(loadedSnap).includes('secret-test-tmdb-key-123'),
+    '17a. Secret-free build inventory snapshot saved & readable with zero leaked TMDB_API_KEY'
+  );
+
+  const prerenderFetchUrls: string[] = [];
+  const trackingPrerenderFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    prerenderFetchUrls.push(String(input));
+    return mockTmdbFetch(input, init);
+  }) as typeof fetch;
+
+  const prerenderReport = await prerenderAll(distDir, {
+    fetchImpl: trackingPrerenderFetch,
+    tmdbApiKey: 'secret-test-tmdb-key-123',
+    inventorySnapshotPath: partialSnapshotPath,
+    maxDynamicMovies: 2,
+    maxDynamicTv: 1,
+    maxDynamicEpisodes: 1
+  });
+
+  const redundantDiscoveryCalls = prerenderFetchUrls.filter(u =>
+    /\/(trending\/movie\/week|trending\/tv\/week|movie\/now_playing|movie\/upcoming|tv\/on_the_air|tv\/airing_today)/.test(u) ||
+    /[?&]page=[23]\b/.test(u)
+  );
+  const dynamicMoviesTotal = fullGen.moviesCount - prerenderReport.routes.filter(r => r.url.startsWith('/movie/') && r.success).length;
+  assert(
+    prerenderReport.inventorySource === 'getAuthoritativeRouteInventory' &&
+      prerenderReport.usedBuildSnapshot === true &&
+      redundantDiscoveryCalls.length === 0 &&
+      prerenderReport.failed === 0 &&
+      prerenderReport.authoritativeInventoryCounts.movies === fullGen.moviesCount &&
+      prerenderReport.authoritativeInventoryCounts.tvShows === fullGen.tvCount &&
+      prerenderReport.authoritativeInventoryCounts.episodes === fullGen.episodesCount &&
+      prerenderReport.prerenderedCounts.dynamicMovies === 2 &&
+      prerenderReport.hybridSsrDynamicCounts.movies > 0 &&
+      dynamicMoviesTotal >= 0 &&
+      fs.existsSync(path.join(distDir, 'prerender-report.json')),
+    '17b. Prerender consumes shared authoritative inventory snapshot with 0 redundant discovery calls and documents Hybrid SSR counts'
+  );
+
+  // 18. Real Production-Style Live HTTP Server & XML Parse Verification (prerendered + non-prerendered dynamic routes)
+  const xmlMoviesOnDisk = fs.readFileSync(path.join(distDir, 'sitemap-movies.xml'), 'utf8');
+  const xmlTvOnDisk = fs.readFileSync(path.join(distDir, 'sitemap-tv.xml'), 'utf8');
+  const xmlEpisodesOnDisk = fs.readFileSync(path.join(distDir, 'sitemap-episodes.xml'), 'utf8');
+  const parsedMovieLocs = Array.from(xmlMoviesOnDisk.matchAll(/<loc>([^<]+)<\/loc>/g)).map(m => m[1]);
+  const parsedTvLocs = Array.from(xmlTvOnDisk.matchAll(/<loc>([^<]+)<\/loc>/g)).map(m => m[1]);
+  const parsedEpLocs = Array.from(xmlEpisodesOnDisk.matchAll(/<loc>([^<]+)<\/loc>/g)).map(m => m[1]);
+
+  // Verify real XML contains dynamic entries beyond curated set
+  assert(
+    parsedMovieLocs.includes('https://tstream.online/movie/dynamic-movie-gamma-700104') &&
+      parsedTvLocs.includes('https://tstream.online/tv/dynamic-show-beta-800102') &&
+      parsedEpLocs.includes('https://tstream.online/watch/tv/dynamic-show-alpha-800101/1/1'),
+    '18a. Actual generated XML files contain dynamically discovered movie, TV, and episode URLs'
+  );
+
+  const testHttpServer = http.createServer(async (req, res) => {
+    const reqUrl = req.url || '/';
+    const pathname = new URL(reqUrl, 'http://127.0.0.1').pathname;
+    if (pathname.endsWith('.xml')) {
+      const f = path.join(distDir, pathname.replace(/^\/+/, ''));
+      if (fs.existsSync(f)) {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+        res.end(fs.readFileSync(f, 'utf8'));
+        return;
+      }
+    }
+    const cleanRel = pathname.replace(/^\/+|\/+$/g, '');
+    const prerenderFile = cleanRel ? path.join(distDir, cleanRel, 'index.html') : path.join(distDir, 'index.html');
+    if (fs.existsSync(prerenderFile)) {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end(fs.readFileSync(prerenderFile, 'utf8'));
+      return;
+    }
+    const seoRes = await renderSeoResult(SAMPLE_HTML, reqUrl, {
+      fetchImpl: mockTmdbFetch,
+      tmdbApiKey: 'secret-test-tmdb-key-123'
+    });
+    res.statusCode = seoRes.status;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(seoRes.html);
+  });
+
+  await new Promise<void>(resolve => testHttpServer.listen(0, '127.0.0.1', () => resolve()));
+  const addr = testHttpServer.address();
+  const serverPort = typeof addr === 'object' && addr ? addr.port : 0;
+  const localOrigin = `http://127.0.0.1:${serverPort}`;
+
+  try {
+    // Check routes served over real HTTP (both prerendered & live Hybrid SSR routes from generated XML)
+    const liveRoutesToCheck = [
+      { path: '/movie/avatar-19995', expectedCan: 'https://tstream.online/movie/avatar-19995', expectedType: 'Movie' },
+      { path: '/movie/dynamic-movie-gamma-700104', expectedCan: 'https://tstream.online/movie/dynamic-movie-gamma-700104', expectedType: 'Movie' },
+      { path: '/tv/dynamic-show-beta-800102', expectedCan: 'https://tstream.online/tv/dynamic-show-beta-800102', expectedType: 'TVSeries' },
+      { path: '/watch/tv/dynamic-show-alpha-800101/1/1', expectedCan: 'https://tstream.online/watch/tv/dynamic-show-alpha-800101/1/1', expectedType: 'TVEpisode' }
+    ];
+
+    // Assert gamma movie is NOT prerendered on disk (because maxDynamicMovies=2 excluded later pages), proving real Hybrid SSR!
+    const gammaDiskPath = path.join(distDir, 'movie/dynamic-movie-gamma-700104/index.html');
+    assert(!fs.existsSync(gammaDiskPath), '18b. Non-prerendered dynamic movie exercises live Hybrid SSR rather than disk cache');
+
+    for (const check of liveRoutesToCheck) {
+      const httpRes = await fetch(`${localOrigin}${check.path}`);
+      const html = await httpRes.text();
+      const canMatches = html.match(/<link\s+[^>]*rel=["']canonical["'][^>]*>/gi) || [];
+      const canHref =
+        html.match(/<link\s+[^>]*href=["']([^"']+)["'][^>]*rel=["']canonical["']/i)?.[1] ||
+        html.match(/<link\s+[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)?.[1] ||
+        '';
+      const robots = html.match(/<meta\s+[^>]*name=["']robots["'][^>]*content=["']([^"']+)["']/i)?.[1] || '';
+      const hasH1 = /<h1[^>]*>[\s\S]+?<\/h1>/i.test(html);
+      const hasSeo = html.includes('id="seo-prerender"');
+      const jsonLdMatch = html.match(/<script\s+[^>]*id=["']json-ld-schema["'][^>]*>([\s\S]*?)<\/script>/i);
+      const jsonLd = jsonLdMatch ? JSON.parse(jsonLdMatch[1]) : null;
+      assert(
+        httpRes.status === 200 &&
+          canMatches.length === 1 &&
+          canHref === check.expectedCan &&
+          !robots.toLowerCase().includes('noindex') &&
+          hasH1 &&
+          hasSeo &&
+          jsonLd?.['@type'] === check.expectedType,
+        `18c. Live HTTP ${check.path} -> 200, canonical=${canHref}, h1=${hasH1}, jsonLd=${jsonLd?.['@type']}`
+      );
+    }
+  } finally {
+    testHttpServer.closeAllConnections?.();
+    await new Promise<void>(resolve => testHttpServer.close(() => resolve()));
+  }
+
   // 9. Validation rejection sanity check for utility/noindex URLs
   let rejectedAdmin = false;
   try {
@@ -623,7 +868,7 @@ async function runTests() {
   assert(rejectedAdmin, '9. validateSitemapXml strictly rejects /admin or utility noindex URLs');
 
   fs.rmSync(tmpSandbox, { recursive: true, force: true });
-  console.log('\n--- ALL 15 DYNAMIC SITEMAP & TMDB DISCOVERY TESTS PASSED SUCCESSFULLY ---');
+  console.log('\n--- ALL 18 DYNAMIC SITEMAP, PARTIAL OUTAGE, PRERENDER & HYBRID SSR TESTS PASSED SUCCESSFULLY ---');
 }
 
 runTests().catch(err => {

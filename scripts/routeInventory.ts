@@ -4,6 +4,10 @@
  * so reported routes, disk HTML files, sitemap URLs, and verification targets never drift.
  */
 
+import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   DETAILED_MOVIES,
   DETAILED_TV_SHOWS,
@@ -489,4 +493,77 @@ export async function getAuthoritativeRouteInventory(
     hubs: getHubInventory(),
     discoveryStats: discovery.stats
   };
+}
+
+export const BUILD_INVENTORY_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
+
+export interface BuildInventorySnapshotPayload {
+  version: 1;
+  cwd: string;
+  createdAtMs: number;
+  liveEnabled: boolean;
+  inventory: AuthoritativeInventoryResult;
+}
+
+export function getBuildInventorySnapshotPath(cwd: string = process.cwd()): string {
+  const custom = (process.env.TSTREAM_BUILD_INVENTORY_CACHE || '').trim();
+  if (custom) {
+    return path.resolve(custom);
+  }
+  const hash = crypto.createHash('sha1').update(path.resolve(cwd)).digest('hex').slice(0, 12);
+  return path.join(os.tmpdir(), `tstream-build-inventory-${hash}.json`);
+}
+
+export function writeBuildInventorySnapshot(
+  inventory: AuthoritativeInventoryResult,
+  snapshotPath: string = getBuildInventorySnapshotPath(),
+  cwd: string = process.cwd()
+): void {
+  const dir = path.dirname(snapshotPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const payload: BuildInventorySnapshotPayload = {
+    version: 1,
+    cwd: path.resolve(cwd),
+    createdAtMs: Date.now(),
+    liveEnabled: Boolean(inventory.discoveryStats?.liveEnabled),
+    inventory
+  };
+  const serialized = JSON.stringify(payload);
+  const tmpFile = `${snapshotPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpFile, serialized, 'utf8');
+  fs.renameSync(tmpFile, snapshotPath);
+}
+
+export function readFreshBuildInventorySnapshot(
+  snapshotPath: string = getBuildInventorySnapshotPath(),
+  maxAgeMs: number = BUILD_INVENTORY_SNAPSHOT_TTL_MS,
+  expectedLiveEnabled?: boolean
+): AuthoritativeInventoryResult | null {
+  try {
+    if (!fs.existsSync(snapshotPath)) return null;
+    const raw = fs.readFileSync(snapshotPath, 'utf8');
+    const parsed = JSON.parse(raw) as BuildInventorySnapshotPayload;
+    if (
+      !parsed ||
+      parsed.version !== 1 ||
+      !parsed.inventory ||
+      !Array.isArray(parsed.inventory.movies) ||
+      !Array.isArray(parsed.inventory.tvShows) ||
+      !Array.isArray(parsed.inventory.episodes)
+    ) {
+      return null;
+    }
+    const age = Date.now() - Number(parsed.createdAtMs || 0);
+    if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) {
+      return null;
+    }
+    if (expectedLiveEnabled !== undefined && parsed.liveEnabled !== expectedLiveEnabled) {
+      return null;
+    }
+    return parsed.inventory;
+  } catch {
+    return null;
+  }
 }

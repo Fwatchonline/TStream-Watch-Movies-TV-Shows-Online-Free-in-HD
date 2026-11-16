@@ -16,23 +16,33 @@ import { loadBuildEnv } from './loadEnv.mjs';
 import {
   renderSeoResult,
   render404Html,
+  getServerTmdbApiKey,
   type RenderSeoOptions
 } from './seoHtmlPlugin.ts';
 import {
-  getHubInventory,
-  getTagInventory,
-  getGenreInventory,
-  getPlatformInventory,
-  getAzInventory,
-  getMovieInventory,
-  getTvInventory,
-  getVerifiedEpisodeInventory
+  getAuthoritativeRouteInventory,
+  getBuildInventorySnapshotPath,
+  readFreshBuildInventorySnapshot,
+  type AuthoritativeInventoryResult
 } from './routeInventory.ts';
+import type { TmdbDiscoveryOptions } from './tmdbDiscovery.ts';
 import { PRIMARY_ORIGIN } from '../src/utils/seo.ts';
 
 loadBuildEnv();
 
 const DEFAULT_DIST_DIR = path.resolve(process.cwd(), 'dist');
+
+export const DEFAULT_PRERENDER_MAX_DYNAMIC_MOVIES = 100;
+export const DEFAULT_PRERENDER_MAX_DYNAMIC_TV = 50;
+export const DEFAULT_PRERENDER_MAX_DYNAMIC_EPISODES = 50;
+
+export interface PrerenderOptions extends TmdbDiscoveryOptions {
+  inventory?: AuthoritativeInventoryResult;
+  inventorySnapshotPath?: string | false;
+  maxDynamicMovies?: number;
+  maxDynamicTv?: number;
+  maxDynamicEpisodes?: number;
+}
 
 export interface PrerenderValidationResult {
   url: string;
@@ -49,11 +59,37 @@ export interface PrerenderValidationResult {
 export interface PrerenderReport {
   outputDirectory: string;
   generatedAt: string;
+  inventorySource: 'getAuthoritativeRouteInventory';
+  usedBuildSnapshot: boolean;
   attempted: number;
   succeeded: number;
   indexableSucceeded: number;
   noindexSucceeded: number;
   failed: number;
+  authoritativeInventoryCounts: {
+    main: number;
+    movies: number;
+    tvShows: number;
+    episodes: number;
+  };
+  prerenderedCounts: {
+    movies: number;
+    tvShows: number;
+    episodes: number;
+    dynamicMovies: number;
+    dynamicTvShows: number;
+    dynamicEpisodes: number;
+  };
+  hybridSsrDynamicCounts: {
+    movies: number;
+    tvShows: number;
+    episodes: number;
+  };
+  sampleDynamicSsrRoutes: {
+    movies: string[];
+    tvShows: string[];
+    episodes: string[];
+  };
   routes: PrerenderValidationResult[];
 }
 
@@ -248,10 +284,63 @@ export async function prerenderAndValidateRoute(
   }
 }
 
-export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<PrerenderReport> {
+function parseDynamicLimit(raw: string | number | undefined, fallback: number): number {
+  const num = Number(raw);
+  if (!Number.isFinite(num) || !Number.isInteger(num) || num < 0) {
+    return fallback;
+  }
+  return Math.min(num, 5000);
+}
+
+export async function prerenderAll(
+  distDir: string = DEFAULT_DIST_DIR,
+  options: PrerenderOptions = {}
+): Promise<PrerenderReport> {
   const template = loadDistTemplateOrFail(distDir);
   const distIndex = path.join(distDir, 'index.html');
   console.log(`[Prerender] Starting build-time static HTML generation & strict validation into ${distDir}...`);
+
+  const maxDynamicMovies = parseDynamicLimit(
+    options.maxDynamicMovies ?? process.env.PRERENDER_MAX_DYNAMIC_MOVIES,
+    DEFAULT_PRERENDER_MAX_DYNAMIC_MOVIES
+  );
+  const maxDynamicTv = parseDynamicLimit(
+    options.maxDynamicTv ?? process.env.PRERENDER_MAX_DYNAMIC_TV,
+    DEFAULT_PRERENDER_MAX_DYNAMIC_TV
+  );
+  const maxDynamicEpisodes = parseDynamicLimit(
+    options.maxDynamicEpisodes ?? process.env.PRERENDER_MAX_DYNAMIC_EPISODES,
+    DEFAULT_PRERENDER_MAX_DYNAMIC_EPISODES
+  );
+
+  let inventory: AuthoritativeInventoryResult | null = options.inventory || null;
+  let usedBuildSnapshot = false;
+
+  if (!inventory && options.inventorySnapshotPath !== false) {
+    const snapshotTarget =
+      typeof options.inventorySnapshotPath === 'string'
+        ? options.inventorySnapshotPath
+        : !options.fetchImpl && path.resolve(distDir) === DEFAULT_DIST_DIR
+          ? getBuildInventorySnapshotPath()
+          : null;
+    if (snapshotTarget) {
+      const effectiveKey = (options.tmdbApiKey !== undefined ? options.tmdbApiKey : getServerTmdbApiKey()).trim();
+      const cached = readFreshBuildInventorySnapshot(snapshotTarget, undefined, Boolean(effectiveKey));
+      if (cached) {
+        inventory = cached;
+        usedBuildSnapshot = true;
+      }
+    }
+  }
+
+  if (!inventory) {
+    inventory = await getAuthoritativeRouteInventory(options);
+  }
+
+  console.log(
+    `[Prerender Inventory] source=getAuthoritativeRouteInventory, usedBuildSnapshot=${usedBuildSnapshot}, ` +
+      `movies=${inventory.movies.length}, tv=${inventory.tvShows.length}, episodes=${inventory.episodes.length}`
+  );
 
   const routeResults: PrerenderValidationResult[] = [];
 
@@ -262,11 +351,19 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
     expectedCanonical?: string,
     expectedNoindex?: boolean
   ) {
+    const seoInput: any =
+      options.fetchImpl !== undefined || options.tmdbApiKey !== undefined
+        ? {
+            preloadedMedia,
+            fetchImpl: options.fetchImpl,
+            tmdbApiKey: options.tmdbApiKey
+          }
+        : preloadedMedia;
     const res = await prerenderAndValidateRoute(
       template,
       urlPath,
       outputPath,
-      preloadedMedia,
+      seoInput,
       expectedCanonical,
       { expectedNoindex, distDir, checkAssets: true }
     );
@@ -318,12 +415,12 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
   await processRoute('/', distIndex, undefined, `${PRIMARY_ORIGIN}/`, false);
 
   // 3. Main Public Hub & Landing Pages
-  for (const p of getHubInventory()) {
+  for (const p of inventory.hubs) {
     await processRoute(p.url, path.join(distDir, p.file), undefined, p.can, p.noindex);
   }
 
   // 4. Valuable Tag Landing Pages (strictly kebab-case slugs shared with routeInventory)
-  for (const tagEntry of getTagInventory()) {
+  for (const tagEntry of inventory.tags) {
     await processRoute(
       tagEntry.urlPath,
       path.join(distDir, tagEntry.outputFileRel),
@@ -334,7 +431,7 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
   }
 
   // 5. Real Genre Landing Pages (indexable when populated; noindex when empty)
-  for (const genreEntry of await getGenreInventory()) {
+  for (const genreEntry of inventory.genres) {
     await processRoute(
       genreEntry.urlPath,
       path.join(distDir, genreEntry.outputFileRel),
@@ -345,7 +442,7 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
   }
 
   // 6. OTT Platform Hubs (indexable only when genuine matching content exists)
-  for (const platEntry of await getPlatformInventory()) {
+  for (const platEntry of inventory.platforms) {
     await processRoute(
       platEntry.urlPath,
       path.join(distDir, platEntry.outputFileRel),
@@ -356,7 +453,7 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
   }
 
   // 7. A-Z Directory (letters with matching catalog entries)
-  for (const azEntry of getAzInventory()) {
+  for (const azEntry of inventory.az) {
     await processRoute(
       azEntry.urlPath,
       path.join(distDir, azEntry.outputFileRel),
@@ -366,8 +463,13 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
     );
   }
 
-  // 8. All Movies (Authoritative Detail Pages + Playback Watch Pages canonicalizing to /movie/:slug)
-  for (const movieEntry of getMovieInventory()) {
+  // 8. Movies: All curated + bounded dynamically discovered movies (remaining dynamic URLs use Hybrid SSR)
+  const curatedMoviesToPrerender = inventory.movies.filter(m => m.source !== 'tmdb');
+  const dynamicMovies = inventory.movies.filter(m => m.source === 'tmdb');
+  const dynamicMoviesToPrerender = dynamicMovies.slice(0, maxDynamicMovies);
+  const hybridSsrMovies = dynamicMovies.slice(maxDynamicMovies);
+
+  for (const movieEntry of [...curatedMoviesToPrerender, ...dynamicMoviesToPrerender]) {
     await processRoute(
       movieEntry.detailPath,
       path.join(distDir, `movie/${movieEntry.slug}/index.html`),
@@ -385,8 +487,13 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
     );
   }
 
-  // 9. All TV Series (Detail Pages) + Verified Content-Rich Episode Watch Pages
-  for (const tvEntry of getTvInventory()) {
+  // 9. TV Series: All curated + bounded dynamically discovered TV shows (remaining dynamic URLs use Hybrid SSR)
+  const curatedTvToPrerender = inventory.tvShows.filter(t => t.source !== 'tmdb');
+  const dynamicTv = inventory.tvShows.filter(t => t.source === 'tmdb');
+  const dynamicTvToPrerender = dynamicTv.slice(0, maxDynamicTv);
+  const hybridSsrTv = dynamicTv.slice(maxDynamicTv);
+
+  for (const tvEntry of [...curatedTvToPrerender, ...dynamicTvToPrerender]) {
     await processRoute(
       tvEntry.detailPath,
       path.join(distDir, `tv/${tvEntry.slug}/index.html`),
@@ -396,7 +503,13 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
     );
   }
 
-  for (const epEntry of getVerifiedEpisodeInventory()) {
+  // 10. Verified Episodes: All curated + bounded dynamically discovered verified episodes (remaining use Hybrid SSR)
+  const curatedEpisodesToPrerender = inventory.episodes.filter(ep => ep.source !== 'tmdb');
+  const dynamicEpisodes = inventory.episodes.filter(ep => ep.source === 'tmdb');
+  const dynamicEpisodesToPrerender = dynamicEpisodes.slice(0, maxDynamicEpisodes);
+  const hybridSsrEpisodes = dynamicEpisodes.slice(maxDynamicEpisodes);
+
+  for (const epEntry of [...curatedEpisodesToPrerender, ...dynamicEpisodesToPrerender]) {
     await processRoute(
       epEntry.urlPath,
       path.join(distDir, epEntry.outputFileRel),
@@ -406,6 +519,36 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
     );
   }
 
+  const authoritativeMainCount =
+    1 +
+    inventory.hubs.filter(h => !h.noindex).length +
+    inventory.tags.length +
+    inventory.genres.filter(g => g.indexable).length +
+    inventory.platforms.filter(p => p.indexable).length +
+    inventory.az.length;
+
+  const sampleDynamicMovieRoutes = Array.from(
+    new Set([
+      ...dynamicMoviesToPrerender.slice(0, 3).map(m => m.detailPath),
+      ...hybridSsrMovies.slice(0, 5).map(m => m.detailPath),
+      ...hybridSsrMovies.slice(-5).map(m => m.detailPath)
+    ])
+  );
+  const sampleDynamicTvRoutes = Array.from(
+    new Set([
+      ...dynamicTvToPrerender.slice(0, 3).map(t => t.detailPath),
+      ...hybridSsrTv.slice(0, 5).map(t => t.detailPath),
+      ...hybridSsrTv.slice(-5).map(t => t.detailPath)
+    ])
+  );
+  const sampleDynamicEpisodeRoutes = Array.from(
+    new Set([
+      ...dynamicEpisodesToPrerender.slice(0, 3).map(e => e.urlPath),
+      ...hybridSsrEpisodes.slice(0, 5).map(e => e.urlPath),
+      ...hybridSsrEpisodes.slice(-5).map(e => e.urlPath)
+    ])
+  );
+
   const succeededList = routeResults.filter(r => r.success);
   const failedList = routeResults.filter(r => !r.success);
   const indexableSucceeded = succeededList.filter(r => r.indexable === true).length;
@@ -414,11 +557,37 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
   const report: PrerenderReport = {
     outputDirectory: distDir,
     generatedAt: new Date().toISOString(),
+    inventorySource: 'getAuthoritativeRouteInventory',
+    usedBuildSnapshot,
     attempted: routeResults.length,
     succeeded: succeededList.length,
     indexableSucceeded,
     noindexSucceeded,
     failed: failedList.length,
+    authoritativeInventoryCounts: {
+      main: authoritativeMainCount,
+      movies: inventory.movies.length,
+      tvShows: inventory.tvShows.length,
+      episodes: inventory.episodes.length
+    },
+    prerenderedCounts: {
+      movies: curatedMoviesToPrerender.length + dynamicMoviesToPrerender.length,
+      tvShows: curatedTvToPrerender.length + dynamicTvToPrerender.length,
+      episodes: curatedEpisodesToPrerender.length + dynamicEpisodesToPrerender.length,
+      dynamicMovies: dynamicMoviesToPrerender.length,
+      dynamicTvShows: dynamicTvToPrerender.length,
+      dynamicEpisodes: dynamicEpisodesToPrerender.length
+    },
+    hybridSsrDynamicCounts: {
+      movies: hybridSsrMovies.length,
+      tvShows: hybridSsrTv.length,
+      episodes: hybridSsrEpisodes.length
+    },
+    sampleDynamicSsrRoutes: {
+      movies: sampleDynamicMovieRoutes,
+      tvShows: sampleDynamicTvRoutes,
+      episodes: sampleDynamicEpisodeRoutes
+    },
     routes: routeResults
   };
 
@@ -430,6 +599,10 @@ export async function prerenderAll(distDir: string = DEFAULT_DIST_DIR): Promise<
   console.log(`- Succeeded total:    ${report.succeeded}`);
   console.log(`  - Indexable HTML:   ${report.indexableSucceeded}`);
   console.log(`  - Noindex/404 HTML: ${report.noindexSucceeded}`);
+  console.log(
+    `- Dynamic routes:     prerendered(movies=${report.prerenderedCounts.dynamicMovies}, tv=${report.prerenderedCounts.dynamicTvShows}, ep=${report.prerenderedCounts.dynamicEpisodes}), ` +
+      `hybridSSR(movies=${report.hybridSsrDynamicCounts.movies}, tv=${report.hybridSsrDynamicCounts.tvShows}, ep=${report.hybridSsrDynamicCounts.episodes})`
+  );
   if (report.failed > 0) {
     console.log(`- Failed routes:      ${report.failed}`);
   } else {

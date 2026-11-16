@@ -66,12 +66,29 @@ export interface DiscoveredEpisodeRecord {
   show: any;
 }
 
+export interface FeedHealthInfo {
+  name: string;
+  mediaType: 'movie' | 'tv';
+  expectedPages: number;
+  fetchedPages: number;
+  failedRequests: number;
+  failed: boolean;
+  degraded: boolean;
+}
+
 export interface TmdbDiscoveryStats {
   liveEnabled: boolean;
   maxPagesPerFeed: number;
   maxConcurrency: number;
   sourcesUsed: string[];
   pagesFetchedByFeed: Record<string, number>;
+  feedHealth: Record<string, FeedHealthInfo>;
+  failedFeeds: string[];
+  succeededFeeds: string[];
+  movieFeedsDegraded: boolean;
+  tvFeedsDegraded: boolean;
+  episodeDiscoveryFailedRequests: number;
+  episodeDiscoveryDegraded: boolean;
   attemptedRequests: number;
   successfulRequests: number;
   cachedHits: number;
@@ -89,6 +106,7 @@ export interface TmdbDiscoveryStats {
   verifiedEpisodesCount: number;
   rejectedEpisodesCount: number;
   hadUpstreamErrors: boolean;
+  hadPartialOutage: boolean;
   hadTotalLiveOutage: boolean;
   errors: string[];
 }
@@ -301,6 +319,13 @@ export async function discoverTmdbCatalog(options: TmdbDiscoveryOptions = {}): P
     maxConcurrency,
     sourcesUsed: [],
     pagesFetchedByFeed: {},
+    feedHealth: {},
+    failedFeeds: [],
+    succeededFeeds: [],
+    movieFeedsDegraded: false,
+    tvFeedsDegraded: false,
+    episodeDiscoveryFailedRequests: 0,
+    episodeDiscoveryDegraded: false,
     attemptedRequests: 0,
     successfulRequests: 0,
     cachedHits: 0,
@@ -318,6 +343,7 @@ export async function discoverTmdbCatalog(options: TmdbDiscoveryOptions = {}): P
     verifiedEpisodesCount: 0,
     rejectedEpisodesCount: 0,
     hadUpstreamErrors: false,
+    hadPartialOutage: false,
     hadTotalLiveOutage: false,
     errors: []
   };
@@ -417,18 +443,32 @@ export async function discoverTmdbCatalog(options: TmdbDiscoveryOptions = {}): P
 
   const processFeed = async (feed: FeedDefinition) => {
     stats.sourcesUsed.push(feed.name);
+    const feedKey = `${feed.mediaType}:${feed.name}`;
     const separator = feed.path.includes('?') ? '&' : '?';
 
     // Fetch page 1 first so we respect real total_pages bounds
     const p1 = await fetchEndpointJson(`${feed.path}${separator}page=1`);
     if (!p1.ok || !p1.data) {
-      stats.pagesFetchedByFeed[`${feed.mediaType}:${feed.name}`] = 0;
+      stats.pagesFetchedByFeed[feedKey] = 0;
+      stats.feedHealth[feedKey] = {
+        name: feed.name,
+        mediaType: feed.mediaType,
+        expectedPages: 1,
+        fetchedPages: 0,
+        failedRequests: 1,
+        failed: true,
+        degraded: true
+      };
+      stats.failedFeeds.push(feedKey);
+      if (feed.mediaType === 'movie') stats.movieFeedsDegraded = true;
+      else stats.tvFeedsDegraded = true;
       return;
     }
 
     const totalPagesAvailable = Math.max(1, Math.min(Number(p1.data.total_pages || 1), 500));
     const targetPages = Math.min(maxPagesPerFeed, totalPagesAvailable);
     let pagesFetched = 1;
+    let failedPages = 0;
 
     const ingestResults = (rawList: any[]) => {
       for (const raw of rawList) {
@@ -487,11 +527,28 @@ export async function discoverTmdbCatalog(options: TmdbDiscoveryOptions = {}): P
           if (res.data.results.length > 0) {
             ingestResults(res.data.results);
           }
+        } else {
+          failedPages++;
         }
       }
     }
 
-    stats.pagesFetchedByFeed[`${feed.mediaType}:${feed.name}`] = pagesFetched;
+    const degraded = failedPages > 0;
+    stats.pagesFetchedByFeed[feedKey] = pagesFetched;
+    stats.feedHealth[feedKey] = {
+      name: feed.name,
+      mediaType: feed.mediaType,
+      expectedPages: targetPages,
+      fetchedPages: pagesFetched,
+      failedRequests: failedPages,
+      failed: false,
+      degraded
+    };
+    stats.succeededFeeds.push(feedKey);
+    if (degraded) {
+      if (feed.mediaType === 'movie') stats.movieFeedsDegraded = true;
+      else stats.tvFeedsDegraded = true;
+    }
   };
 
   await Promise.all([
@@ -526,7 +583,13 @@ export async function discoverTmdbCatalog(options: TmdbDiscoveryOptions = {}): P
     await Promise.all(
       candidateShowIds.map(async showId => {
         const showRes = await fetchEndpointJson(`/tv/${showId}`);
-        if (!showRes.ok || !showRes.data) return;
+        if (!showRes.ok || !showRes.data) {
+          if (showRes.status !== 404) {
+            stats.episodeDiscoveryFailedRequests++;
+            stats.episodeDiscoveryDegraded = true;
+          }
+          return;
+        }
 
         const showJson = showRes.data;
         const showTitle = String(showJson.name || showJson.original_name || showJson.title || '').trim();
@@ -560,7 +623,13 @@ export async function discoverTmdbCatalog(options: TmdbDiscoveryOptions = {}): P
             if (!Number.isInteger(seasonNumber) || seasonNumber < 1) return;
 
             const seasonRes = await fetchEndpointJson(`/tv/${showId}/season/${seasonNumber}`);
-            if (!seasonRes.ok || !seasonRes.data) return;
+            if (!seasonRes.ok || !seasonRes.data) {
+              if (seasonRes.status !== 404) {
+                stats.episodeDiscoveryFailedRequests++;
+                stats.episodeDiscoveryDegraded = true;
+              }
+              return;
+            }
 
             stats.seasonsFetchedForEpisodes++;
             const seasonJson = seasonRes.data;
@@ -637,6 +706,14 @@ export async function discoverTmdbCatalog(options: TmdbDiscoveryOptions = {}): P
     stats.successfulRequests === 0 &&
     movieMap.size === 0 &&
     tvMap.size === 0;
+  stats.hadPartialOutage =
+    stats.liveEnabled &&
+    !stats.hadTotalLiveOutage &&
+    (stats.failedFeeds.length > 0 ||
+      stats.movieFeedsDegraded ||
+      stats.tvFeedsDegraded ||
+      stats.episodeDiscoveryDegraded ||
+      stats.hadUpstreamErrors);
 
   return {
     movies: Array.from(movieMap.values()),
