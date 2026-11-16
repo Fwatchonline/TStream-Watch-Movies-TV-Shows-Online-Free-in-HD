@@ -1213,6 +1213,297 @@ async function runTests() {
     'fetchCatalog(movies, genreId=10759) returns empty rather than cross-matching TV-only genre onto movies'
   );
 
+  // =======================================================================
+  // PARTIAL TV SEASON METADATA & DYNAMIC EPISODE SSR REGRESSION TESTS
+  // =======================================================================
+  const partialShow = {
+    id: 100088,
+    tmdbId: 100088,
+    mediaType: 'tv',
+    name: 'The Last of Us',
+    title: 'The Last of Us',
+    overview: 'A distinct series overview.',
+    numberOfSeasons: 2,
+    seasons: [
+      {
+        seasonNumber: 1,
+        episodeCount: 9,
+        episodes: []
+      }
+    ]
+  };
+
+  const tlouSeason2Payloads: Record<string, any> = {
+    '2:1': {
+      id: 5517228,
+      season_number: 2,
+      episode_number: 1,
+      name: 'Future Days',
+      overview: 'A genuine episode-specific description containing enough meaningful information for SEO validation.',
+      air_date: '2025-04-13',
+      vote_average: 8.2,
+      vote_count: 1000
+    },
+    '2:2': {
+      id: 5517229,
+      season_number: 2,
+      episode_number: 2,
+      name: 'Through the Valley',
+      overview: 'As a storm brews in the mountains outside Jackson, Abby closes in on her long-sought target.',
+      air_date: '2025-04-20',
+      vote_average: 9.1,
+      vote_count: 1420
+    },
+    '2:3': {
+      id: 5994269,
+      season_number: 2,
+      episode_number: 3,
+      name: 'The Path',
+      overview: 'After a devastating loss shakes Jackson to its core, Ellie prepares to set out for Seattle.',
+      air_date: '2025-04-27',
+      vote_average: 7.9,
+      vote_count: 890
+    },
+    '1:10': {
+      id: 9991010,
+      season_number: 1,
+      episode_number: 10,
+      name: 'Extended Finale Chapter',
+      overview: 'A newly added live TMDB episode extending past a stale cached season episode count.',
+      air_date: '2025-05-04',
+      vote_average: 8.5,
+      vote_count: 400
+    }
+  };
+
+  const tlouCalledEndpoints: string[] = [];
+  const mockTlouEpisodeFetch = (async (input: string | URL | Request) => {
+    const u = String(input);
+    tlouCalledEndpoints.push(u);
+    const epMatch = u.match(/\/tv\/100088\/season\/(\d+)\/episode\/(\d+)/);
+    if (epMatch) {
+      const key = `${epMatch[1]}:${epMatch[2]}`;
+      if (tlouSeason2Payloads[key]) {
+        return new Response(JSON.stringify(tlouSeason2Payloads[key]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    return new Response(JSON.stringify({ status_code: 34, status_message: 'The resource you requested could not be found.' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }) as typeof fetch;
+
+  // Test 1: Missing local season (Season 2 absent from partial local cache), valid TMDB season
+  const s2e1Meta = await fetchServerEpisode(partialShow, 2, 1, mockTlouEpisodeFetch, 'test-key');
+  assert(
+    tlouCalledEndpoints.some(u => u.includes('/tv/100088/season/2/episode/1')) &&
+      Boolean(s2e1Meta) &&
+      s2e1Meta?.episodeId === 5517228 &&
+      s2e1Meta?.name === 'Future Days' &&
+      s2e1Meta?.isVerified === true &&
+      s2e1Meta?.source === 'tmdb',
+    'Partial Ep Test 1: Missing local season falls back to live TMDB /tv/100088/season/2/episode/1 and returns verified Future Days (5517228)'
+  );
+
+  // Also verify S01E10 beyond stale local episodeCount=9 falls back to live TMDB when key is available
+  const s1e10StaleCount = await fetchServerEpisode(partialShow, 1, 10, mockTlouEpisodeFetch, 'test-key');
+  assert(
+    Boolean(s1e10StaleCount) && s1e10StaleCount?.episodeId === 9991010 && s1e10StaleCount?.isVerified === true,
+    'Partial Ep Test 1b: Stale local season episodeCount does not block live TMDB lookup'
+  );
+
+  // Offline strict guard: missing local season still rejected cleanly when no TMDB key is available
+  const prevTmdbEnvOffline = process.env.TMDB_API_KEY;
+  delete process.env.TMDB_API_KEY;
+  const offlineMissingSeason = await fetchServerEpisode(partialShow, 2, 1, fetch, '');
+  if (prevTmdbEnvOffline !== undefined) process.env.TMDB_API_KEY = prevTmdbEnvOffline;
+  assert(
+    offlineMissingSeason === null,
+    'Partial Ep Test 1c: Offline mode without TMDB key does not invent missing Season 2'
+  );
+
+  // Test 2: Stale local numberOfSeasons=1 while TMDB confirms Season 2 exists
+  const staleSeasonCountShow = {
+    ...partialShow,
+    numberOfSeasons: 1
+  };
+  tlouCalledEndpoints.length = 0;
+  const s2e1StaleCount = await fetchServerEpisode(staleSeasonCountShow, 2, 1, mockTlouEpisodeFetch, 'test-key');
+  const staleCountSsr = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/tv/the-last-of-us-100088/2/1', {
+    preloadedMedia: staleSeasonCountShow,
+    fetchImpl: mockTlouEpisodeFetch,
+    tmdbApiKey: 'test-key'
+  });
+  assert(
+    tlouCalledEndpoints.some(u => u.includes('/tv/100088/season/2/episode/1')) &&
+      s2e1StaleCount?.episodeId === 5517228 &&
+      s2e1StaleCount?.isVerified === true &&
+      staleCountSsr.status === 200 &&
+      !staleCountSsr.isNoindex &&
+      staleCountSsr.canonicalUrl === 'https://tstream.online/watch/tv/the-last-of-us-100088/2/1',
+    'Partial Ep Test 2: Stale local numberOfSeasons=1 does not block live TMDB lookup or SSR indexability for Season 2'
+  );
+
+  // Test 3: Full SSR rendering via partialShow AND real catalogData.ts (without preloadedMedia) for S02E01, S02E02, S02E03
+  for (const epCheck of [
+    { ep: 1, title: 'Future Days', can: 'https://tstream.online/watch/tv/the-last-of-us-100088/2/1', rating: '8.2' },
+    { ep: 2, title: 'Through the Valley', can: 'https://tstream.online/watch/tv/the-last-of-us-100088/2/2', rating: '9.1' },
+    { ep: 3, title: 'The Path', can: 'https://tstream.online/watch/tv/the-last-of-us-100088/2/3', rating: '7.9' }
+  ]) {
+    const ssrPartial = await renderSeoResult(
+      sampleHtmlWithPreExistingCanonical,
+      `/watch/tv/the-last-of-us-100088/2/${epCheck.ep}`,
+      {
+        preloadedMedia: partialShow,
+        fetchImpl: mockTlouEpisodeFetch,
+        tmdbApiKey: 'test-key'
+      }
+    );
+    const ssrCatalog = await renderSeoResult(
+      sampleHtmlWithPreExistingCanonical,
+      `/watch/tv/the-last-of-us-100088/2/${epCheck.ep}`,
+      {
+        fetchImpl: mockTlouEpisodeFetch,
+        tmdbApiKey: 'test-key'
+      }
+    );
+    const jsonLdMatch = ssrCatalog.html.match(/<script\s+[^>]*id=["']json-ld-schema["'][^>]*>([\s\S]*?)<\/script>/i);
+    const jsonLd = jsonLdMatch ? JSON.parse(jsonLdMatch[1]) : null;
+    assert(
+      ssrPartial.status === 200 &&
+        ssrCatalog.status === 200 &&
+        !ssrPartial.isNoindex &&
+        !ssrCatalog.isNoindex &&
+        ssrPartial.canonicalUrl === epCheck.can &&
+        ssrCatalog.canonicalUrl === epCheck.can &&
+        jsonLd?.['@type'] === 'TVEpisode' &&
+        jsonLd?.episodeNumber === epCheck.ep &&
+        jsonLd?.partOfSeason?.seasonNumber === 2 &&
+        String(jsonLd?.name || '').includes(epCheck.title) &&
+        String(jsonLd?.aggregateRating?.ratingValue) === epCheck.rating &&
+        !ssrCatalog.html.includes('"ratingCount":5100') &&
+        ssrCatalog.html.includes('id="seo-prerender"') &&
+        ssrCatalog.html.includes(epCheck.title),
+      `Partial Ep Test 3: Full SSR for /watch/tv/the-last-of-us-100088/2/${epCheck.ep} (${epCheck.title}) returns 200, canonical, TVEpisode schema & semantic HTML`
+    );
+  }
+
+  // Test 4: Invalid episode / nonexistent season / mismatched TMDB payload -> HTTP 404 + noindex
+  const invalidS2E99 = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/tv/the-last-of-us-100088/2/99', {
+    preloadedMedia: partialShow,
+    fetchImpl: mockTlouEpisodeFetch,
+    tmdbApiKey: 'test-key'
+  });
+  const invalidS99E1 = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/tv/the-last-of-us-100088/99/1', {
+    preloadedMedia: partialShow,
+    fetchImpl: mockTlouEpisodeFetch,
+    tmdbApiKey: 'test-key'
+  });
+  const mockMismatchFetch = (async () =>
+    new Response(
+      JSON.stringify({
+        id: 5517228,
+        season_number: 1,
+        episode_number: 1,
+        name: 'Wrong Season Response',
+        overview: 'Mismatched payload that claims season 1 when season 2 was requested.'
+      }),
+      { status: 200 }
+    )) as typeof fetch;
+  const mismatchedSsr = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/tv/the-last-of-us-100088/2/1', {
+    preloadedMedia: partialShow,
+    fetchImpl: mockMismatchFetch,
+    tmdbApiKey: 'test-key'
+  });
+  assert(
+    invalidS2E99.status === 404 &&
+      invalidS2E99.isNoindex &&
+      !invalidS2E99.html.includes('Future Days') &&
+      invalidS99E1.status === 404 &&
+      invalidS99E1.isNoindex &&
+      mismatchedSsr.status === 404 &&
+      mismatchedSsr.isNoindex,
+    'Partial Ep Test 4: Nonexistent season/episode and mismatched TMDB season_number return genuine HTTP 404 without fabrication'
+  );
+
+  // Test 5: Transient TMDB errors (429, 5xx, network failure, AbortError timeout) -> 503 when uncached, stale cache preserved when primed
+  for (const failureCase of [
+    {
+      label: 'HTTP 429',
+      fn: (async () => new Response('rate limited', { status: 429 })) as typeof fetch
+    },
+    {
+      label: 'HTTP 503',
+      fn: (async () => new Response('upstream error', { status: 503 })) as typeof fetch
+    },
+    {
+      label: 'network error',
+      fn: (async () => {
+        throw new Error('ECONNRESET');
+      }) as typeof fetch
+    },
+    {
+      label: 'AbortError timeout',
+      fn: (async () => {
+        const err: any = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }) as typeof fetch
+    }
+  ]) {
+    const errSsr = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/tv/the-last-of-us-100088/2/1', {
+      preloadedMedia: partialShow,
+      fetchImpl: failureCase.fn,
+      tmdbApiKey: 'test-key'
+    });
+    assert(
+      errSsr.status === 503 && errSsr.isNoindex,
+      `Partial Ep Test 5 (${failureCase.label}): Uncached transient failure returns HTTP 503 (never false 404)`
+    );
+  }
+
+  // Test 5b: Real stale-while-error cache policy when cache entry expired fresh TTL but stays within stale TTL
+  clearSeoPluginCaches();
+  const realGlobalFetch = globalThis.fetch;
+  const realDateNow = Date.now;
+  let fakeClockMs = 1_750_000_000_000;
+  let upstreamMode: 'ok' | '503' = 'ok';
+  let staleFallbackFetchCount = 0;
+  try {
+    Date.now = () => fakeClockMs;
+    globalThis.fetch = (async () => {
+      staleFallbackFetchCount++;
+      if (upstreamMode === '503') {
+        return new Response('Service Unavailable', { status: 503 });
+      }
+      return new Response(JSON.stringify(tlouSeason2Payloads['2:1']), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }) as typeof fetch;
+
+    const primed = await fetchServerEpisode(partialShow, 2, 1, fetch, 'test-key');
+    // Advance clock 20 minutes (past 15m fresh TTL, still inside 6h stale TTL) & trigger upstream 503
+    fakeClockMs += 20 * 60 * 1000;
+    upstreamMode = '503';
+    const staleServed = await fetchServerEpisode(partialShow, 2, 1, fetch, 'test-key');
+    assert(
+      staleFallbackFetchCount === 2 &&
+        primed?.episodeId === 5517228 &&
+        staleServed?.episodeId === 5517228 &&
+        staleServed?.name === 'Future Days' &&
+        staleServed?.isVerified === true,
+      'Partial Ep Test 5b: Existing stale cache serves valid episode during transient TMDB 503 after fresh TTL expires'
+    );
+  } finally {
+    globalThis.fetch = realGlobalFetch;
+    Date.now = realDateNow;
+    clearSeoPluginCaches();
+  }
+
   console.log('\n--- ALL SEO, TAGS, GENRES, EPISODES, ARTIFACTS, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
 }
 

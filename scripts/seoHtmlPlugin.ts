@@ -835,14 +835,17 @@ export interface ServerEpisodeResult {
   voteAverage?: number;
   voteCount?: number;
   isVerified: boolean;
+  source?: 'local' | 'tmdb';
 }
 
 /**
  * Validates and fetches metadata for a specific TV episode.
- * - Returns null if the series, season, or episode is provably invalid/nonexistent (triggering HTTP 404).
+ * - Treats local show/season catalog metadata as a partial cache (never an exhaustive record of all TMDB seasons/episodes).
+ * - Uses complete local episode records when available, falling back to live TMDB `/tv/{id}/season/{s}/episode/{e}` whenever local metadata lacks the season or complete episode data.
+ * - Returns null only when TMDB definitively confirms nonexistence (404 / mismatched response) or when offline local bounds reject it.
  * - NEVER fabricates fake episode titles/overviews on TMDB failures or blindly assumes `episode <= 25`.
  * - NEVER copies parent series or season overview into episode overview.
- * - Throws 503 on transient upstream failure when no verified local/cached episode exists.
+ * - Throws 503 on transient upstream failure (429/5xx/network/timeout) when no valid stale cached episode exists.
  */
 export async function fetchServerEpisode(
   show: any,
@@ -864,28 +867,20 @@ export async function fetchServerEpisode(
     return null;
   }
 
-  if (show.numberOfSeasons && season > show.numberOfSeasons) {
-    return null;
-  }
+  const useCache = fetchImpl === fetch;
+  const cacheKey = `${showId}:${season}:${episode}`;
+  const effectiveKey = tmdbApiKey || (fetchImpl !== fetch ? 'test-key' : '');
 
   const showOverview = (show.overview || '').trim();
   const hasPopulatedSeasons = Array.isArray(show.seasons) && show.seasons.length > 0;
   const seasonObj = hasPopulatedSeasons
-    ? show.seasons.find((s: any) => s.seasonNumber === season)
+    ? show.seasons.find((s: any) => Number(s.seasonNumber) === season)
     : undefined;
-
-  if (hasPopulatedSeasons && !seasonObj) {
-    return null;
-  }
-
-  if (seasonObj?.episodeCount && episode > seasonObj.episodeCount) {
-    return null;
-  }
-
   const seasonOverview = (seasonObj?.overview || '').trim();
 
+  // 1. Check local episode cache optimization when season + episode exist locally
   if (seasonObj?.episodes && Array.isArray(seasonObj.episodes)) {
-    const exactEp = seasonObj.episodes.find((e: any) => e.episodeNumber === episode);
+    const exactEp = seasonObj.episodes.find((e: any) => Number(e.episodeNumber) === episode);
     if (exactEp) {
       const matchesParent = exactEp.showId === undefined || Number(exactEp.showId) === showId;
       const matchesSeason = exactEp.seasonNumber === undefined || Number(exactEp.seasonNumber) === season;
@@ -902,29 +897,30 @@ export async function fetchServerEpisode(
           hasValidEpId && hasGenuineName && uniqueOverview.length >= 15
         );
 
-        return {
-          episodeId: hasValidEpId ? epId : undefined,
-          name: rawName || `Episode ${episode}`,
-          hasGenuineName,
-          overview: uniqueOverview,
-          airDate: exactEp.airDate || seasonObj.airDate || '',
-          voteAverage: exactEp.voteAverage && exactEp.voteAverage > 0 ? Number(exactEp.voteAverage) : undefined,
-          voteCount: (exactEp as any).voteCount && (exactEp as any).voteCount > 0 ? Number((exactEp as any).voteCount) : undefined,
-          isVerified
-        };
+        if (isVerified || !effectiveKey) {
+          return {
+            episodeId: hasValidEpId ? epId : undefined,
+            name: rawName || `Episode ${episode}`,
+            hasGenuineName,
+            overview: uniqueOverview,
+            airDate: exactEp.airDate || seasonObj.airDate || '',
+            voteAverage: exactEp.voteAverage && exactEp.voteAverage > 0 ? Number(exactEp.voteAverage) : undefined,
+            voteCount: (exactEp as any).voteCount && (exactEp as any).voteCount > 0 ? Number((exactEp as any).voteCount) : undefined,
+            isVerified,
+            source: 'local'
+          };
+        }
       }
     }
   }
 
-  const useCache = fetchImpl === fetch;
-  const cacheKey = `${showId}:${season}:${episode}`;
-  if (useCache) {
-    const fresh = serverEpisodeCache.getFresh(cacheKey);
-    if (fresh) return fresh;
-  }
-
-  const effectiveKey = tmdbApiKey || (fetchImpl !== fetch ? 'test-key' : '');
+  // 2. Live TMDB validation (authoritative for missing/partial local seasons & updated season/episode counts)
   if (effectiveKey) {
+    if (useCache) {
+      const fresh = serverEpisodeCache.getFresh(cacheKey);
+      if (fresh) return fresh;
+    }
+
     return coalesceLookup(`episode:${cacheKey}`, useCache, async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 2500);
@@ -944,29 +940,41 @@ export async function fetchServerEpisode(
           throw make503Error(`TMDB episode lookup returned HTTP ${res.status}`);
         }
         if (!res.ok) {
-          // Non-transient error (e.g. 401 test key): only allow thin unverified playback within known verified season bounds
-          if (seasonObj?.episodeCount && episode <= seasonObj.episodeCount) {
+          // Non-transient error (e.g. 401 test key): only allow thin unverified playback within known verified local bounds
+          const withinLocalSeasonCount = !show.numberOfSeasons || season <= show.numberOfSeasons;
+          if (withinLocalSeasonCount && seasonObj?.episodeCount && episode <= seasonObj.episodeCount) {
             return {
               name: `Episode ${episode}`,
               hasGenuineName: false,
               overview: '',
               airDate: seasonObj.airDate || '',
-              isVerified: false
+              isVerified: false,
+              source: 'local'
             };
           }
           return null;
         }
 
         const epJson = await res.json();
+        const returnedSeason = Number(epJson?.season_number);
+        const returnedEpisode = Number(epJson?.episode_number);
         if (
-          (epJson?.season_number !== undefined && Number(epJson.season_number) !== season) ||
-          (epJson?.episode_number !== undefined && Number(epJson.episode_number) !== episode)
+          !epJson ||
+          typeof epJson !== 'object' ||
+          !Number.isInteger(returnedSeason) ||
+          returnedSeason !== season ||
+          !Number.isInteger(returnedEpisode) ||
+          returnedEpisode !== episode
         ) {
           return null;
         }
 
         const epId = Number(epJson?.id);
         const hasValidEpId = Number.isInteger(epId) && epId > 0;
+        if (!hasValidEpId) {
+          return null;
+        }
+
         const rawName = (epJson.name || '').trim();
         const hasGenuineName = isGenuineEpisodeName(rawName);
         const rawOverview = (epJson.overview || '').trim();
@@ -978,14 +986,15 @@ export async function fetchServerEpisode(
         );
 
         const data: ServerEpisodeResult = {
-          episodeId: hasValidEpId ? epId : undefined,
+          episodeId: epId,
           name: rawName || `Episode ${episode}`,
           hasGenuineName,
           overview: uniqueOverview,
           airDate: epJson.air_date || '',
           voteAverage: epJson.vote_average && epJson.vote_average > 0 ? Number(epJson.vote_average) : undefined,
           voteCount: epJson.vote_count && epJson.vote_count > 0 ? Number(epJson.vote_count) : undefined,
-          isVerified
+          isVerified,
+          source: 'tmdb'
         };
         if (useCache) serverEpisodeCache.set(cacheKey, data);
         return data;
@@ -995,22 +1004,30 @@ export async function fetchServerEpisode(
           if (stale) return stale;
         }
         if (err?.status === 503) throw err;
-        throw make503Error('TMDB episode lookup failed');
+        throw make503Error(err?.name === 'AbortError' ? 'TMDB episode lookup timed out' : 'TMDB episode lookup failed');
       } finally {
         clearTimeout(timeout);
       }
     });
   }
 
-  // Offline local validation when TMDB key is not configured:
-  // Allow playback URLs within verified season episodeCount as thin/noindex, NEVER invent episode <= 25 blindly.
+  // 3. Strict offline local validation when TMDB API key is not configured:
+  // Allow playback URLs only within positively known local season & episode bounds (thin/noindex).
+  // Never treat a missing season as verified, and never blindly invent episode <= 25 bounds.
+  if (show.numberOfSeasons && season > show.numberOfSeasons) {
+    return null;
+  }
+  if (hasPopulatedSeasons && !seasonObj) {
+    return null;
+  }
   if (seasonObj?.episodeCount && episode <= seasonObj.episodeCount) {
     return {
       name: `Episode ${episode}`,
       hasGenuineName: false,
       overview: '',
       airDate: seasonObj.airDate || '',
-      isVerified: false
+      isVerified: false,
+      source: 'local'
     };
   }
 
@@ -1907,8 +1924,15 @@ export async function renderSeoResult(
     }
 
     const seasonObjForSeo = Array.isArray(media.seasons)
-      ? media.seasons.find((s: any) => s.seasonNumber === route.season)
+      ? media.seasons.find((s: any) => Number(s.seasonNumber) === route.season)
       : undefined;
+    const isLiveTmdbEpisode = episodeData?.source === 'tmdb';
+    const effectiveNumberOfSeasons = isLiveTmdbEpisode
+      ? Math.max(Number(media.numberOfSeasons || 0), route.season || 0) || undefined
+      : media.numberOfSeasons;
+    const effectiveSeasonEpisodeCount = isLiveTmdbEpisode
+      ? Math.max(Number(seasonObjForSeo?.episodeCount || 0), route.episode || 0) || undefined
+      : seasonObjForSeo?.episodeCount;
     const isEpisodeIndexed =
       route.type === 'watch_tv'
         ? route.season !== undefined &&
@@ -1919,8 +1943,8 @@ export async function renderSeoResult(
             episodeId: episodeData?.episodeId,
             seasonNumber: route.season,
             episodeNumber: route.episode,
-            seasonEpisodeCount: seasonObjForSeo?.episodeCount,
-            numberOfSeasons: media.numberOfSeasons,
+            seasonEpisodeCount: effectiveSeasonEpisodeCount,
+            numberOfSeasons: effectiveNumberOfSeasons,
             episodeName: episodeData?.hasGenuineName ? episodeData.name : '',
             episodeOverview: episodeData?.overview,
             seriesOverview: media.overview,
