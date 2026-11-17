@@ -55,8 +55,8 @@ export async function decryptVidRockStreamUrl(value: string): Promise<string | n
 
 export class VidRockProvider implements VideoProvider {
     key = 'vidrock';
-    label = 'Core';
-    priority = 4;
+    label = 'Krypton';
+    priority = 3;
     enabled = true;
     timeout = 9000;
 
@@ -85,7 +85,7 @@ export class VidRockProvider implements VideoProvider {
 
             const entries = Object.entries(apiData) as [string, any][];
             const validated = await Promise.all(
-                entries.map(async ([_provider, info]) => {
+                entries.map(async ([subProvider, info]) => {
                     if (!info?.url) return null;
                     const decryptedUrl = await decryptVidRockStreamUrl(info.url);
                     if (!decryptedUrl) return null;
@@ -110,9 +110,11 @@ export class VidRockProvider implements VideoProvider {
                     if (!isValid) return null;
 
                     const sType = info.type === 'hls' || url.includes('.m3u8') ? 'hls' : 'mp4';
+                    const subLabel = String(subProvider || '').trim();
                     return {
-                        name: this.label,
+                        name: subLabel ? `${this.label} · ${subLabel}` : this.label,
                         url: `/api/proxy?url=${encodeURIComponent(url)}&origin=${encodeURIComponent(headers.Origin)}&referer=${encodeURIComponent(headers.Referer)}`,
+                        quality: sType === 'hls' ? '1080p Auto' : '1080p',
                         type: sType as 'hls' | 'mp4',
                         headers
                     };

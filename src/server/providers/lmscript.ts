@@ -3,8 +3,8 @@ import { getTmdbApiKey } from '../utils/helpers';
 
 export class LMScriptProvider implements VideoProvider {
     key = 'lmscript';
-    label = 'Valence';
-    priority = 3;
+    label = 'Onyx';
+    priority = 12;
     enabled = true;
     timeout = 10000;
 
@@ -40,10 +40,19 @@ export class LMScriptProvider implements VideoProvider {
             if (!movie || !movie.streams) return { success: false, source: this.key, error: 'Not found in LMScript' };
 
             const streams = movie.streams;
-            const qualities = Object.keys(streams);
+            const qScore = (q: string) => {
+                const s = q.toLowerCase();
+                if (s.includes('2160') || s.includes('4k')) return 2160;
+                if (s.includes('1440')) return 1440;
+                if (s.includes('1080')) return 1080;
+                if (s.includes('720')) return 720;
+                if (s.includes('480')) return 480;
+                return 0;
+            };
+            const qualities = Object.keys(streams).sort((a, b) => qScore(b) - qScore(a));
             if (!qualities.length) return { success: false, source: this.key, error: 'No streams' };
 
-            const bestQuality = qualities.includes('1080p') ? '1080p' : qualities[0];
+            const bestQuality = qualities[0];
             const streamUrl = streams[bestQuality];
 
             return {
@@ -52,7 +61,7 @@ export class LMScriptProvider implements VideoProvider {
                 url: `/api/proxy?url=${encodeURIComponent(streamUrl)}`,
                 type: streamUrl.includes('.m3u8') ? 'hls' : 'mp4',
                 sources: qualities.map(q => ({
-                    name: `Valence · ${q}`,
+                    name: `${this.label} · ${q}`,
                     url: `/api/proxy?url=${encodeURIComponent(streams[q])}`,
                     type: streams[q].includes('.m3u8') ? 'hls' : 'mp4',
                     quality: q

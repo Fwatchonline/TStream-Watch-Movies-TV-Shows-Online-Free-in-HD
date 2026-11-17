@@ -43,8 +43,8 @@ async function decryptPayload(payload: any): Promise<any> {
 
 export class MeowTVProvider implements VideoProvider {
     key = 'meowtv';
-    label = 'Apex';
-    priority = 6;
+    label = 'Flux';
+    priority = 7;
     enabled = true;
     timeout = 9000;
 
@@ -82,9 +82,10 @@ export class MeowTVProvider implements VideoProvider {
                 url: streamUrl,
                 type: decrypted.url.includes('.mp4') ? 'mp4' : 'hls',
                 sources: [{
-                    name: 'Apex · Multi HLS',
+                    name: `${this.label} · Multi HLS`,
                     url: streamUrl,
-                    type: 'hls'
+                    quality: decrypted.url.includes('.mp4') ? '1080p' : '1080p Auto',
+                    type: decrypted.url.includes('.mp4') ? 'mp4' : 'hls'
                 }]
             };
         } catch (e: any) {

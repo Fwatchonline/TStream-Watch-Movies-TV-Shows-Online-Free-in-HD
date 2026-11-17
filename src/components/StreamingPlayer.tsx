@@ -18,7 +18,7 @@ import { fetchSeasonEpisodesStrict } from '../services/tmdb';
 import { KeyedFetchCoordinator } from '../utils/retryState';
 import { DirectVideoPlayer } from './DirectVideoPlayer';
 import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
-import { fetchDirectStreams, DirectProviderResult } from '../services/directStreamClient';
+import { fetchDirectStreams, DirectProviderResult, formatQualityBadge, getQualityPillClasses } from '../services/directStreamClient';
 import { useAuth } from '../context/AuthContext';
 
 export type PlayerMode = 'direct' | 'web';
@@ -41,18 +41,23 @@ interface StreamingPlayerProps {
   webServer?: WebServer;
   onWebServerChange?: (server: WebServer) => void;
   customEmbedUrl?: string;
+  onStreamQualityDetected?: (badge: string) => void;
 }
 
 const HLS_CLUSTERS = [
-  { id: 'vidrock', name: 'Core (Default)', desc: 'Primary AES-GCM 1080p HLS Loaded First', badge: 'Default' },
-  { id: 'boxmovie', name: 'BoxMovie (CDN MP4)', desc: 'Direct 1080p / 720p / 480p MP4 CDN', badge: 'MP4' },
-  { id: 'meowtv', name: 'Apex (Multi-Audio)', desc: 'Multi-lingual HLS Stream', badge: 'Multi HLS' },
-  { id: 'vidapi', name: 'Vector (Adaptive HLS)', desc: 'Direct HLS Multi-bitrate 1080p/720p', badge: 'HLS' },
-  { id: 'eclipse', name: 'Eclipse (1080p MP4)', desc: 'Direct 1080p MP4 Stream', badge: 'MP4' },
-  { id: 'vidrift', name: 'Orion (1080p HLS)', desc: 'Direct 1080p Embed HLS Extraction', badge: 'HLS' },
-  { id: 'vidlink', name: 'Pulse (1080p HLS/MP4)', desc: 'Multi-Quality Stream', badge: 'Adaptive' },
-  { id: 'lmscript', name: 'Valence (Movies)', desc: '1080p MP4 / HLS High Speed', badge: 'Movies' },
-  { id: 'all', name: 'Sweep All Servers', desc: 'Load Core First + Background Failover', badge: 'All' }
+  { id: 'cinejoy', name: 'Aether (Default)', desc: 'Fastest Movie & Series HLS Stream', badge: '4K / 1080p' },
+  { id: 'cinesrc', name: 'Vortex', desc: 'High-Speed Primary Mirror HLS', badge: '4K / 1080p' },
+  { id: 'vidrock', name: 'Krypton', desc: 'Encrypted Adaptive HLS Stream', badge: '1080p' },
+  { id: 'vidup', name: 'Cobalt', desc: 'Ultra-Sharp Multi-Source Stream', badge: '4K / 1440p' },
+  { id: 'hexa', name: 'Helios', desc: 'Multi-Node Fast Mirror Stream', badge: '1440p / 720p' },
+  { id: 'boxmovie', name: 'Vertex', desc: 'Direct Multi-Resolution CDN MP4', badge: '1080p / 720p' },
+  { id: 'meowtv', name: 'Flux', desc: 'Multi-Lingual Audio HLS Stream', badge: '1080p' },
+  { id: 'vidapi', name: 'Sigma', desc: 'Adaptive Multi-Bitrate HLS', badge: '1080p' },
+  { id: 'eclipse', name: 'Spectra', desc: 'Direct High-Speed MP4 Mirror', badge: '1080p' },
+  { id: 'vidrift', name: 'Nimbus', desc: 'Direct Embed HLS Extractor', badge: '1080p' },
+  { id: 'vidlink', name: 'Quantum', desc: 'Multi-Quality Adaptive Stream', badge: '1080p' },
+  { id: 'lmscript', name: 'Onyx', desc: 'Dedicated Feature Film Stream', badge: '1080p' },
+  { id: 'all', name: 'Sweep All Servers', desc: 'Load Aether First + Background Failover', badge: 'Auto' }
 ];
 
 export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
@@ -70,7 +75,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   onPlayerModeChange,
   webServer: externalWebServer,
   onWebServerChange,
-  customEmbedUrl
+  customEmbedUrl,
+  onStreamQualityDetected
 }) => {
   const { user, saveContinueWatching, getContinueWatchingItem } = useAuth();
   const settings = getUserSettings();
@@ -104,14 +110,14 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   // Subtitles
   const [subtitles, setSubtitles] = useState<SubtitleTrack[]>([]);
 
-  // Direct HLS Streams (Default server: Core / vidrock loaded first, others in background)
+  // Direct HLS Streams (Default server: Aether / cinejoy loaded first, others in background)
   const [directResults, setDirectResults] = useState<DirectProviderResult[]>([]);
   const [loadingDirect, setLoadingDirect] = useState<boolean>(true);
   const [directFailed, setDirectFailed] = useState<boolean>(false);
   const [activeCluster, setActiveCluster] = useState<string>(() => {
     if (defaultDirectProvider) return defaultDirectProvider;
     const pref = settings.preferredServer;
-    if (!pref || pref === 'vidapi' || pref === 'all') return 'vidrock';
+    if (!pref || pref === 'vidapi' || pref === 'all') return 'cinejoy';
     return pref;
   });
   useEffect(() => {
@@ -236,8 +242,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   const [streamReloadTick, setStreamReloadTick] = useState<number>(0);
 
   // Progressive 2-Phase Direct Stream Loader:
-  // 1) Load default Core ('vidrock') FIRST for immediate playback
-  // 2) Then load all remaining servers in the background behind Core
+  // 1) Load fastest default Aether ('cinejoy') FIRST for immediate playback
+  // 2) Then load all remaining servers in the background behind Aether
   const loadDirectStreams = useCallback((targetCluster?: string) => {
     if (targetCluster && targetCluster !== activeCluster) {
       setActiveCluster(targetCluster);
@@ -257,7 +263,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
 
     let isMounted = true;
     const tmdbIdValue = media.tmdbId || media.id;
-    const primaryCluster = activeCluster === 'all' ? (defaultDirectProvider || 'vidrock') : activeCluster;
+    const primaryCluster = activeCluster === 'all' ? (defaultDirectProvider || 'cinejoy') : activeCluster;
 
     async function runProgressiveFetch() {
       setLoadingDirect(true);
@@ -265,7 +271,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
       setIsScanningAlternative(true);
 
       try {
-        // Step 1: Immediately fetch primary server (Core by default) in single mode
+        // Step 1: Immediately fetch primary server (Aether by default) in single mode
         const primaryResults = await fetchDirectStreams({
           tmdbId: tmdbIdValue,
           mediaType: media.mediaType,
@@ -277,11 +283,15 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
         if (!isMounted) return;
 
         if (primaryResults && primaryResults.length > 0) {
-          // Core succeeded -> show player & begin playback immediately!
+          // Primary succeeded -> show player & begin playback immediately!
           setDirectResults(primaryResults);
+          const firstSt = primaryResults[0]?.streams?.[0];
+          if (firstSt && onStreamQualityDetected) {
+            onStreamQualityDetected(formatQualityBadge(firstSt.quality, firstSt.type));
+          }
           setLoadingDirect(false);
 
-          // Step 2: Load remaining servers in the background and append after Core
+          // Step 2: Load remaining servers in the background and append after primary
           fetchDirectStreams({
             tmdbId: tmdbIdValue,
             mediaType: media.mediaType,
@@ -318,6 +328,10 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
         if (!isMounted) return;
 
         setDirectResults(remainingResults || []);
+        const fallbackSt = remainingResults?.[0]?.streams?.[0];
+        if (fallbackSt && onStreamQualityDetected) {
+          onStreamQualityDetected(formatQualityBadge(fallbackSt.quality, fallbackSt.type));
+        }
         if (!remainingResults || remainingResults.length === 0) {
           setDirectFailed(true);
         }
@@ -485,39 +499,48 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                     type="button"
                     onClick={() => setWebServer('fmov')}
                     className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                      webServer === 'fmov'
+                      webServer === 'fmov' || webServer.includes('fmov')
                         ? 'bg-[#F5C400] text-black shadow-sm font-black'
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${webServer === 'fmov' ? 'bg-black' : 'bg-emerald-400 shadow-[0_0_6px_#34d399]'}`} />
-                    <span>Server 1 · FMOV</span>
+                    <span className={`w-2 h-2 rounded-full ${webServer === 'fmov' || webServer.includes('fmov') ? 'bg-black' : 'bg-emerald-400 shadow-[0_0_6px_#34d399]'}`} />
+                    <span>Solstice</span>
+                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-black border ${webServer === 'fmov' || webServer.includes('fmov') ? 'bg-black/15 border-black/25 text-black' : getQualityPillClasses('4K / 1080p')}`}>
+                      4K / 1080p
+                    </span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setWebServer('movietvapi')}
                     className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                      webServer === 'movietvapi'
+                      webServer === 'movietvapi' || webServer.includes('movietv')
                         ? 'bg-[#F5C400] text-black shadow-sm font-black'
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${webServer === 'movietvapi' ? 'bg-black' : 'bg-cyan-400 shadow-[0_0_6px_#22d3ee]'}`} />
-                    <span>Server 2 · MovieTV API</span>
+                    <span className={`w-2 h-2 rounded-full ${webServer === 'movietvapi' || webServer.includes('movietv') ? 'bg-black' : 'bg-cyan-400 shadow-[0_0_6px_#22d3ee]'}`} />
+                    <span>Mirage</span>
+                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-black border ${webServer === 'movietvapi' || webServer.includes('movietv') ? 'bg-black/15 border-black/25 text-black' : getQualityPillClasses('1080p')}`}>
+                      1080p
+                    </span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setWebServer('vidsrc')}
                     className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                      webServer === 'vidsrc'
+                      webServer === 'vidsrc' || webServer.includes('vidsrc')
                         ? 'bg-[#F5C400] text-black shadow-sm font-black'
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${webServer === 'vidsrc' ? 'bg-black' : 'bg-purple-400 shadow-[0_0_6px_#c084fc]'}`} />
-                    <span>Server 3 · VidSrc</span>
+                    <span className={`w-2 h-2 rounded-full ${webServer === 'vidsrc' || webServer.includes('vidsrc') ? 'bg-black' : 'bg-purple-400 shadow-[0_0_6px_#c084fc]'}`} />
+                    <span>Vesper</span>
+                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-black border ${webServer === 'vidsrc' || webServer.includes('vidsrc') ? 'bg-black/15 border-black/25 text-black' : getQualityPillClasses('1080p')}`}>
+                      1080p
+                    </span>
                   </button>
 
                   {/* Reload embed button */}
@@ -608,6 +631,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
               isLightsDimmed={isLightsDimmed}
               onToggleLights={onToggleLights}
               backdropPath={media.backdropPath || media.posterPath}
+              onResolvedQualityChange={onStreamQualityDetected}
             />
           ) : (
             /* Direct HLS Stream Busy State with One-Click Fallback */
@@ -652,7 +676,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                         </div>
                         <span className="text-[10px] text-slate-400 block mt-0.5 truncate">{cluster.desc}</span>
                       </div>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-slate-300 font-bold uppercase">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border font-black uppercase shrink-0 ${getQualityPillClasses(cluster.badge)}`}>
                         {cluster.badge}
                       </span>
                     </button>
@@ -681,13 +705,24 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
             <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
             <span className="font-bold text-white truncate">
               {playerMode === 'direct'
-                ? `Direct Native Player (${HLS_CLUSTERS.find(c => c.id === activeCluster)?.name || 'Core (Default)'})`
-                : `Embed Player · ${webServer.replace(/^server_\d+_/, '').toUpperCase()}`}
+                ? (() => {
+                    const activeObj = HLS_CLUSTERS.find(c => c.id === activeCluster) || HLS_CLUSTERS[0];
+                    return `Direct Native Player (${activeObj.name} · ${activeObj.badge})`;
+                  })()
+                : `Embed Player · ${
+                    webServer.includes('fmov')
+                      ? 'Solstice (4K / 1080p)'
+                      : webServer.includes('movietv')
+                      ? 'Mirage (1080p)'
+                      : webServer.includes('vidsrc')
+                      ? 'Vesper (1080p)'
+                      : webServer.replace(/^server_\d+_/, '')
+                  }`}
             </span>
             <span className="hidden sm:inline text-[#3A3A40]">|</span>
             <span className="hidden sm:inline font-mono text-emerald-400 font-bold">
               {playerMode === 'direct'
-                ? `${(HLS_CLUSTERS.find(c => c.id === activeCluster)?.name.split(' ')[0] || 'Core')} First + Background Failover`
+                ? `${(HLS_CLUSTERS.find(c => c.id === activeCluster)?.name.split(' ')[0] || 'Aether')} First + Background Failover`
                 : 'Embed Mode Active'}
             </span>
           </div>

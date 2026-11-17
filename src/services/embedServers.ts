@@ -22,29 +22,33 @@ export interface DefaultServerPreferences {
 }
 
 export const DIRECT_PROVIDER_OPTIONS = [
-  { id: 'vidrock', name: 'Core (vidrock)', badge: 'HLS' },
-  { id: 'boxmovie', name: 'BoxMovie (boxmovie)', badge: 'MP4' },
-  { id: 'meowtv', name: 'Apex (meowtv)', badge: 'Multi HLS' },
-  { id: 'vidapi', name: 'Vector (vidapi)', badge: 'HLS' },
-  { id: 'eclipse', name: 'Eclipse (eclipse)', badge: 'MP4' },
-  { id: 'vidrift', name: 'Orion (vidrift)', badge: 'HLS' },
-  { id: 'vidlink', name: 'Pulse (vidlink)', badge: 'Adaptive' },
-  { id: 'lmscript', name: 'Valence (lmscript)', badge: 'Movies' }
+  { id: 'cinejoy', name: 'Aether (Default)', badge: '4K / 1080p' },
+  { id: 'cinesrc', name: 'Vortex', badge: '4K / 1080p' },
+  { id: 'vidrock', name: 'Krypton', badge: '1080p' },
+  { id: 'vidup', name: 'Cobalt', badge: '4K / 1440p' },
+  { id: 'hexa', name: 'Helios', badge: '1440p / 720p' },
+  { id: 'boxmovie', name: 'Vertex', badge: '1080p / 720p' },
+  { id: 'meowtv', name: 'Flux', badge: '1080p' },
+  { id: 'vidapi', name: 'Sigma', badge: '1080p' },
+  { id: 'eclipse', name: 'Spectra', badge: '1080p' },
+  { id: 'vidrift', name: 'Nimbus', badge: '1080p' },
+  { id: 'vidlink', name: 'Quantum', badge: '1080p' },
+  { id: 'lmscript', name: 'Onyx', badge: '1080p' }
 ] as const;
 
 export const DEFAULT_SERVER_PREFERENCES: DefaultServerPreferences = {
   movieServerId: 'server_1_direct',
   tvServerId: 'server_1_direct',
-  movieDirectProvider: 'vidrock',
-  tvDirectProvider: 'vidrock'
+  movieDirectProvider: 'cinejoy',
+  tvDirectProvider: 'cinejoy'
 };
 
 export const DEFAULT_SERVERS: EmbedServerConfig[] = [
   {
     id: 'server_1_direct',
-    name: 'Core · Direct Stream',
+    name: 'Aether · Direct Stream',
     type: 'direct',
-    badge: 'Default',
+    badge: '4K / 1080p',
     dotColor: '#34D399', // emerald
     enabled: true,
     order: 1,
@@ -52,9 +56,9 @@ export const DEFAULT_SERVERS: EmbedServerConfig[] = [
   },
   {
     id: 'server_2_movietvapi',
-    name: 'Server 2 · HD',
+    name: 'Mirage · Mirror',
     type: 'embed',
-    badge: 'HD',
+    badge: '1080p',
     dotColor: '#38BDF8', // sky blue
     enabled: true,
     order: 2,
@@ -64,9 +68,9 @@ export const DEFAULT_SERVERS: EmbedServerConfig[] = [
   },
   {
     id: 'server_3_vidsrc',
-    name: 'Server 3 · Backup',
+    name: 'Vesper · Mirror',
     type: 'embed',
-    badge: 'Backup',
+    badge: '1080p',
     dotColor: '#FBBF24', // amber
     enabled: true,
     order: 3,
@@ -76,9 +80,9 @@ export const DEFAULT_SERVERS: EmbedServerConfig[] = [
   },
   {
     id: 'server_4_fmov',
-    name: 'Server 4 · Ultra',
+    name: 'Solstice · Mirror',
     type: 'embed',
-    badge: 'Ultra',
+    badge: '4K / 1080p',
     dotColor: '#F5C400', // yellow
     enabled: true,
     order: 4,
@@ -93,13 +97,31 @@ const LOCAL_DIRECT_ENABLED_KEY = 'tstream_direct_stream_enabled';
 const LOCAL_DEFAULT_PREFS_KEY = 'tstream_default_server_prefs';
 const FIRESTORE_DOC_PATH = 'embedServers';
 
+const LEGACY_SERVER_NAMES_BY_ID: Record<string, string[]> = {
+  server_1_direct: [
+    'TStream Server',
+    'Core · Direct Stream',
+    'Core · Direct Native Stream (Auto Failover)'
+  ],
+  server_2_movietvapi: ['Server 2 · HD', 'Server 2 · MovieTV API'],
+  server_3_vidsrc: ['Server 3 · Backup', 'Server 3 · VidSrc'],
+  server_4_fmov: ['Server 4 · Ultra', 'Server 1 · FMOV']
+};
+
 function normalizeServerList(list: EmbedServerConfig[]): EmbedServerConfig[] {
-  return list.map((s) =>
-    s.id === 'server_1_direct' &&
-    (s.name === 'TStream Server' || s.name === 'Core · Direct Native Stream (Auto Failover)')
-      ? { ...s, name: DEFAULT_SERVERS[0].name, badge: DEFAULT_SERVERS[0].badge }
-      : s
-  );
+  const defaultMap = new Map(DEFAULT_SERVERS.map((d) => [d.id, d]));
+  return list.map((s) => {
+    const def = defaultMap.get(s.id);
+    if (!def) return s;
+    const legacyNames = LEGACY_SERVER_NAMES_BY_ID[s.id] || [];
+    if (legacyNames.includes(s.name)) {
+      return { ...s, name: def.name, badge: def.badge };
+    }
+    if (!s.badge || s.badge === 'Default' || s.badge === 'HD' || s.badge === 'Backup' || s.badge === 'Ultra') {
+      return { ...s, badge: def.badge };
+    }
+    return s;
+  });
 }
 
 function normalizeDefaultServerPreferences(raw: any): DefaultServerPreferences {

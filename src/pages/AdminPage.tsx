@@ -1395,11 +1395,11 @@ export const AdminPage: React.FC = () => {
                       : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
                   }`}
                 >
-                  {directStreamEnabled ? 'Direct Stream ON · Core Default' : 'Direct Stream OFF · Embed Only'}
+                  {directStreamEnabled ? 'Direct Stream ON · Aether Default' : 'Direct Stream OFF · Embed Only'}
                 </span>
               </div>
               <p className="text-xs text-[#A6A6AC] leading-relaxed max-w-2xl">
-                When <strong className="text-white">ON</strong>, Watch Page starts in Direct Stream (<strong className="text-[#F5C400]">Core</strong> first, then other direct servers in background) with Embed Servers also selectable in the server bar. Turn <strong className="text-white">OFF</strong> to hide Direct Stream and use Embed Players only.
+                When <strong className="text-white">ON</strong>, Watch Page starts in Direct Stream (<strong className="text-[#F5C400]">Aether</strong> first, then other direct servers in background) with Embed Servers also selectable in the server bar. Turn <strong className="text-white">OFF</strong> to hide Direct Stream and use Embed Players only.
               </p>
             </div>
 

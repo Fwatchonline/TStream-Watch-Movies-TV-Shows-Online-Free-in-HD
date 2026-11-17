@@ -39,6 +39,7 @@ import {
   DEFAULT_SERVERS
 } from '../services/embedServers';
 import { getUserPlayerSettings } from '../services/playerSettings';
+import { getQualityPillClasses } from '../services/directStreamClient';
 import { createMediaSlug } from '../utils/slug';
 import { updateMediaSEO, updateSEO } from '../utils/seo';
 
@@ -86,6 +87,7 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   );
   const [selectedServerId, setSelectedServerId] = useState<string>(() => initialDefaultSrv.id);
   const [customEmbedUrl, setCustomEmbedUrl] = useState<string | undefined>(undefined);
+  const [liveDirectQualityBadge, setLiveDirectQualityBadge] = useState<string | null>(null);
 
   // Cinema UI Controls
   const [isTheaterMode, setIsTheaterMode] = useState(userSettings.defaultTheaterMode || false);
@@ -122,12 +124,14 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   useEffect(() => {
     setCurrentSeason(season);
     setCurrentEpisode(episode);
+    setLiveDirectQualityBadge(null);
   }, [season, episode]);
 
   useEffect(() => {
     let isMounted = true;
     async function load() {
       setLoading(true);
+      setLiveDirectQualityBadge(null);
       window.scrollTo({ top: 0, behavior: 'instant' as any });
       const data = await getMediaDetail(mediaId, mediaType);
       if (isMounted) {
@@ -623,6 +627,7 @@ export const WatchPage: React.FC<WatchPageProps> = ({
             webServer={activeWebServer}
             onWebServerChange={(s) => setActiveWebServer(s)}
             customEmbedUrl={customEmbedUrl}
+            onStreamQualityDetected={setLiveDirectQualityBadge}
           />
         </div>
 
@@ -647,24 +652,33 @@ export const WatchPage: React.FC<WatchPageProps> = ({
               return [...directList, ...embedList];
             })().map((srv) => {
               const isActive = selectedServerId === srv.id;
+              const resolutionLabel =
+                srv.type === 'direct' && liveDirectQualityBadge
+                  ? liveDirectQualityBadge
+                  : srv.badge || '1080p';
               return (
                 <button
                   key={srv.id}
                   type="button"
                   onClick={() => handleSelectServerConfig(srv)}
-                  className={`px-3 sm:px-4 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                  className={`px-3 sm:px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
                     isActive
                       ? 'bg-[#23232a] text-white border border-[#F5C400] ring-1 ring-[#F5C400]/40 shadow-sm'
                       : 'bg-[#1b1b20] text-[#A6A6AC] hover:text-white border border-[#303036] hover:bg-[#232328]'
                   }`}
                 >
                   <span
-                    className={`w-2 h-2 rounded-full ${
+                    className={`w-2 h-2 rounded-full shrink-0 ${
                       isActive ? 'shadow-[0_0_8px_rgba(245,196,0,0.8)]' : ''
                     }`}
                     style={{ backgroundColor: srv.dotColor || '#F5C400' }}
                   />
                   <span>{srv.name}</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md border text-[10px] font-black tracking-wide shrink-0 ${getQualityPillClasses(resolutionLabel)}`}
+                  >
+                    {resolutionLabel}
+                  </span>
                 </button>
               );
             })}
@@ -855,7 +869,7 @@ export const WatchPage: React.FC<WatchPageProps> = ({
         mediaType={detail.mediaType}
         mediaTitle={detail.title}
         currentServer={
-          servers.find((s) => s.id === selectedServerId)?.name || 'TStream Server (Direktan Stream)'
+          servers.find((s) => s.id === selectedServerId)?.name || 'Aether · Direct Stream'
         }
       />
     </div>

@@ -31,7 +31,7 @@ import {
   X,
   Search
 } from 'lucide-react';
-import { ResolvedStream, DirectProviderResult, cleanServerDisplay } from '../services/directStreamClient';
+import { ResolvedStream, DirectProviderResult, cleanServerDisplay, formatQualityBadge, stripQualityFromName, getQualityPillClasses } from '../services/directStreamClient';
 import { SubtitleTrack, Episode } from '../types/media';
 import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
 import { getUserPlayerSettings, UserPlayerSettings } from '../services/playerSettings';
@@ -65,6 +65,7 @@ interface DirectVideoPlayerProps {
   isLightsDimmed?: boolean;
   onToggleLights?: () => void;
   backdropPath?: string;
+  onResolvedQualityChange?: (qualityLabel: string) => void;
 }
 
 type ModalView =
@@ -172,7 +173,8 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   onToggleTheater,
   isLightsDimmed,
   onToggleLights,
-  backdropPath
+  backdropPath,
+  onResolvedQualityChange
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -259,6 +261,24 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   );
   const [availableQualities, setAvailableQualities] = useState<string[]>(['Auto', '1080p', '720p', '480p']);
   const [streamResolution, setStreamResolution] = useState<{ width: number; height: number } | null>(null);
+  const [detectedStreamQualities, setDetectedStreamQualities] = useState<Record<string, string>>({});
+
+  const reportResolvedResolution = useCallback(
+    (streamUrl: string, width: number, height: number) => {
+      let label = `${height}p`;
+      if (width >= 3800 || height >= 2160) label = '4K';
+      else if (width >= 2500 || height >= 1440) label = '1440p';
+      else if (width >= 1800 || height >= 1000) label = '1080p';
+      else if (width >= 1200 || height >= 680) label = '720p';
+      else if (width >= 800 || height >= 450) label = '480p';
+
+      setDetectedStreamQualities((prev) =>
+        prev[streamUrl] === label ? prev : { ...prev, [streamUrl]: label }
+      );
+      onResolvedQualityChange?.(label);
+    },
+    [onResolvedQualityChange]
+  );
 
   // Audio tracks
   const [audioTracks, setAudioTracks] = useState<Array<{ id: number; name: string }>>([
@@ -335,7 +355,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         return nextIdx;
       });
     } else {
-      setLoadError(`Stream interrupted on ${cleanServerDisplay(activeStream?.server)}. Please select another source.`);
+      setLoadError(`Stream interrupted on ${stripQualityFromName(cleanServerDisplay(activeStream?.server || 'Aether'))}. Please select another source.`);
       setIsLoading(false);
     }
   }, [allStreams, activeStream, triggerHud]);
@@ -470,6 +490,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                 mediaType: isMovie ? 'movie' : 'tv',
                 releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
               }));
+              reportResolvedResolution(streamUrl, top.width || 0, top.height);
             }
           }
         }
@@ -493,6 +514,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               mediaType: isMovie ? 'movie' : 'tv',
               releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
             }));
+            reportResolvedResolution(streamUrl, lvl.width || 0, lvl.height);
           }
         }
       });
@@ -532,6 +554,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
             mediaType: isMovie ? 'movie' : 'tv',
             releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
           }));
+          reportResolvedResolution(streamUrl, video.videoWidth, video.videoHeight);
         }
         triggerAutoPlay();
       };
@@ -546,6 +569,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           mediaType: isMovie ? 'movie' : 'tv',
           releaseDate: releaseYear ? `${releaseYear}-01-01` : undefined
         }));
+        reportResolvedResolution(streamUrl, video.videoWidth, video.videoHeight);
       }
     };
     video.addEventListener('resize', onVideoResize);
@@ -1573,6 +1597,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           <div className="space-y-2 max-h-40 sm:max-h-72 overflow-y-auto no-scrollbar">
             {allStreams.map((st, idx) => {
               const isActive = idx === selectedStreamIndex;
+              const rawLabel = st.server && st.server !== st.providerName ? st.server : st.providerName || st.server;
+              const displayName = stripQualityFromName(cleanServerDisplay(rawLabel));
+              const streamKey = st.playUrl || st.url;
+              const qBadge = detectedStreamQualities[streamKey] || formatQualityBadge(st.quality, st.type);
               return (
                 <div
                   key={`${st.server}-${idx}`}
@@ -1583,24 +1611,29 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                       : 'hover:bg-white/5 border border-transparent'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-bold text-white">{st.providerName || st.server}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-xs font-bold text-white truncate">{displayName}</span>
+                        <span className={`px-1.5 py-0.5 rounded border text-[9px] font-black tracking-wide shrink-0 ${getQualityPillClasses(qBadge)}`}>
+                          {qBadge}
+                        </span>
+                      </div>
                       <div className="text-[10px] text-zinc-400 mt-0.5">
-                        {st.type === 'hls' ? 'Multi Audio Support & HD' : 'Smooth Playback & Direct HD'}
+                        {st.type === 'hls' ? `Multi Audio · HLS (${qBadge})` : `Direct CDN · MP4 (${qBadge})`}
                       </div>
                     </div>
                     {isActive ? (
-                      <Check className="w-4 h-4 text-white" />
+                      <Check className="w-4 h-4 text-white shrink-0" />
                     ) : (
-                      <span className="text-zinc-500 font-bold text-sm">—</span>
+                      <span className="text-zinc-500 font-bold text-sm shrink-0">—</span>
                     )}
                   </div>
 
-                  {/* Active Source Card (image_480f9ced.png) */}
+                  {/* Active Source Card */}
                   {isActive && (
                     <div className="mt-2.5 flex items-center justify-between bg-[#121215] px-3 py-2 rounded-lg border border-white/5 text-xs">
-                      <span className="font-semibold text-white">Source 1</span>
+                      <span className="font-semibold text-white">Source 1 · {qBadge}</span>
                       <span className="text-[10px] font-bold text-emerald-400">Ready</span>
                     </div>
                   )}

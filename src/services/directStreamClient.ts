@@ -22,51 +22,102 @@ export interface ResolveResponse {
   error?: string;
 }
 
+export function formatQualityBadge(rawQuality?: string, streamType?: string): string {
+  const q = String(rawQuality || '').trim();
+  const lower = q.toLowerCase();
+  if (lower.includes('4k') || lower.includes('2160')) {
+    if (lower.includes('1080')) return '4K / 1080p';
+    if (lower.includes('1440')) return '4K / 1440p';
+    return '4K';
+  }
+  if (lower.includes('1440')) return '1440p';
+  if (lower.includes('1080')) return '1080p';
+  if (lower.includes('720')) return '720p';
+  if (lower.includes('480')) return '480p';
+  if (lower.includes('360')) return '360p';
+  if (lower === 'auto' || lower === 'hls') return '1080p';
+  if (streamType === 'mp4') return '1080p';
+  return '1080p';
+}
+
+export function stripQualityFromName(name: string): string {
+  return String(name || '')
+    .replace(/\s*·\s*(4K|2160p|1440p|1080p|720p|480p|360p)\s*$/i, '')
+    .replace(/\s*\((4K|2160p|1440p|1080p|720p|480p|360p|Auto(?:\s+HLS)?)\)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function getQualityPillClasses(badge?: string): string {
+  const b = String(badge || '').toLowerCase();
+  if (b.includes('4k') || b.includes('2160')) {
+    return 'border-[#F5C400]/60 bg-[#F5C400]/15 text-[#F5C400]';
+  }
+  if (b.includes('1440')) {
+    return 'border-cyan-400/50 bg-cyan-500/15 text-cyan-300';
+  }
+  if (b.includes('1080')) {
+    return 'border-sky-400/50 bg-sky-500/15 text-sky-300';
+  }
+  if (b.includes('720')) {
+    return 'border-emerald-400/50 bg-emerald-500/15 text-emerald-300';
+  }
+  if (b.includes('480') || b.includes('360')) {
+    return 'border-amber-400/50 bg-amber-500/15 text-amber-300';
+  }
+  return 'border-white/20 bg-white/10 text-zinc-200';
+}
+
 /**
- * Universal client-side sanitizer to preserve and highlight verified fast servers
+ * Universal client-side sanitizer to highlight renamed streaming servers cleanly.
  */
 export function cleanServerDisplay(name: string): string {
-  if (!name) return 'Vector (1080p)';
+  if (!name) return 'Aether';
   let s = name;
 
-  // Preserve core fast providers
-  if (/^(Vector|Valence|Eclipse|BoxMovie|Apex|Core|Orion|Pulse)\b/i.test(s)) {
+  // Preserve new server names (with optional · sub-server node)
+  if (/^(Aether|Vortex|Krypton|Cobalt|Helios|Vertex|Flux|Sigma|Spectra|Nimbus|Quantum|Onyx)\b/i.test(s)) {
     return s;
   }
-  if (/vidapi/i.test(s)) return 'Vector';
-  if (/lmscript/i.test(s)) return 'Valence';
-  if (/boxmovie/i.test(s)) return 'BoxMovie';
-  if (/meowtv/i.test(s)) return 'Apex';
-  if (/vidrock/i.test(s)) return 'Core';
-  if (/vidrift/i.test(s)) return 'Orion';
-  if (/vidlink/i.test(s)) return 'Pulse';
+  if (/cinejoy|\bnova\b/i.test(s)) return 'Aether';
+  if (/cinesrc|\bprism\b/i.test(s)) return 'Vortex';
+  if (/vidrock|\bcore\b/i.test(s)) return 'Krypton';
+  if (/vidup|\bzenith\b/i.test(s)) return 'Cobalt';
+  if (/hexa|\batlas\b/i.test(s)) return 'Helios';
+  if (/boxmovie/i.test(s)) return 'Vertex';
+  if (/meowtv|\bapex\b/i.test(s)) return 'Flux';
+  if (/vidapi|\bvector\b/i.test(s)) return 'Sigma';
+  if (/eclipse/i.test(s)) return 'Spectra';
+  if (/vidrift|\borion\b/i.test(s)) return 'Nimbus';
+  if (/vidlink|\bpulse\b/i.test(s)) return 'Quantum';
+  if (/lmscript|\bvalence\b/i.test(s)) return 'Onyx';
 
-  s = s.replace(/api\.fmov\.my/gi, 'Eclipse');
-  s = s.replace(/fmov/gi, 'Eclipse');
-  s = s.replace(/showbox/gi, 'Poseidon 4K');
-  s = s.replace(/febbox/gi, 'Poseidon');
-  s = s.replace(/vaplayer/gi, 'Vector Core');
-  s = s.replace(/castletv/gi, 'Athena');
-  s = s.replace(/4khdhub/gi, 'Apollo 4K');
-  s = s.replace(/streamflix/gi, 'Ares Edge');
-  s = s.replace(/netmirror/gi, 'Chronos Mirror');
-  s = s.replace(/dahmermovies/gi, 'Ares');
-  s = s.replace(/onetouchtv/gi, 'Titan');
+  s = s.replace(/api\.fmov\.my/gi, 'Spectra');
+  s = s.replace(/fmov/gi, 'Solstice');
+  s = s.replace(/showbox/gi, 'Solstice');
+  s = s.replace(/febbox/gi, 'Solstice');
+  s = s.replace(/vaplayer/gi, 'Sigma');
+  s = s.replace(/castletv/gi, 'Nimbus');
+  s = s.replace(/4khdhub/gi, 'Cobalt');
+  s = s.replace(/streamflix/gi, 'Vortex');
+  s = s.replace(/netmirror/gi, 'Mirage');
+  s = s.replace(/dahmermovies/gi, 'Vertex');
+  s = s.replace(/onetouchtv/gi, 'Helios');
 
-  // Strip movie / series titles after separator (e.g. "Poseidon 4K · Magnum P.I. - S1E1...")
+  // Strip movie / series titles after separator
   if (s.includes(' · ')) {
     const parts = s.split(' · ');
     const prefix = parts[0].trim();
     const rest = parts.slice(1).join(' · ').trim();
 
-    if (/^(cluster|route|server|primary|backup|node|source|direct|ultra|quantum|master|stream|\d+p)\b/i.test(rest)) {
+    if (/^(cluster|route|server|primary|backup|node|source|direct|ultra|quantum|master|stream|\d+p|4k)\b/i.test(rest)) {
       s = `${prefix} · ${rest}`;
     } else {
       s = prefix;
     }
   }
 
-  // Also strip any " - Magnum P.I. - S1E1..." or " - Title"
+  // Also strip any " - Title"
   if (s.includes(' - ')) {
     const parts = s.split(' - ');
     const prefix = parts[0].trim();
@@ -113,8 +164,11 @@ export async function fetchDirectStreams(params: {
         const orchestratedResults: DirectProviderResult[] = data.servers.map((s: any) => ({
           provider: s.key,
           providerName: s.label,
-          streams: (s.sources && s.sources.length > 0 ? s.sources : [{ name: s.label, url: s.url, type: s.type }]).map((sourceItem: any) => ({
-            quality: sourceItem.quality || (sourceItem.type === 'hls' ? '1080p Auto' : '1080p'),
+          streams: (s.sources && s.sources.length > 0
+            ? s.sources
+            : [{ name: s.label, url: s.url, quality: s.quality, type: s.type }]
+          ).map((sourceItem: any) => ({
+            quality: sourceItem.quality || s.quality || (sourceItem.type === 'hls' ? '1080p Auto' : '1080p'),
             type: (sourceItem.type || s.type || 'hls') as 'hls' | 'mp4',
             url: sourceItem.url,
             playUrl: sourceItem.url,

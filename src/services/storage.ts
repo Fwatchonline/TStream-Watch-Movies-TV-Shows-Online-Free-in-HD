@@ -15,7 +15,7 @@ export interface UserSettings {
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
-  preferredServer: 'vidrock',
+  preferredServer: 'cinejoy',
   preferredSubtitleLang: 'en',
   preferredWatchRegion: 'US',
   autoplayNext: true,

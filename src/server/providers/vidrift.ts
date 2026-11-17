@@ -5,8 +5,8 @@ const BASE = 'https://embed.vidrift.in';
 
 export class VidRiftProvider implements VideoProvider {
     key = 'vidrift';
-    label = 'Orion';
-    priority = 5;
+    label = 'Nimbus';
+    priority = 10;
     enabled = true;
     timeout = 9000;
 
@@ -69,7 +69,7 @@ export class VidRiftProvider implements VideoProvider {
                 }
             }
 
-            return { success: false, source: this.key, error: 'No Orion stream found' };
+            return { success: false, source: this.key, error: 'No Nimbus stream found' };
         } catch (err: any) {
             return { success: false, source: this.key, error: err.message };
         }

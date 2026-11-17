@@ -20,21 +20,21 @@ export interface DirectStreamResult {
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
 export function sanitizeServerLabel(label: string): string {
-  if (!label) return 'Zeus (1080p)';
+  if (!label) return 'Spectra (1080p)';
   let s = label;
-  s = s.replace(/api\.fmov\.my/gi, 'Zeus Ultra');
-  s = s.replace(/fmov/gi, 'Zeus');
-  s = s.replace(/showbox/gi, 'Zeus 4K');
+  s = s.replace(/api\.fmov\.my/gi, 'Spectra');
+  s = s.replace(/fmov/gi, 'Solstice');
+  s = s.replace(/showbox/gi, 'Solstice 4K');
   s = s.replace(/febbox/gi, 'Quantum');
-  s = s.replace(/vidapi/gi, 'Apollo');
-  s = s.replace(/vaplayer/gi, 'Zeus Core');
-  s = s.replace(/vidlink/gi, 'Hermes');
-  s = s.replace(/castletv/gi, 'Athena');
-  s = s.replace(/4khdhub/gi, 'Apollo 4K');
-  s = s.replace(/streamflix/gi, 'Ares Edge');
-  s = s.replace(/netmirror/gi, 'Chronos Mirror');
-  s = s.replace(/dahmermovies/gi, 'Ares');
-  s = s.replace(/onetouchtv/gi, 'Titan');
+  s = s.replace(/vidapi/gi, 'Sigma');
+  s = s.replace(/vaplayer/gi, 'Sigma Core');
+  s = s.replace(/vidlink/gi, 'Quantum');
+  s = s.replace(/castletv/gi, 'Nimbus');
+  s = s.replace(/4khdhub/gi, 'Cobalt 4K');
+  s = s.replace(/streamflix/gi, 'Vortex');
+  s = s.replace(/netmirror/gi, 'Mirage');
+  s = s.replace(/dahmermovies/gi, 'Vertex');
+  s = s.replace(/onetouchtv/gi, 'Helios');
   s = s.replace(/\[\s*\]/g, '').replace(/\s+/g, ' ').trim();
   return s;
 }
@@ -98,7 +98,7 @@ export async function resolveVidLink(id: number | string, s?: number | null, e?:
             type: 'mp4',
             url: item.url,
             originalUrl: item.url,
-            server: `Nebula Velocity (${q}p)`,
+            server: `Quantum · ${q}p`,
             headers: { 'User-Agent': USER_AGENT }
           });
         }
@@ -108,11 +108,11 @@ export async function resolveVidLink(id: number | string, s?: number | null, e?:
     // HLS playlist if present
     if (stream.playlist) {
       streams.unshift({
-        quality: 'Auto (HLS)',
+        quality: '1080p',
         type: 'hls',
         url: stream.playlist,
         originalUrl: stream.playlist,
-        server: 'Nebula Velocity (Quantum HLS)',
+        server: 'Quantum · HLS',
         headers: { 'User-Agent': USER_AGENT }
       });
     }
@@ -121,7 +121,7 @@ export async function resolveVidLink(id: number | string, s?: number | null, e?:
 
     return {
       provider: 'vidlink',
-      providerName: 'Nebula Velocity Engine',
+      providerName: 'Quantum',
       streams,
       subtitles
     };
@@ -176,7 +176,7 @@ export async function resolveVidAPI(id: number | string, s?: number | null, e?: 
         type: isM3u8 ? 'hls' : 'mp4',
         url: rawUrl,
         originalUrl: rawUrl,
-        server: idx === 0 ? 'Apollo Master · Primary' : `Apollo Master · Route ${idx + 1}`,
+        server: idx === 0 ? 'Sigma · Primary' : `Sigma · Stream ${idx + 1}`,
         headers: {
           'Origin': 'https://nextgencloudfabric.com',
           'Referer': 'https://nextgencloudfabric.com/',
@@ -187,7 +187,7 @@ export async function resolveVidAPI(id: number | string, s?: number | null, e?: 
 
     return {
       provider: 'vidapi',
-      providerName: 'Apollo Master HLS',
+      providerName: 'Sigma',
       streams,
       subtitles
     };
@@ -277,7 +277,7 @@ export async function resolveVidRock(id: number | string, s?: number | null, e?:
         type: cleanUrl.includes('.m3u8') ? 'hls' : 'mp4',
         url: cleanUrl,
         originalUrl: cleanUrl,
-        server: `Titan DeepCore · ${providerName}`,
+        server: `Krypton · ${providerName}`,
         headers: {
           'User-Agent': USER_AGENT,
           'Referer': isXpass ? 'https://play.xpass.top/' : baseUrl,
@@ -290,7 +290,7 @@ export async function resolveVidRock(id: number | string, s?: number | null, e?:
 
     return {
       provider: 'vidrock',
-      providerName: 'Titan DeepCore HLS',
+      providerName: 'Krypton',
       streams,
       subtitles: []
     };
@@ -353,7 +353,7 @@ export async function resolveShowbox(
         type: isHls ? 'hls' : 'mp4',
         url: st.url,
         originalUrl: st.url,
-        server: `Poseidon 4K · Cluster ${clusterNum}`,
+        server: `Solstice · Node ${clusterNum}`,
         headers: st.headers || { 'User-Agent': USER_AGENT }
       });
     }
@@ -362,7 +362,7 @@ export async function resolveShowbox(
 
     return {
       provider: 'showbox',
-      providerName: 'Poseidon Quantum 4K',
+      providerName: 'Solstice',
       streams,
       subtitles
     };
@@ -476,20 +476,20 @@ export async function resolveFmovMy(
       const isHls = (st.url.includes('.m3u8') || (st.quality && st.quality.toLowerCase().includes('hls')) || (st.name && st.name.toLowerCase().includes('hls')));
 
       // Format provider label cleanly (especially Showbox)
-      let providerLabel = st.sourceProvider || st.provider || 'Zeus';
+      let providerLabel = st.sourceProvider || st.provider || 'Spectra';
       const pLower = providerLabel.toLowerCase();
       if (st.subProvider === 'showbox' || pLower.includes('febbox') || pLower.includes('showbox')) {
-        providerLabel = 'Zeus 4K';
+        providerLabel = 'Solstice';
       } else if (pLower === 'vaplayer') {
-        providerLabel = 'Zeus Core';
+        providerLabel = 'Sigma';
       } else if (pLower === 'vidlink') {
-        providerLabel = 'Hermes';
+        providerLabel = 'Quantum';
       } else if (pLower === 'streamflix') {
-        providerLabel = 'Ares Edge';
+        providerLabel = 'Vortex';
       } else if (pLower === '4khdhub') {
-        providerLabel = 'Apollo 4K';
+        providerLabel = 'Cobalt';
       } else if (pLower === 'netmirror') {
-        providerLabel = 'Chronos Mirror';
+        providerLabel = 'Mirage';
       }
 
       const rawTitle = (st.title || st.name || `${providerLabel} Stream`).replace(/[\r\n]+/g, ' · ').trim();
@@ -499,15 +499,15 @@ export async function resolveFmovMy(
       const rawQ = (st.quality || '').trim().toLowerCase();
       let displayQuality = '1080p';
       if (rawQ === 'org' || rawQ.includes('2160') || cleanTitle.includes('2160p') || cleanTitle.includes('4k') || cleanTitle.includes('4K')) {
-        displayQuality = '2160p 4K';
+        displayQuality = '4K';
       } else if (rawQ.includes('1080')) {
-        displayQuality = '1080p Full HD';
+        displayQuality = '1080p';
       } else if (rawQ.includes('720')) {
-        displayQuality = '720p HD';
+        displayQuality = '720p';
       } else if (rawQ.includes('480')) {
         displayQuality = '480p';
       } else if (isHls) {
-        displayQuality = 'Auto (HLS)';
+        displayQuality = '1080p';
       }
 
       const clusterNum = rawStreams.indexOf(st) + 1;
@@ -516,7 +516,7 @@ export async function resolveFmovMy(
         type: isHls ? 'hls' : 'mp4',
         url: st.url,
         originalUrl: st.url,
-        server: `${providerLabel} · Cluster ${clusterNum}`,
+        server: `${providerLabel} · Node ${clusterNum}`,
         headers: st.headers || { 'User-Agent': USER_AGENT }
       });
 
@@ -551,7 +551,7 @@ export async function resolveFmovMy(
 
     return {
       provider: 'fmov',
-      providerName: 'Zeus Ultra 4K',
+      providerName: 'Spectra',
       streams,
       subtitles
     };

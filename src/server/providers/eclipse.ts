@@ -5,8 +5,8 @@ const API_BASE = 'https://api.fmov.my/api/streams/vidlink';
 
 export class EclipseProvider implements VideoProvider {
     key = 'eclipse';
-    label = 'Eclipse';
-    priority = 4;
+    label = 'Spectra';
+    priority = 9;
     enabled = true;
     timeout = 8000;
 
@@ -29,18 +29,30 @@ export class EclipseProvider implements VideoProvider {
             }).catch(() => null);
 
             if (!data?.success || !Array.isArray(data.streams) || data.streams.length === 0) {
-                return { success: false, source: this.key, error: 'No streams from Eclipse' };
+                return { success: false, source: this.key, error: 'No streams from Spectra' };
             }
 
             const playable = data.streams.filter((s: any) => s?.url && !s.url.toLowerCase().endsWith('.mkv'));
             if (!playable.length) return { success: false, source: this.key, error: 'No compatible mp4 streams' };
 
-            const sources = playable.map((s: any) => ({
-                name: `Eclipse · ${s.quality || '1080p'}`,
-                url: `/api/proxy?url=${encodeURIComponent(s.url)}`,
-                quality: s.quality || '1080p',
-                type: s.url.includes('.m3u8') ? 'hls' : 'mp4'
-            }));
+            const qRank = (q?: string) => {
+                const s = String(q || '').toLowerCase();
+                if (s.includes('2160') || s.includes('4k')) return 2160;
+                if (s.includes('1440')) return 1440;
+                if (s.includes('1080')) return 1080;
+                if (s.includes('720')) return 720;
+                if (s.includes('480')) return 480;
+                return 0;
+            };
+
+            const sources = playable
+                .map((s: any) => ({
+                    name: `${this.label} · ${s.quality || '1080p'}`,
+                    url: `/api/proxy?url=${encodeURIComponent(s.url)}`,
+                    quality: s.quality || '1080p',
+                    type: s.url.includes('.m3u8') ? 'hls' : 'mp4'
+                }))
+                .sort((a: any, b: any) => qRank(b.quality) - qRank(a.quality));
 
             return {
                 success: true,

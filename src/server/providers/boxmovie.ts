@@ -3,8 +3,8 @@ import { fetchJson, USER_AGENT } from '../utils/helpers';
 
 export class BoxMovieProvider implements VideoProvider {
     key = 'boxmovie';
-    label = 'BoxMovie';
-    priority = 5;
+    label = 'Vertex';
+    priority = 6;
     enabled = true;
     timeout = 8000;
 
@@ -33,8 +33,17 @@ export class BoxMovieProvider implements VideoProvider {
             }).catch(() => null);
 
             if (!data?.success || !Array.isArray(data.sources) || data.sources.length === 0) {
-                return { success: false, source: this.key, error: 'No streams from BoxMovie' };
+                return { success: false, source: this.key, error: 'No streams from Vertex' };
             }
+
+            const qualityScore = (q: string) => {
+                if (q.includes('2160') || q.toLowerCase().includes('4k')) return 2160;
+                if (q.includes('1440')) return 1440;
+                if (q.includes('1080')) return 1080;
+                if (q.includes('720')) return 720;
+                if (q.includes('480')) return 480;
+                return 0;
+            };
 
             const sources = data.sources
                 .filter((s: any) => s && (s.original_url || s.url))
@@ -42,18 +51,21 @@ export class BoxMovieProvider implements VideoProvider {
                     const rawUrl = s.original_url || s.url;
                     let qLabel = '1080p';
                     const sName = String(s.server || '').toLowerCase();
-                    if (sName.includes('720')) qLabel = '720p';
+                    if (sName.includes('2160') || sName.includes('4k')) qLabel = '4K';
+                    else if (sName.includes('1440')) qLabel = '1440p';
+                    else if (sName.includes('720')) qLabel = '720p';
                     else if (sName.includes('480')) qLabel = '480p';
 
                     return {
-                        name: `BoxMovie · ${qLabel}`,
+                        name: `${this.label} · ${qLabel}`,
                         url: `/api/proxy?url=${encodeURIComponent(rawUrl)}&referer=${encodeURIComponent('https://videodownloader.site/')}`,
                         quality: qLabel,
                         type: 'mp4' as const
                     };
-                });
+                })
+                .sort((a: any, b: any) => qualityScore(b.quality) - qualityScore(a.quality));
 
-            if (sources.length === 0) return { success: false, source: this.key, error: 'Empty BoxMovie sources' };
+            if (sources.length === 0) return { success: false, source: this.key, error: 'Empty Vertex sources' };
 
             return {
                 success: true,

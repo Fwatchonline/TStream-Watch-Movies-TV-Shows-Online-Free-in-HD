@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { VideoProvider } from '../types';
 import { getActiveProviders, getProviderLatencyMs, recordProviderLatency } from '../providers';
+import { enrichSourcesWithRealQuality, normalizeConcreteQuality, qualityRankScore } from '../utils/qualityProbe';
 
 const DEFAULT_PROVIDER_TIMEOUT_MS = 12000;
 
@@ -8,6 +9,9 @@ export interface StreamRouteOptions {
     getProviders?: () => VideoProvider[];
     recordLatency?: (key: string, latencyMs: number, succeeded: boolean) => void;
     getLatency?: (key: string) => number | null;
+    enrichSources?: (
+        sources: NonNullable<Awaited<ReturnType<VideoProvider['getStream']>>['sources']>
+    ) => Promise<NonNullable<Awaited<ReturnType<VideoProvider['getStream']>>['sources']>>;
     timeoutMs?: number;
 }
 
@@ -16,6 +20,7 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
     const getProvidersFn = options.getProviders || (() => getActiveProviders());
     const recordLatencyFn = options.recordLatency || recordProviderLatency;
     const getLatencyFn = options.getLatency || getProviderLatencyMs;
+    const enrichSourcesFn = options.enrichSources || ((srcs) => enrichSourcesWithRealQuality(srcs));
     const providerTimeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
 
     route.get('/providers', (c) => {
@@ -87,6 +92,7 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
             label: string;
             priority: number;
             responseTimeMs: number;
+            quality?: string;
             url: string;
             type: 'hls' | 'mp4' | 'dash';
             sources: NonNullable<Awaited<ReturnType<VideoProvider['getStream']>>['sources']>;
@@ -110,14 +116,32 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
                     recordLatencyFn(provider.key, responseTimeMs, succeeded);
 
                     if (succeeded && res.url) {
+                        const rawSources = Array.isArray(res.sources) ? res.sources : [];
+                        const enrichedSources =
+                            rawSources.length > 0
+                                ? await enrichSourcesFn(rawSources).catch(() => rawSources)
+                                : [];
+
+                        let bestQuality: string | undefined;
+                        let bestScore = -1;
+                        for (const src of enrichedSources) {
+                            const concrete = normalizeConcreteQuality(src.quality) || src.quality;
+                            const score = qualityRankScore(concrete);
+                            if (concrete && score > bestScore) {
+                                bestScore = score;
+                                bestQuality = concrete;
+                            }
+                        }
+
                         results.push({
                             key: provider.key,
                             label: provider.label,
                             priority: provider.priority,
                             responseTimeMs,
-                            url: res.url,
-                            type: res.type || 'hls',
-                            sources: res.sources || []
+                            ...(bestQuality ? { quality: bestQuality } : {}),
+                            url: enrichedSources[0]?.url || res.url,
+                            type: (enrichedSources[0]?.type as 'hls' | 'mp4' | 'dash') || res.type || 'hls',
+                            sources: enrichedSources
                         });
                     }
                 } catch {
@@ -130,9 +154,10 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
             })
         );
 
-        // Default primary provider is Core ('vidrock') unless another ?provider= is requested;
+        // Default primary provider is Aether ('cinejoy' — fastest verified for both movies & TV)
+        // unless another ?provider= is explicitly requested;
         // remaining servers are sorted fastest-first by responseTimeMs
-        const primaryKey = preferredProvider && preferredProvider !== 'all' ? preferredProvider : 'vidrock';
+        const primaryKey = preferredProvider && preferredProvider !== 'all' ? preferredProvider : 'cinejoy';
         results.sort((a, b) => {
             const aPref = a.key.toLowerCase() === primaryKey ? 0 : 1;
             const bPref = b.key.toLowerCase() === primaryKey ? 0 : 1;
@@ -162,6 +187,7 @@ export function createStreamRoute(options: StreamRouteOptions = {}): Hono {
             success: true,
             source: primary.key,
             primaryServer: primary.label,
+            ...(primary.quality ? { quality: primary.quality } : {}),
             responseTimeMs: primary.responseTimeMs,
             url: primary.url,
             type: primary.type,

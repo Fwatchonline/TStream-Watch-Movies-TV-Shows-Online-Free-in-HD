@@ -3,8 +3,8 @@ import { fetchJson, USER_AGENT } from '../utils/helpers';
 
 export class VidLinkProvider implements VideoProvider {
     key = 'vidlink';
-    label = 'Pulse';
-    priority = 6;
+    label = 'Quantum';
+    priority = 11;
     enabled = true;
     timeout = 9000;
 

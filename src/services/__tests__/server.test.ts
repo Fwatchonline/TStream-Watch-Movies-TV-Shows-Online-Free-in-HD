@@ -10,7 +10,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { webcrypto } from 'node:crypto';
+import crypto, { webcrypto } from 'node:crypto';
 import serverApp from '../../server/app';
 import {
   createTmdbProxyRoute,
@@ -27,12 +27,21 @@ import {
   getProviderLatencyMs
 } from '../../server/providers';
 import { decryptVidRockStreamUrl } from '../../server/providers/vidrock';
+import { CinejoyProvider } from '../../server/providers/cinejoy';
+import { CineSrcProvider, solveCinesrcStage1, solveCinesrcStage2 } from '../../server/providers/cinesrc';
+import { HexaProvider } from '../../server/providers/hexa';
+import { VidUpProvider } from '../../server/providers/vidup';
 import { validateSourceUrl } from '../../server/utils/validator';
 import { handleLegacyStreamRequest } from '../../server/legacyStreamHandler';
 import { safeFetchStream, ProxySecurityError } from '../../server/utils/safeProxyFetch';
 import { getServerTmdbApiKey } from '../../../scripts/seoHtmlPlugin';
 import { getTmdbApiKey } from '../tmdb';
+import { cleanServerDisplay, formatQualityBadge, stripQualityFromName } from '../directStreamClient';
 import { DEFAULT_SERVERS, pickEffectiveDefaultServer } from '../embedServers';
+import {
+  parseM3u8ResolutionLabel,
+  enrichSourcesWithRealQuality
+} from '../../server/utils/qualityProbe';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -277,26 +286,39 @@ async function runTests() {
     'Task 6: CORS rejects untrusted Origin with HTTP 403 and never emits wildcard Access-Control-Allow-Origin: *'
   );
 
-  // 8. Streaming Providers Registry, Core-Default + Progressive Loading & Fastest-First Fallbacks
+  // 8. Streaming Providers Registry, Aether-Default + Progressive Loading & Fastest-First Fallbacks
   clearProviderLatencies();
   const activeProviders = getActiveProviders();
-  const expectedOrder = ['vidrock', 'boxmovie', 'meowtv', 'vidapi', 'eclipse', 'vidrift', 'vidlink', 'lmscript'];
+  const expectedOrder = [
+    'cinejoy',
+    'cinesrc',
+    'vidrock',
+    'vidup',
+    'hexa',
+    'boxmovie',
+    'meowtv',
+    'vidapi',
+    'eclipse',
+    'vidrift',
+    'vidlink',
+    'lmscript'
+  ];
   assert(
     expectedOrder.every(k => Boolean(providerRegistry[k])) &&
-      activeProviders.length === 8 &&
+      activeProviders.length === 12 &&
       activeProviders.map(p => p.key).join(',') === expectedOrder.join(','),
-    'All 8 providers (Core default first, then BoxMovie, Apex, Vector, Eclipse, Orion, Pulse, Valence) are registered in expected order'
+    'All 12 providers (Aether default first, then Vortex, Krypton, Cobalt, Helios, Vertex, Flux, Sigma, Spectra, Nimbus, Quantum, Onyx) are registered in benchmark order'
   );
 
-  // 8A. Core ('vidrock') stays primary default when healthy; fallback servers rank fastest-first by RTT
-  const slowCoreProvider = {
-    key: 'vidrock',
-    label: 'Core',
+  // 8A. Aether ('cinejoy') stays primary default when healthy; fallback servers rank fastest-first by RTT
+  const slowPrimaryProvider = {
+    key: 'cinejoy',
+    label: 'Aether',
     priority: 1,
     enabled: true,
     async getStream() {
-      await new Promise(r => setTimeout(r, 85));
-      return { success: true, source: 'vidrock', url: '/api/proxy?url=https%3A%2F%2Fcore.example%2Fv.m3u8', type: 'hls' as const };
+      await new Promise(r => setTimeout(r, 120));
+      return { success: true, source: 'cinejoy', url: '/api/proxy?url=https%3A%2F%2Faether.example%2Fv.m3u8', type: 'hls' as const };
     }
   };
   const mediumFallbackProvider = {
@@ -305,7 +327,7 @@ async function runTests() {
     priority: 3,
     enabled: true,
     async getStream() {
-      await new Promise(r => setTimeout(r, 45));
+      await new Promise(r => setTimeout(r, 65));
       return { success: true, source: 'slow_server', url: '/api/proxy?url=https%3A%2F%2Fslow.example%2Fv.m3u8', type: 'hls' as const };
     }
   };
@@ -315,14 +337,14 @@ async function runTests() {
     priority: 5,
     enabled: true,
     async getStream() {
-      await new Promise(r => setTimeout(r, 10));
+      await new Promise(r => setTimeout(r, 5));
       return { success: true, source: 'fast_server', url: '/api/proxy?url=https%3A%2F%2Ffast.example%2Fv.m3u8', type: 'hls' as const };
     }
   };
 
   const latencyTracker = new Map<string, number>();
   const benchmarkStreamRoute = createStreamRoute({
-    getProviders: () => [slowCoreProvider, mediumFallbackProvider, fastFallbackProvider],
+    getProviders: () => [slowPrimaryProvider, mediumFallbackProvider, fastFallbackProvider],
     recordLatency: (key, ms) => latencyTracker.set(key, ms),
     getLatency: (key) => latencyTracker.get(key) ?? null
   });
@@ -331,17 +353,17 @@ async function runTests() {
   const fastestJson = await fastestRes.json() as any;
   assert(
     fastestRes.status === 200 &&
-      fastestJson.source === 'vidrock' &&
-      fastestJson.primaryServer === 'Core' &&
+      fastestJson.source === 'cinejoy' &&
+      fastestJson.primaryServer === 'Aether' &&
       fastestJson.servers.length === 3 &&
-      fastestJson.servers[0].key === 'vidrock' &&
+      fastestJson.servers[0].key === 'cinejoy' &&
       fastestJson.servers[1].key === 'fast_server' &&
       fastestJson.servers[2].key === 'slow_server' &&
       fastestJson.servers[1].responseTimeMs <= fastestJson.servers[2].responseTimeMs,
-    'Stream orchestrator puts Core (vidrock) first by default and ranks fallback servers fastest-first'
+    'Stream orchestrator puts Aether (cinejoy) first by default and ranks fallback servers fastest-first'
   );
 
-  // 8B. Explicit ?provider= selection moves selected provider first while retaining Core & fallbacks
+  // 8B. Explicit ?provider= selection moves selected provider first while retaining Aether & fallbacks
   const overrideRes = await benchmarkStreamRoute.request('/movie/550?provider=slow_server');
   const overrideJson = await overrideRes.json() as any;
   assert(
@@ -352,95 +374,96 @@ async function runTests() {
   );
 
   // 8C. Rolling latency tracking promotes fastest healthy provider in getActiveProviders()
-  recordProviderLatency('vidrock', 45, true);
+  recordProviderLatency('cinejoy', 45, true);
   recordProviderLatency('vidapi', 320, true);
   recordProviderLatency('eclipse', 110, true);
   const dynamicOrder = getActiveProviders();
   assert(
-    dynamicOrder[0].key === 'vidrock' &&
+    dynamicOrder[0].key === 'cinejoy' &&
       dynamicOrder[1].key === 'eclipse' &&
       dynamicOrder[2].key === 'vidapi' &&
-      getProviderLatencyMs('vidrock') === 45,
+      getProviderLatencyMs('cinejoy') === 45,
     'Rolling provider latency promotes genuinely fastest provider to rank #1 in getActiveProviders()'
   );
   clearProviderLatencies();
 
-  // 8D. GET /api/stream/providers exposes full provider directory with Core default first
+  // 8D. GET /api/stream/providers exposes full provider directory with Aether default first
   const providersListRes = await serverApp.request('/api/stream/providers');
   const providersListJson = await providersListRes.json() as any;
   assert(
     providersListRes.status === 200 &&
-      providersListJson.fastest?.key === 'vidrock' &&
+      providersListJson.fastest?.key === 'cinejoy' &&
+      providersListJson.fastest?.label === 'Aether' &&
       Array.isArray(providersListJson.providers) &&
-      providersListJson.providers.length === 8,
-    'GET /api/stream/providers returns all 8 active providers with Core (vidrock) first by default'
+      providersListJson.providers.length === 12,
+    'GET /api/stream/providers returns all 12 active providers with Aether (cinejoy) first by default'
   );
 
-  // 8F. Progressive 2-phase loading (?provider=vidrock&single=1 then ?exclude=vidrock)
+  // 8F. Progressive 2-phase loading (?provider=cinejoy&single=1 then ?exclude=cinejoy)
   const calledKeys: string[] = [];
   const progressiveRoute = createStreamRoute({
     getProviders: () => [
       {
-        key: 'vidrock',
-        label: 'Core',
+        key: 'cinejoy',
+        label: 'Aether',
         priority: 1,
         enabled: true,
         async getStream() {
-          calledKeys.push('vidrock');
-          return { success: true, source: 'vidrock', url: '/api/proxy?url=https%3A%2F%2Fcore.example%2Fmaster.m3u8', type: 'hls' as const };
+          calledKeys.push('cinejoy');
+          return { success: true, source: 'cinejoy', url: '/api/proxy?url=https%3A%2F%2Faether.example%2Fmaster.m3u8', type: 'hls' as const };
         }
       },
       {
         key: 'boxmovie',
-        label: 'BoxMovie',
-        priority: 2,
+        label: 'Vertex',
+        priority: 6,
         enabled: true,
         async getStream() {
           calledKeys.push('boxmovie');
           await new Promise(r => setTimeout(r, 35));
-          return { success: true, source: 'boxmovie', url: '/api/proxy?url=https%3A%2F%2Fbox.example%2Fv.mp4', type: 'mp4' as const };
+          return { success: true, source: 'boxmovie', url: '/api/proxy?url=https%3A%2F%2Fvertex.example%2Fv.mp4', type: 'mp4' as const };
         }
       },
       {
         key: 'meowtv',
-        label: 'Apex',
-        priority: 3,
+        label: 'Flux',
+        priority: 7,
         enabled: true,
         async getStream() {
           calledKeys.push('meowtv');
           await new Promise(r => setTimeout(r, 10));
-          return { success: true, source: 'meowtv', url: '/api/proxy?url=https%3A%2F%2Fapex.example%2Fv.m3u8', type: 'hls' as const };
+          return { success: true, source: 'meowtv', url: '/api/proxy?url=https%3A%2F%2Fflux.example%2Fv.m3u8', type: 'hls' as const };
         }
       }
     ]
   });
 
-  const phase1Res = await progressiveRoute.request('/movie/550?provider=vidrock&single=1');
+  const phase1Res = await progressiveRoute.request('/movie/550?provider=cinejoy&single=1');
   const phase1Json = await phase1Res.json() as any;
   assert(
     phase1Res.status === 200 &&
-      phase1Json.source === 'vidrock' &&
+      phase1Json.source === 'cinejoy' &&
       phase1Json.servers.length === 1 &&
       calledKeys.length === 1 &&
-      calledKeys[0] === 'vidrock',
-    'Phase 1 (?provider=vidrock&single=1) queries ONLY Core (vidrock) without waiting for other servers'
+      calledKeys[0] === 'cinejoy',
+    'Phase 1 (?provider=cinejoy&single=1) queries ONLY Aether (cinejoy) without waiting for other servers'
   );
 
   calledKeys.length = 0;
-  const phase2Res = await progressiveRoute.request('/movie/550?exclude=vidrock');
+  const phase2Res = await progressiveRoute.request('/movie/550?exclude=cinejoy');
   const phase2Json = await phase2Res.json() as any;
   assert(
     phase2Res.status === 200 &&
-      !calledKeys.includes('vidrock') &&
+      !calledKeys.includes('cinejoy') &&
       calledKeys.includes('boxmovie') &&
       calledKeys.includes('meowtv') &&
       phase2Json.servers.length === 2 &&
       phase2Json.servers[0].key === 'meowtv' &&
       phase2Json.servers[1].key === 'boxmovie',
-    'Phase 2 (?exclude=vidrock) skips Core and loads remaining servers sorted fastest-first'
+    'Phase 2 (?exclude=cinejoy) skips Aether and loads remaining servers sorted fastest-first'
   );
 
-  // 8E. VidRock AES-GCM decrypt roundtrip + validator SSRF/HTML rejection
+  // 8E. Krypton (VidRock) AES-GCM decrypt roundtrip + validator SSRF/HTML rejection
   const gcmKeyHex = '7f3e9c2a8b5d1f4e6a9c3b7d2e5f8a1c4b6d9e2f5a8c1b4d7e9f2a5c8b1d4e7f';
   const rawKey = new Uint8Array(gcmKeyHex.length / 2);
   for (let i = 0; i < rawKey.length; i++) rawKey[i] = parseInt(gcmKeyHex.slice(i * 2, i * 2 + 2), 16);
@@ -458,7 +481,7 @@ async function runTests() {
   const decrypted = await decryptVidRockStreamUrl(b64url);
   assert(
     decrypted === 'https://cdn.example.com/master.m3u8',
-    'VidRock AES-GCM decryptor accurately decodes encrypted stream URLs'
+    'Krypton (VidRock) AES-GCM decryptor accurately decodes encrypted stream URLs'
   );
 
   const mockHtmlReject = (async () => new Response('<html>CF</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })) as typeof fetch;
@@ -474,8 +497,8 @@ async function runTests() {
   const adminPrefs = {
     movieServerId: 'server_4_fmov',
     tvServerId: 'server_1_direct',
-    movieDirectProvider: 'boxmovie',
-    tvDirectProvider: 'vidrock'
+    movieDirectProvider: 'cinesrc',
+    tvDirectProvider: 'cinejoy'
   };
   const resolvedMovieOn = pickEffectiveDefaultServer('movie', DEFAULT_SERVERS, true, adminPrefs);
   const resolvedTvOn = pickEffectiveDefaultServer('tv', DEFAULT_SERVERS, true, adminPrefs);
@@ -486,6 +509,333 @@ async function runTests() {
       resolvedTvWhenDirectOff.type === 'embed' &&
       resolvedTvWhenDirectOff.id === 'server_2_movietvapi',
     'pickEffectiveDefaultServer resolves separate Admin defaults for Movies vs TV Series and falls back to Embed when Direct Stream is OFF'
+  );
+
+  // 8H. Cinejoy (Aether) provider unit resolution with mocked enc-dec + wing.st
+  const cinejoyMockFetch = (async (url: string | URL | Request) => {
+    const u = String(url);
+    if (u.includes('/enc-cinejoy')) {
+      return new Response(JSON.stringify({ status: 200, result: { data: 'AQID', state: 'st1' } }), { status: 200 });
+    }
+    if (u.includes('api.wing.st/g')) {
+      return new Response(Buffer.from('encrypted-bin'), { status: 200 });
+    }
+    if (u.includes('/dec-cinejoy')) {
+      return new Response(
+        JSON.stringify({
+          status: 200,
+          result: {
+            data: {
+              stream: [
+                {
+                  playlist: 'https://cdn.wing.example/master.m3u8',
+                  quality: '1080p',
+                  captions: [{ id: 'en', label: 'English', url: 'https://subs.example/en.vtt' }]
+                }
+              ]
+            }
+          }
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response('not found', { status: 404 });
+  }) as typeof fetch;
+  const cinejoyRes = await new CinejoyProvider({ fetchImpl: cinejoyMockFetch }).getStream('550', 'movie');
+  assert(
+    cinejoyRes.success &&
+      cinejoyRes.source === 'cinejoy' &&
+      Boolean(cinejoyRes.url?.includes('/api/proxy?url=https%3A%2F%2Fcdn.wing.example%2Fmaster.m3u8')) &&
+      cinejoyRes.subtitles?.length === 1,
+    'CinejoyProvider (Aether) resolves proxied HLS stream and captions cleanly'
+  );
+
+  // 8I. CineSrc (Vortex) PoW solver + full flow resolving relative /api/playlist/... URL
+  const stage2TargetKey = '0a';
+  const stage2Salt = 'testsalt_';
+  const stage2Hash = crypto.createHash('sha256').update(stage2Salt + stage2TargetKey).digest('hex');
+  const stage2PayloadB64 = Buffer.from(JSON.stringify({ d: 5 })).toString('base64url');
+  const stage2BodyB64 = Buffer.from(`hdr.${stage2PayloadB64}.sig`).toString('base64url');
+  const stage2RB64 = `a.${stage2BodyB64}.c`;
+  const mockStage2Challenge = {
+    pack: [
+      stage2Hash.split('').reverse().join(''),
+      'x',
+      'y',
+      stage2Salt.split('').reverse().join(''),
+      stage2RB64.split('').reverse().join('')
+    ]
+  };
+  assert(
+    solveCinesrcStage2(mockStage2Challenge) === stage2TargetKey,
+    'solveCinesrcStage2 finds exact SHA-256 preimage match'
+  );
+
+  const stage1Buf = Buffer.alloc(32);
+  stage1Buf.writeUInt32LE(1, 0);
+  stage1Buf.writeUInt32LE(2, 4);
+  stage1Buf.writeUInt32LE(3, 8);
+  stage1Buf.writeUInt32LE(4, 12);
+  stage1Buf[16] = 0x7d;
+  stage1Buf[17] = 0xbd;
+  stage1Buf[18] = 0xd2;
+  stage1Buf[19] = 0x43;
+  stage1Buf[20] = 4;
+  stage1Buf[21] = 0; // mode 0 -> [12, 15]
+  stage1Buf[22] = 1; // diff 1 bit (instant)
+  stage1Buf[23] = 2; // varI
+  stage1Buf[24] = 12; // rnd
+  stage1Buf[25] = 15; // m_b
+  stage1Buf[26] = 3; // s_i
+  stage1Buf[27] = 1; // p_i
+  stage1Buf.write('CSP4', 28, 'ascii');
+  const stage1Sol = solveCinesrcStage1(
+    { w: stage1Buf.toString('base64url') },
+    '00'.repeat(32)
+  );
+  assert(stage1Sol.startsWith('m4.'), 'solveCinesrcStage1 produces valid m4.<hex> PoW solution');
+
+  const cinesrcMockFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes('/api/c/bootstrap')) {
+      return new Response(JSON.stringify({ r: 'r1', p: 'p1' }), { status: 200 });
+    }
+    if (u.includes('/api/c/issue')) {
+      return new Response(JSON.stringify({ w: stage1Buf.toString('base64url') }), { status: 200 });
+    }
+    if (u.includes('/enc-cinesrc')) {
+      const body = JSON.parse(String(init?.body || '{}'));
+      if (body.type === 'seed') {
+        return new Response(JSON.stringify({ status: 200, result: { seed: '00'.repeat(32), state: 's1' } }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          status: 200,
+          result: { token: 'tok', state: 's2', headers: { getProviderList: 'actList', getStream: 'actStream' } }
+        }),
+        { status: 200 }
+      );
+    }
+    if (u.includes('/api/c/stage2/issue')) {
+      return new Response(JSON.stringify(mockStage2Challenge), { status: 200 });
+    }
+    if (u.includes('cinesrc.st/embed/')) {
+      const hdrs = init?.headers as Record<string, string>;
+      if (hdrs?.['Next-Action'] === 'actList') {
+        return new Response(`0:{}\n1:${JSON.stringify([{ id: 'nebula', name: 'Nebula' }])}\n`, { status: 200 });
+      }
+      return new Response('enc-stream', { status: 200 });
+    }
+    if (u.includes('/dec-cinesrc')) {
+      return new Response(
+        JSON.stringify({ status: 200, result: { url: [{ url: '/api/playlist/test/master', source: 'HLS' }] } }),
+        { status: 200 }
+      );
+    }
+    return new Response('not found', { status: 404 });
+  }) as typeof fetch;
+  const cinesrcRes = await new CineSrcProvider({ fetchImpl: cinesrcMockFetch }).getStream('550', 'movie');
+  assert(
+    cinesrcRes.success &&
+      cinesrcRes.source === 'cinesrc' &&
+      Boolean(cinesrcRes.url?.includes('https%3A%2F%2Fcinesrc.st%2Fapi%2Fplaylist%2Ftest%2Fmaster')),
+    'CineSrcProvider (Vortex) resolves relative /api/playlist/... streams onto https://cinesrc.st/api/playlist/...'
+  );
+
+  // 8J. Hexa (Helios) mock resolution + 401 token refresh retry
+  let hexaUpstreamTries = 0;
+  const hexaMockFetch = (async (url: string | URL | Request) => {
+    const u = String(url);
+    if (u.includes('cap.hexa.su') && u.includes('/challenge')) {
+      return new Response(JSON.stringify({ ch: 1 }), { status: 200 });
+    }
+    if (u.includes('/enc-hexa')) {
+      return new Response(JSON.stringify({ status: 200, result: { sol: 1 } }), { status: 200 });
+    }
+    if (u.includes('cap.hexa.su') && u.includes('/redeem')) {
+      return new Response(JSON.stringify({ token: `cap-${hexaUpstreamTries}` }), { status: 200 });
+    }
+    if (u.includes('theemoviedb.hexa.su')) {
+      hexaUpstreamTries++;
+      if (hexaUpstreamTries === 1) return new Response('expired', { status: 401 });
+      return new Response('hex-enc-payload', { status: 200 });
+    }
+    if (u.includes('/dec-hexa')) {
+      return new Response(
+        JSON.stringify({
+          status: 200,
+          result: {
+            sources: [
+              { server: 'alpha', url: 'https://cdn.hexa.example/alpha.m3u8' },
+              { server: 'delta', url: 'https://cdn.hexa.example/delta.m3u8' }
+            ]
+          }
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response('not found', { status: 404 });
+  }) as typeof fetch;
+  const hexaRes = await new HexaProvider({ fetchImpl: hexaMockFetch }).getStream('1396', 'tv', 1, 1);
+  assert(
+    hexaRes.success &&
+      hexaRes.source === 'hexa' &&
+      hexaUpstreamTries === 2 &&
+      hexaRes.sources?.length === 2,
+    'HexaProvider (Helios) retries with fresh cap token on HTTP 401 and returns deduplicated HLS sources'
+  );
+
+  // 8K. VidUp (Cobalt) honors noReferrer flag when proxying URLs
+  const makeVidupMock = (noReferrer: boolean) =>
+    (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('vidup.to/movie/')) {
+        return new Response('{"en":"mockEnToken"}', { status: 200 });
+      }
+      if (u.includes('/enc-vidup') && u.includes('stage=1')) {
+        return new Response(
+          JSON.stringify({ status: 200, result: { stage1: 'https://vidup.to/s1', token: 'csrf1' } }),
+          { status: 200 }
+        );
+      }
+      if (u === 'https://vidup.to/s1') {
+        return new Response('s1out', { status: 200 });
+      }
+      if (u.includes('/enc-vidup') && u.includes('stage=2')) {
+        return new Response(
+          JSON.stringify({
+            status: 200,
+            result: { servers: 'https://vidup.to/srvs', stream: 'https://vidup.to/strm', token: 'csrf2' }
+          }),
+          { status: 200 }
+        );
+      }
+      if (u === 'https://vidup.to/srvs') {
+        return new Response('enc-servers', { status: 200 });
+      }
+      if (u.startsWith('https://vidup.to/strm/')) {
+        return new Response('enc-stream', { status: 200 });
+      }
+      if (u.includes('/dec-vidup')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        if (body.text === 'enc-servers') {
+          return new Response(JSON.stringify({ status: 200, result: [{ name: 'Euro', data: 'eu1' }] }), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({ status: 200, result: { url: 'https://cdn.vidup.example/4k.m3u8', noReferrer } }),
+          { status: 200 }
+        );
+      }
+      return new Response('not found', { status: 404 });
+    }) as typeof fetch;
+
+  const vidupNoRef = await new VidUpProvider({ fetchImpl: makeVidupMock(true) }).getStream('550', 'movie');
+  const vidupWithRef = await new VidUpProvider({ fetchImpl: makeVidupMock(false) }).getStream('550', 'movie');
+  assert(
+    vidupNoRef.success &&
+      !vidupNoRef.url?.includes('referer=') &&
+      vidupWithRef.success &&
+      Boolean(vidupWithRef.url?.includes('referer=https%3A%2F%2Fvidup.to%2F')),
+    'VidUpProvider (Cobalt) honors noReferrer flag when constructing /api/proxy stream URLs'
+  );
+
+  // 8L. Frontend cleanServerDisplay preserves new server names and maps raw keys cleanly
+  assert(
+    cleanServerDisplay('Aether · Light') === 'Aether · Light' &&
+      cleanServerDisplay('Vortex · Nebula') === 'Vortex · Nebula' &&
+      cleanServerDisplay('Helios · alpha') === 'Helios · alpha' &&
+      cleanServerDisplay('Cobalt · Euro') === 'Cobalt · Euro' &&
+      cleanServerDisplay('cinejoy') === 'Aether' &&
+      cleanServerDisplay('cinesrc') === 'Vortex' &&
+      cleanServerDisplay('vidrock') === 'Krypton' &&
+      cleanServerDisplay('vidup') === 'Cobalt' &&
+      cleanServerDisplay('hexa') === 'Helios' &&
+      cleanServerDisplay('boxmovie') === 'Vertex' &&
+      cleanServerDisplay('meowtv') === 'Flux' &&
+      cleanServerDisplay('vidapi') === 'Sigma' &&
+      cleanServerDisplay('eclipse') === 'Spectra' &&
+      cleanServerDisplay('vidrift') === 'Nimbus' &&
+      cleanServerDisplay('vidlink') === 'Quantum' &&
+      cleanServerDisplay('lmscript') === 'Onyx',
+    'cleanServerDisplay preserves Aether/Vortex/Krypton/Cobalt/Helios/Vertex/Flux/Sigma/Spectra/Nimbus/Quantum/Onyx and sanitizes raw keys'
+  );
+
+  // 8M. Real HLS Manifest Resolution Parsing, Source Quality Enrichment & Badge Helpers
+  const m3u8_4k = `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=12000000,RESOLUTION=3840x2160\n4k.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n1080.m3u8`;
+  const m3u8_ultrawide4k = `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=3840x1600\nuw4k.m3u8`;
+  const m3u8_1440 = `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=7000000,RESOLUTION=2560x1440\n1440.m3u8`;
+  const m3u8_720 = `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720\n720.m3u8`;
+  const m3u8_named = `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1200000,NAME="480p"\n480.m3u8`;
+
+  assert(
+    parseM3u8ResolutionLabel(m3u8_4k) === '4K' &&
+      parseM3u8ResolutionLabel(m3u8_ultrawide4k) === '4K' &&
+      parseM3u8ResolutionLabel(m3u8_1440) === '1440p' &&
+      parseM3u8ResolutionLabel(m3u8_720) === '720p' &&
+      parseM3u8ResolutionLabel(m3u8_named) === '480p',
+    'parseM3u8ResolutionLabel extracts accurate highest resolution (4K/1440p/720p/480p, including ultrawide)'
+  );
+
+  const enriched = await enrichSourcesWithRealQuality(
+    [
+      { name: 'Aether', url: '/api/proxy?url=https%3A%2F%2Fa.example%2F4k.m3u8', quality: '1080p Auto', type: 'hls' },
+      { name: 'Vertex · 720p', url: 'https://v.example/720.mp4', quality: '720p', type: 'mp4' }
+    ],
+    {
+      probeFn: async (u) => (u.includes('4k.m3u8') ? '4K' : null)
+    }
+  );
+  assert(
+    enriched[0].quality === '4K' && enriched[1].quality === '720p',
+    'enrichSourcesWithRealQuality replaces vague "1080p Auto" placeholder with probed concrete resolution while preserving explicit MP4 resolutions'
+  );
+
+  const probedRoute = createStreamRoute({
+    getProviders: () => [
+      {
+        key: 'cinejoy',
+        label: 'Aether',
+        priority: 1,
+        enabled: true,
+        async getStream() {
+          return {
+            success: true,
+            source: 'cinejoy',
+            url: '/api/proxy?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8',
+            type: 'hls' as const,
+            sources: [
+              {
+                name: 'Aether · Main',
+                url: '/api/proxy?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8',
+                quality: '1080p Auto',
+                type: 'hls' as const
+              }
+            ]
+          };
+        }
+      }
+    ],
+    enrichSources: async (srcs) =>
+      enrichSourcesWithRealQuality(srcs, { probeFn: async () => '1440p' })
+  });
+  const probedRouteRes = await probedRoute.request('/movie/550');
+  const probedRouteJson = await probedRouteRes.json() as any;
+  assert(
+    probedRouteRes.status === 200 &&
+      probedRouteJson.quality === '1440p' &&
+      probedRouteJson.servers[0].quality === '1440p' &&
+      probedRouteJson.servers[0].sources[0].quality === '1440p',
+    'createStreamRoute exposes probed concrete quality on server & top-level payload'
+  );
+
+  assert(
+    formatQualityBadge('2160p', 'hls') === '4K' &&
+      formatQualityBadge('4K / 1080p', 'hls') === '4K / 1080p' &&
+      formatQualityBadge('720p', 'mp4') === '720p' &&
+      formatQualityBadge('1080p Auto', 'hls') === '1080p' &&
+      stripQualityFromName('Vertex · 1080p') === 'Vertex' &&
+      stripQualityFromName('Aether (1080p)') === 'Aether',
+    'formatQualityBadge and stripQualityFromName format clean server resolution pills'
   );
 
   console.log('\n--- ALL SERVER, SECURITY & STREAMING REGRESSION TESTS PASSED ---');

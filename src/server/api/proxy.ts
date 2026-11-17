@@ -147,6 +147,28 @@ proxyRoute.all('*', async (c) => {
         } else if (!queryReferer && (host === 'vidrift.in' || host.endsWith('.vidrift.in'))) {
             referer = 'https://embed.vidrift.in/';
             origin = 'https://embed.vidrift.in';
+        } else if (!queryReferer && (host === 'cinesrc.st' || host.endsWith('.cinesrc.st'))) {
+            referer = 'https://cinesrc.st/';
+            origin = 'https://cinesrc.st';
+        } else if (!queryReferer && (host === 'hexa.su' || host.endsWith('.hexa.su'))) {
+            referer = 'https://hexa.su/';
+            origin = 'https://hexa.su';
+        } else if (!queryReferer && (host === 'vidup.to' || host.endsWith('.vidup.to'))) {
+            referer = 'https://vidup.to/';
+            origin = 'https://vidup.to';
+        } else if (
+            !queryReferer &&
+            (host === 'cinejoy.pk' ||
+                host.endsWith('.cinejoy.pk') ||
+                host === 'wing.st' ||
+                host.endsWith('.wing.st') ||
+                host === 'lightspeed.st' ||
+                host.endsWith('.lightspeed.st') ||
+                host === 'ferb.st' ||
+                host.endsWith('.ferb.st'))
+        ) {
+            referer = 'https://cinejoy.pk/';
+            origin = 'https://cinejoy.pk';
         }
     } catch {
         return c.json({ error: 'Invalid upstream URL' }, 400);
@@ -228,6 +250,7 @@ proxyRoute.all('*', async (c) => {
 
         const isM3u8 =
             result.finalUrl.toLowerCase().includes('.m3u8') ||
+            result.finalUrl.toLowerCase().includes('/api/playlist/') ||
             contentType.includes('mpegurl') ||
             contentType.includes('x-mpegurl');
 

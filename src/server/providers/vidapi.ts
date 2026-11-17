@@ -22,8 +22,8 @@ function extractStreamUrls(obj: any, urls = new Set<string>()): Set<string> {
 
 export class VidAPIProvider implements VideoProvider {
     key = 'vidapi';
-    label = 'Vector';
-    priority = 1;
+    label = 'Sigma';
+    priority = 8;
     enabled = true;
     timeout = 10000;
 
@@ -92,8 +92,9 @@ export class VidAPIProvider implements VideoProvider {
                 url: proxiedUrl,
                 type: primaryStream.includes('.m3u8') ? 'hls' : 'mp4',
                 sources: streamUrls.map((s, idx) => ({
-                    name: `Vector · Stream ${idx + 1}`,
+                    name: `${this.label} · Stream ${idx + 1}`,
                     url: `/api/proxy?url=${encodeURIComponent(s)}&va=1&referer=${encodeURIComponent(`${EMBED_ORIGIN}/`)}&origin=${encodeURIComponent(EMBED_ORIGIN)}`,
+                    quality: s.includes('.m3u8') ? '1080p Auto' : '1080p',
                     type: s.includes('.m3u8') ? 'hls' : 'mp4'
                 }))
             };

@@ -15,7 +15,7 @@ import {
   Globe,
   Film
 } from 'lucide-react';
-import { ResolvedStream, cleanServerDisplay } from '../services/directStreamClient';
+import { ResolvedStream, cleanServerDisplay, formatQualityBadge, stripQualityFromName, getQualityPillClasses } from '../services/directStreamClient';
 import { SubtitleTrack, Episode } from '../types/media';
 
 export type SettingsSubView =
@@ -133,28 +133,14 @@ export const PlaybackSettingsModal: React.FC<PlaybackSettingsModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Active stream formatted short label e.g. "Zeus (1080p)"
+  // Active stream formatted short label e.g. "Aether (4K)"
   const activeStream = allStreams[selectedStreamIndex] || allStreams[0];
   const formatShortStream = (stream?: ResolvedStream): string => {
-    if (!stream) return 'Zeus (1080p)';
-    const clean = cleanServerDisplay(stream.server);
-    const q = (stream.quality || '1080p').toLowerCase();
-    let qLabel = '1080p';
-    if (q.includes('4k') || q.includes('2160')) qLabel = '4K';
-    else if (q.includes('1080')) qLabel = '1080p';
-    else if (q.includes('720')) qLabel = '720p';
-    else if (q.includes('480')) qLabel = '480p';
-    else if (q.includes('hls')) qLabel = 'HLS';
-
-    if (clean.toLowerCase().includes('zeus')) return `Zeus (${qLabel})`;
-    if (clean.toLowerCase().includes('poseidon')) return `Poseidon (${qLabel})`;
-    if (clean.toLowerCase().includes('apollo')) return `Apollo (${qLabel})`;
-    if (clean.toLowerCase().includes('athena')) return `Athena (${qLabel})`;
-    if (clean.toLowerCase().includes('hermes')) return `Hermes (${qLabel})`;
-    if (clean.toLowerCase().includes('ares')) return `Ares (${qLabel})`;
-    if (clean.toLowerCase().includes('titan')) return `Titan (${qLabel})`;
-    if (clean.toLowerCase().includes('chronos')) return `Chronos (${qLabel})`;
-    return `${clean.slice(0, 16)} (${qLabel})`;
+    if (!stream) return 'Aether (1080p)';
+    const clean = stripQualityFromName(cleanServerDisplay(stream.server));
+    const qLabel = formatQualityBadge(stream.quality, stream.type);
+    const shortName = clean.split('·')[0].trim().slice(0, 18) || 'Aether';
+    return `${shortName} (${qLabel})`;
   };
 
   // Active Subtitle Label
@@ -367,10 +353,11 @@ export const PlaybackSettingsModal: React.FC<PlaybackSettingsModalProps> = ({
             <div className="max-h-[360px] overflow-y-auto space-y-1.5 pr-1">
               {allStreams.map((st, idx) => {
                 const isSelected = idx === selectedStreamIndex;
-                let cleanName = cleanServerDisplay(st.server);
+                let cleanName = stripQualityFromName(cleanServerDisplay(st.server));
                 if (!cleanName.includes('·') && !cleanName.includes('Cluster') && !cleanName.includes('Route') && allStreams.length > 1) {
-                  cleanName = `${cleanName} · Cluster ${idx + 1}`;
+                  cleanName = `${cleanName} · Node ${idx + 1}`;
                 }
+                const qBadge = formatQualityBadge(st.quality, st.type);
                 return (
                   <button
                     key={idx}
@@ -384,14 +371,16 @@ export const PlaybackSettingsModal: React.FC<PlaybackSettingsModalProps> = ({
                         : 'bg-white/[0.03] border-transparent hover:bg-white/[0.07] text-slate-200'
                     }`}
                   >
-                    <div className="min-w-0 pr-2">
-                      <div className="text-xs sm:text-sm font-medium truncate text-white">
-                        {cleanName}
+                    <div className="min-w-0 pr-2 flex-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-xs sm:text-sm font-medium truncate text-white">
+                          {cleanName}
+                        </span>
+                        <span className={`px-1.5 py-0.5 rounded border text-[9px] font-black tracking-wide shrink-0 ${getQualityPillClasses(qBadge)}`}>
+                          {qBadge}
+                        </span>
                       </div>
                       <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1.5">
-                        <span className="px-1.5 py-0.2 rounded bg-white/10 text-white font-mono text-[10px]">
-                          {st.quality}
-                        </span>
                         <span>{st.type.toUpperCase()}</span>
                       </div>
                     </div>
