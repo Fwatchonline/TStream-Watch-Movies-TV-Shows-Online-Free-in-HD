@@ -15,14 +15,17 @@ import { RandomPage } from './pages/RandomPage';
 import { PeoplePage } from './pages/PeoplePage';
 import { PersonPage } from './pages/PersonPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AnimePage } from './pages/AnimePage';
+import { AnimeDetailsPage } from './pages/AnimeDetailsPage';
 import { SurpriseModal } from './components/SurpriseModal';
 import { LegalModal } from './components/LegalModal';
 import { AuthModal } from './components/AuthModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { AuthProvider } from './context/AuthContext';
-import { MediaItem, MediaDetail } from './types/media';
+import { MediaItem, MediaType, AnimeMedia } from './types/media';
 import { createMediaSlug, parseMediaSlug } from './utils/slug';
+import { animeMediaToMediaItem, type AnimeSectionCategory } from './services/animeCatalog';
 import { updateSEO } from './utils/seo';
 import { tagToSlug, slugToTag, isValidTagSlug } from './utils/tags';
 import { genreToSlug, slugToGenre } from './utils/genres';
@@ -30,10 +33,21 @@ import { getPlatformById } from './services/platformData';
 import { recordSiteVisit } from './services/analytics';
 import { auth } from './services/firebase';
 
+function formatGenreParamFromSlug(slug: string): string {
+  const lower = decodeURIComponent(slug).replace(/-/g, ' ').trim().toLowerCase();
+  if (lower === 'sci fi' || lower === 'sci-fi') return 'Sci-Fi';
+  if (lower === 'slice of life') return 'Slice of Life';
+  if (lower === 'mahou shoujo') return 'Mahou Shoujo';
+  return lower.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export default function App() {
   const [currentView, setCurrentView] = useState<string>('home');
   const [selectedMediaId, setSelectedMediaId] = useState<number | null>(null);
-  const [selectedMediaType, setSelectedMediaType] = useState<'movie' | 'tv'>('movie');
+  const [selectedMediaType, setSelectedMediaType] = useState<MediaType>('movie');
+  const [animeSection, setAnimeSection] = useState<AnimeSectionCategory>('discover');
+  const [animeGenre, setAnimeGenre] = useState<string | undefined>(undefined);
+  const [animeIsMovieRoute, setAnimeIsMovieRoute] = useState<boolean>(false);
   const [watchSeason, setWatchSeason] = useState<number>(1);
   const [watchEpisode, setWatchEpisode] = useState<number>(1);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -172,6 +186,54 @@ export default function App() {
         setCurrentView('admin');
       } else if (path === 'settings' || path === 'player-settings') {
         setCurrentView('settings');
+      } else if (path === 'anime') {
+        setAnimeSection('discover');
+        setAnimeGenre(undefined);
+        setCurrentView('anime');
+      } else if (path === 'anime/trending') {
+        setAnimeSection('trending');
+        setAnimeGenre(undefined);
+        setCurrentView('anime');
+      } else if (path === 'anime/popular') {
+        setAnimeSection('popular');
+        setAnimeGenre(undefined);
+        setCurrentView('anime');
+      } else if (path === 'anime/seasonal') {
+        setAnimeSection('seasonal');
+        setAnimeGenre(undefined);
+        setCurrentView('anime');
+      } else if (path === 'anime/upcoming') {
+        setAnimeSection('upcoming');
+        setAnimeGenre(undefined);
+        setCurrentView('anime');
+      } else if (path === 'anime/movies') {
+        setAnimeSection('movies');
+        setAnimeGenre(undefined);
+        setCurrentView('anime');
+      } else if (path === 'anime/genres') {
+        setAnimeSection('genres');
+        setAnimeGenre(undefined);
+        setCurrentView('anime');
+      } else if (path.startsWith('anime/genres/')) {
+        const parts = path.split('/');
+        if (parts.length === 3 && parts[2]) {
+          setAnimeSection('genres');
+          setAnimeGenre(formatGenreParamFromSlug(parts[2]));
+          setCurrentView('anime');
+        } else {
+          setCurrentView('notfound');
+        }
+      } else if (path.startsWith('anime/') || path.startsWith('anime-movie/')) {
+        const parts = path.split('/');
+        const parsed = parts.length === 2 ? parseMediaSlug(parts[1]) : null;
+        if (parsed && Number.isInteger(parsed.id) && parsed.id > 0) {
+          setSelectedMediaType('anime');
+          setSelectedMediaId(parsed.id);
+          setAnimeIsMovieRoute(path.startsWith('anime-movie/'));
+          setCurrentView('anime-details');
+        } else {
+          setCurrentView('notfound');
+        }
       } else if (path.startsWith('movie/') || path.startsWith('tv/')) {
         const parts = path.split('/');
         const type = (parts[0] === 'tv' ? 'tv' : 'movie') as 'movie' | 'tv';
@@ -185,7 +247,19 @@ export default function App() {
         }
       } else if (path.startsWith('watch/')) {
         const parts = path.split('/');
-        if ((parts[1] === 'movie' && parts.length === 3) || (parts[1] === 'tv' && (parts.length === 3 || parts.length === 5))) {
+        if (parts[1] === 'anime' && (parts.length === 3 || parts.length === 4)) {
+          const parsed = parseMediaSlug(parts[2]);
+          const validEp = parts.length !== 4 || (/^\d+$/.test(parts[3]) && parseInt(parts[3], 10) >= 1);
+          if (parsed && Number.isInteger(parsed.id) && parsed.id > 0 && validEp) {
+            setSelectedMediaType('anime');
+            setSelectedMediaId(parsed.id);
+            setCurrentView('watch');
+            setWatchSeason(1);
+            setWatchEpisode(parts[3] ? parseInt(parts[3], 10) : 1);
+          } else {
+            setCurrentView('notfound');
+          }
+        } else if ((parts[1] === 'movie' && parts.length === 3) || (parts[1] === 'tv' && (parts.length === 3 || parts.length === 5))) {
           const type = (parts[1] === 'tv' ? 'tv' : 'movie') as 'movie' | 'tv';
           const parsed = parseMediaSlug(parts[2]);
           const validNums = parts.length !== 5 || (/^\d+$/.test(parts[3]) && /^\d+$/.test(parts[4]) && parseInt(parts[3], 10) >= 1 && parseInt(parts[4], 10) >= 1);
@@ -454,6 +528,21 @@ export default function App() {
     } else if (view === 'settings') {
       newPath = '/settings';
       setSelectedGenreId(null);
+    } else if (view === 'anime') {
+      const section: AnimeSectionCategory = extra?.section || 'discover';
+      const genre: string | undefined = extra?.genre;
+      setAnimeSection(section);
+      setAnimeGenre(genre);
+      setSelectedGenreId(null);
+      if (section === 'genres' && genre) {
+        newPath = `/anime/genres/${genre.toLowerCase().replace(/\s+/g, '-')}`;
+      } else if (section === 'genres') {
+        newPath = '/anime/genres';
+      } else if (section === 'trending' || section === 'popular' || section === 'seasonal' || section === 'upcoming' || section === 'movies') {
+        newPath = `/anime/${section}`;
+      } else {
+        newPath = '/anime';
+      }
     }
 
     window.history.pushState({}, '', newPath);
@@ -468,30 +557,66 @@ export default function App() {
   };
 
   const handleSelectMedia = (item: MediaItem) => {
+    if (item.mediaType === 'anime') {
+      const animeId = item.anilistId || item.id;
+      const isAnimeMovie = item.mediaFormat === 'MOVIE';
+      setSelectedMediaId(animeId);
+      setSelectedMediaType('anime');
+      setAnimeIsMovieRoute(isAnimeMovie);
+      setCurrentView('anime-details');
+      const slug = createMediaSlug(item.title || item.englishTitle || item.romajiTitle || 'anime', animeId);
+      window.history.pushState({}, '', `${isAnimeMovie ? '/anime-movie/' : '/anime/'}${slug}`);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     const id = item.id || item.tmdbId;
+    const tmdbType: 'movie' | 'tv' = item.mediaType === 'movie' ? 'movie' : 'tv';
     setSelectedMediaId(id);
-    setSelectedMediaType(item.mediaType);
+    setSelectedMediaType(tmdbType);
     setCurrentView('details');
     const slug = createMediaSlug(item.title || (item as any).name, id);
-    window.history.pushState({}, '', `/${item.mediaType}/${slug}`);
+    window.history.pushState({}, '', `/${tmdbType}/${slug}`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleWatchMedia = (item: MediaItem, season = 1, episode = 1) => {
+    if (item.mediaType === 'anime') {
+      const animeId = item.anilistId || item.id;
+      setSelectedMediaId(animeId);
+      setSelectedMediaType('anime');
+      setWatchSeason(1);
+      setWatchEpisode(Math.max(1, episode));
+      setCurrentView('watch');
+      const slug = createMediaSlug(item.title || item.englishTitle || item.romajiTitle || 'anime', animeId);
+      window.history.pushState({}, '', `/watch/anime/${slug}/${Math.max(1, episode)}`);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     const id = item.id || item.tmdbId;
+    const tmdbType: 'movie' | 'tv' = item.mediaType === 'movie' ? 'movie' : 'tv';
     setSelectedMediaId(id);
-    setSelectedMediaType(item.mediaType);
+    setSelectedMediaType(tmdbType);
     setWatchSeason(season);
     setWatchEpisode(episode);
     setCurrentView('watch');
 
     const slug = createMediaSlug(item.title || (item as any).name, id);
-    const watchUrl = item.mediaType === 'movie'
+    const watchUrl = tmdbType === 'movie'
       ? `/watch/movie/${slug}`
       : `/watch/tv/${slug}/${season}/${episode}`;
 
     window.history.pushState({}, '', watchUrl);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSelectAnimeMedia = (anime: AnimeMedia) => {
+    handleSelectMedia(animeMediaToMediaItem(anime));
+  };
+
+  const handleWatchAnimeMedia = (anime: AnimeMedia, ep = 1) => {
+    handleWatchMedia(animeMediaToMediaItem(anime), 1, ep);
   };
 
   const handleSearch = (query: string) => {
@@ -568,7 +693,28 @@ export default function App() {
           />
         )}
 
-        {currentView === 'details' && selectedMediaId && (
+        {currentView === 'anime' && (
+          <AnimePage
+            section={animeSection}
+            initialGenre={animeGenre}
+            onNavigateSection={(sec, g) => navigateTo('anime', { section: sec, genre: g })}
+            onSelectAnime={handleSelectAnimeMedia}
+            onWatchAnime={handleWatchAnimeMedia}
+          />
+        )}
+
+        {currentView === 'anime-details' && selectedMediaId && (
+          <AnimeDetailsPage
+            anilistId={selectedMediaId}
+            isMovieRoute={animeIsMovieRoute}
+            onBack={() => navigateTo('anime')}
+            onSelectAnime={handleSelectAnimeMedia}
+            onWatchAnime={(detail, ep) => handleWatchMedia(detail, 1, ep || 1)}
+            onSelectGenre={(genreName) => navigateTo('anime', { section: 'genres', genre: genreName })}
+          />
+        )}
+
+        {currentView === 'details' && selectedMediaId && selectedMediaType !== 'anime' && (
           <DetailsPage
             mediaId={selectedMediaId}
             mediaType={selectedMediaType}
@@ -618,7 +764,7 @@ export default function App() {
               if (media) {
                 handleSelectMedia(media);
               } else {
-                navigateTo(selectedMediaType === 'tv' ? 'tv-shows' : 'movies');
+                navigateTo(selectedMediaType === 'anime' ? 'anime' : selectedMediaType === 'tv' ? 'tv-shows' : 'movies');
               }
             }}
             onSelectMedia={handleSelectMedia}

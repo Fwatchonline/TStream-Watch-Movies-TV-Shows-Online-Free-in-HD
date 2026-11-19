@@ -250,97 +250,60 @@ export async function getVisitorLocation(): Promise<{ country: string; countryCo
   return fallback;
 }
 
-let isQuotaExceeded = false;
 let lastLoggedPath = '';
 let lastLoggedTime = 0;
 
 /**
- * Record a visit / pageview into Firestore analytics
+ * Record a visit / pageview locally without consuming Firestore daily free-tier write quota.
+ * Automatic per-navigation writes previously triggered multiple Firestore mutations per page view
+ * and exhausted the free-tier daily write limit.
  */
 export async function recordSiteVisit(
   path: string,
   user?: { uid: string; email?: string | null } | null
 ): Promise<void> {
-  if (typeof window === 'undefined' || isFirestoreQuotaExceeded() || isQuotaExceeded) return;
+  if (typeof window === 'undefined') return;
 
   const now = Date.now();
-  // Prevent duplicate logs for the same route within 10 seconds
   if (path === lastLoggedPath && now - lastLoggedTime < 10000) {
     return;
   }
   lastLoggedPath = path;
   lastLoggedTime = now;
 
-  const dateStr = new Date().toISOString().split('T')[0];
-  const { device, browser, os } = getDeviceInfo();
-  const geo = await getVisitorLocation();
-  const referrer = document.referrer ? new URL(document.referrer, window.location.origin).pathname : 'Direct';
-
   try {
-    const isNewSession = !sessionStorage.getItem('tstream_analytics_session');
-    if (isNewSession) {
-      sessionStorage.setItem('tstream_analytics_session', `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
+    if (typeof sessionStorage !== 'undefined' && !sessionStorage.getItem('tstream_analytics_session')) {
+      sessionStorage.setItem(
+        'tstream_analytics_session',
+        `session_${now}_${Math.random().toString(36).substring(2, 7)}`
+      );
     }
 
-    const visit: SiteVisitRecord = {
-      path: path || '/',
-      referrer: referrer || 'Direct',
-      device,
-      browser,
-      os,
-      country: geo.country,
-      countryCode: geo.countryCode,
-      city: geo.city,
-      flag: geo.flag,
-      isRegistered: !!user,
-      userId: user?.uid || null,
-      userEmail: user?.email || null,
-      timestamp: new Date().toISOString(),
-      date: dateStr
-    };
-
-    // 1. Log real-time visit document
-    await addDoc(collection(db, 'analytics_visits'), visit);
-
-    // 2. Aggregate into daily metrics
-    const dailyRef = doc(db, 'analytics_daily', dateStr);
-    const cleanPathKey = (path.replace(/[/.]/g, '_').substring(0, 40) || 'home');
-    const cleanCountryKey = (geo.country.replace(/[/.]/g, '_').substring(0, 30) || 'unknown');
-
-    await setDoc(
-      dailyRef,
-      {
-        date: dateStr,
-        pageViews: increment(1),
-        registeredVisits: increment(user ? 1 : 0),
-        guestVisits: increment(user ? 0 : 1),
-        [`pages.${cleanPathKey}`]: increment(1),
-        [`devices.${device}`]: increment(1),
-        [`browsers.${browser}`]: increment(1),
-        [`countries.${cleanCountryKey}`]: increment(1)
-      },
-      { merge: true }
-    );
-
-    // 3. Increment global lifetime summary
-    const summaryRef = doc(db, 'analytics_summary', 'global');
-    await setDoc(
-      summaryRef,
-      {
-        totalVisits: increment(1),
-        totalPageViews: increment(1),
-        lastUpdated: new Date().toISOString()
-      },
-      { merge: true }
-    );
-  } catch (err) {
-    if (isQuotaExceededError(err)) {
-      isQuotaExceeded = true;
-      markFirestoreQuotaExceeded();
-      console.warn('Firestore daily write quota reached for analytics. Pausing analytics writes.');
-      return;
+    if (typeof localStorage !== 'undefined') {
+      const dateStr = new Date().toISOString().split('T')[0];
+      const { device, browser, os } = getDeviceInfo();
+      const raw = localStorage.getItem('tstream_local_visits_v1');
+      const visits: SiteVisitRecord[] = raw ? JSON.parse(raw) : [];
+      visits.unshift({
+        path: path || '/',
+        referrer: document.referrer ? new URL(document.referrer, window.location.origin).pathname : 'Direct',
+        device,
+        browser,
+        os,
+        country: 'Local',
+        countryCode: 'UN',
+        city: 'Unknown',
+        flag: '🌐',
+        isRegistered: !!user,
+        userId: user?.uid || null,
+        userEmail: user?.email || null,
+        timestamp: new Date().toISOString(),
+        date: dateStr
+      });
+      localStorage.setItem('tstream_local_visits_v1', JSON.stringify(visits.slice(0, 50)));
     }
-    console.warn('Analytics visit recording skipped:', err);
+  } catch {
+    // Ignore storage quota or serialization errors
   }
 }
 
@@ -348,16 +311,24 @@ export async function recordSiteVisit(
  * Get total registered users count directly from Firestore
  */
 export async function getRegisteredUsersCount(): Promise<number> {
+  if (isFirestoreQuotaExceeded()) return 0;
   try {
     const usersCol = collection(db, 'users');
     const snapshot = await getCountFromServer(usersCol);
     return snapshot.data().count;
   } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExceeded();
+      return 0;
+    }
     console.warn('Could not query users count with server aggregator, trying collection read:', err);
     try {
       const snap = await getDocs(collection(db, 'users'));
       return snap.size;
     } catch (e) {
+      if (isQuotaExceededError(e)) {
+        markFirestoreQuotaExceeded();
+      }
       console.error('Error fetching registered users count:', e);
       return 0;
     }
@@ -368,6 +339,7 @@ export async function getRegisteredUsersCount(): Promise<number> {
  * Fetch registered users directory from Firestore
  */
 export async function getRegisteredUsersList(limitCount = 100): Promise<RegisteredUserSummary[]> {
+  if (isFirestoreQuotaExceeded()) return [];
   try {
     const usersCol = collection(db, 'users');
     const q = query(usersCol, orderBy('createdAt', 'desc'), limit(limitCount));
@@ -386,6 +358,9 @@ export async function getRegisteredUsersList(limitCount = 100): Promise<Register
       };
     });
   } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExceeded();
+    }
     console.warn('Error fetching registered users list:', err);
     return [];
   }
@@ -402,6 +377,20 @@ export async function getAnalyticsData(): Promise<AnalyticsSummary> {
         return JSON.parse(cached);
       }
     } catch {}
+    return {
+      totalVisits: 0,
+      totalPageViews: 0,
+      registeredUsersCount: 0,
+      todayVisits: 0,
+      yesterdayVisits: 0,
+      recentVisits: [],
+      dailyTrends: [],
+      topPages: [],
+      topCountries: [],
+      countryBreakdown: {},
+      deviceBreakdown: { Desktop: 0, Mobile: 0, Tablet: 0 },
+      browserBreakdown: { Chrome: 0, Safari: 0, Firefox: 0, Edge: 0, Other: 0 }
+    };
   }
 
   let totalVisits = 0;

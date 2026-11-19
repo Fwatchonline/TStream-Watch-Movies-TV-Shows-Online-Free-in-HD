@@ -38,6 +38,11 @@ export const FilterBar: React.FC<FilterBarProps> = ({
     onFilterChange({ ...filters, year, page: 1 });
   };
 
+  const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const language = e.target.value || undefined;
+    onFilterChange({ ...filters, language, page: 1 });
+  };
+
   const handleReset = () => {
     onFilterChange({
       mediaType: 'all',
@@ -45,6 +50,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
       sortBy: 'popularity.desc',
       minRating: undefined,
       year: undefined,
+      language: undefined,
       query: '',
       platform: filters.platform,
       letter: filters.letter,
@@ -57,6 +63,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
     filters.genreId ||
     filters.minRating ||
     filters.year ||
+    filters.language ||
     (filters.query && filters.query.trim())
   );
 
@@ -100,7 +107,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         </div>
 
         {/* Dropdowns Row */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 flex-grow max-w-3xl">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 flex-grow max-w-4xl">
           {/* Genre select */}
           <div className="relative">
             <select
@@ -148,8 +155,29 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             </select>
           </div>
 
-          {/* Sort By */}
+          {/* Language */}
           <div className="relative">
+            <select
+              aria-label="Original Language"
+              value={filters.language || ''}
+              onChange={handleLanguageChange}
+              className="w-full bg-[#232326] border border-[#3A3A40] text-xs font-medium text-[#F3F3F3] rounded-lg px-3 py-2 appearance-none focus:outline-none focus:border-[#F5C400] cursor-pointer"
+            >
+              <option value="">All Languages</option>
+              <option value="en">English</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+              <option value="es">Spanish</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="sr">Serbian</option>
+              <option value="hr">Croatian</option>
+              <option value="bs">Bosnian</option>
+            </select>
+          </div>
+
+          {/* Sort By */}
+          <div className="relative col-span-2 sm:col-span-1">
             <select
               value={filters.sortBy || 'popularity.desc'}
               onChange={handleSortChange}

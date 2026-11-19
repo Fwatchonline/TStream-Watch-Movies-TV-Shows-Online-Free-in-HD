@@ -60,6 +60,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     const parsedPlatform = params.get('platform') || initialPlatform || (category === 'platform' ? 'netflix' : undefined);
     const parsedLetter = params.get('letter') || initialLetter || (category === 'az' ? 'A' : undefined);
     const parsedCountry = params.get('country') || undefined;
+    const parsedLanguage = params.get('language') || undefined;
     const rawRegion =
       params.get('watchRegion') ||
       params.get('region') ||
@@ -85,6 +86,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
       platform: parsedPlatform,
       letter: parsedLetter,
       country: parsedCountry,
+      language: parsedLanguage,
       watchRegion: parsedWatchRegion,
       mediaType
     };
@@ -131,6 +133,9 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
     }
     if (newFilters.country) {
       params.set('country', newFilters.country);
+    }
+    if (newFilters.language) {
+      params.set('language', newFilters.language);
     }
     if ((category === 'platform' || newFilters.platform) && newFilters.watchRegion) {
       const normRegion = normalizeWatchRegion(newFilters.watchRegion);
@@ -210,6 +215,7 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
       if (filters.platform && category !== 'platform') params.set('platform', filters.platform);
       if (filters.letter && filters.letter !== 'All' && category !== 'az') params.set('letter', filters.letter);
       if (filters.country) params.set('country', filters.country);
+      if (filters.language) params.set('language', filters.language);
       const qs = params.toString();
       return qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     })();
@@ -421,7 +427,10 @@ export const CatalogPage: React.FC<CatalogPageProps> = ({
                   {currentPlatform.name} Movies & Series
                 </h1>
                 <p className="text-xs sm:text-sm text-[#A6A6AC] mt-1 max-w-2xl">
-                  {currentPlatform.description} Watch availability shown for region {activeWatchRegion}.
+                  {currentPlatform.description} Watch availability shown for region {activeWatchRegion}.{' '}
+                  <span className="text-[#8E8E93]">
+                    Streaming availability reflects TMDB watch-provider metadata and selected region.
+                  </span>
                 </p>
               </div>
             </div>

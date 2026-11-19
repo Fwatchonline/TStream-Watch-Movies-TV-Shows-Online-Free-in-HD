@@ -81,6 +81,22 @@ import {
   RegisteredUserSummary,
   SiteVisitRecord
 } from '../services/analytics';
+import {
+  listIntroTimingOverrides,
+  saveIntroTimingOverride,
+  deleteIntroTimingOverride,
+  type EpisodeSkipTimings
+} from '../services/introSkip';
+import {
+  listFeaturedContent,
+  saveFeaturedContentEntry,
+  deleteFeaturedContentEntry,
+  getHiddenTitleKeys,
+  toggleHiddenTitleKey,
+  type FeaturedContentEntry
+} from '../services/featuredContent';
+import { fetchAniListCacheStats } from '../services/anilist';
+import type { MediaType } from '../types/media';
 import { LanguageFlag } from '../components/LanguageFlag';
 
 const PRESET_DOT_COLORS = [
@@ -97,8 +113,13 @@ export const AdminPage: React.FC = () => {
   const { user, openAuthModal } = useAuth();
   const isAdmin = isAdminUser(user?.email);
 
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'reports' | 'servers' | 'views' | 'diagnostics'>('analytics');
-  
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'reports' | 'servers' | 'views' | 'operations' | 'diagnostics'>('analytics');
+
+  // Inline confirmation states (Zero window.confirm)
+  const [confirmDeleteReportId, setConfirmDeleteReportId] = useState<string | null>(null);
+  const [confirmDeleteServerId, setConfirmDeleteServerId] = useState<string | null>(null);
+  const [confirmResetServers, setConfirmResetServers] = useState(false);
+
   // Analytics state
   const [analyticsData, setAnalyticsData] = useState<AnalyticsSummary | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
@@ -151,21 +172,58 @@ export const AdminPage: React.FC = () => {
   });
   const [savingServer, setSavingServer] = useState(false);
 
-  // Diagnostics state
-  const [testing, setTesting] = useState(false);
-  const [testResults, setTestResults] = useState<{
-    fmov: 'ok' | 'checking' | 'error';
-    vdrk: 'ok' | 'checking' | 'error';
-    movietvapi: 'ok' | 'checking' | 'error';
-    vidsrc: 'ok' | 'checking' | 'error';
-    tmdb: 'ok' | 'checking' | 'error';
-  }>({
-    fmov: 'ok',
-    vdrk: 'ok',
-    movietvapi: 'ok',
-    vidsrc: 'ok',
-    tmdb: 'ok'
+  // Skip Timings & Featured Content state
+  const [introOverrides, setIntroOverrides] = useState<Array<EpisodeSkipTimings & { id: string }>>([]);
+  const [introLoading, setIntroLoading] = useState(false);
+  const [introForm, setIntroForm] = useState({
+    provider: 'anilist' as 'tmdb' | 'anilist' | 'mal',
+    providerId: '',
+    season: '1',
+    episode: '1',
+    introStart: '85',
+    introEnd: '175',
+    recapStart: '',
+    recapEnd: '',
+    creditsStart: ''
   });
+  const [savingIntro, setSavingIntro] = useState(false);
+  const [featuredItems, setFeaturedItems] = useState<FeaturedContentEntry[]>([]);
+  const [hiddenTitleKeys, setHiddenTitleKeys] = useState<string[]>(() => getHiddenTitleKeys());
+  const [featuredForm, setFeaturedForm] = useState({
+    mediaType: 'anime' as MediaType,
+    numericId: '',
+    title: '',
+    order: '1'
+  });
+  const [hiddenKeyInput, setHiddenKeyInput] = useState('');
+
+  // Diagnostics state (Live /api/stream/health + /api/anilist/cache/stats)
+  const [testing, setTesting] = useState(false);
+  const [streamHealthList, setStreamHealthList] = useState<Array<{
+    id: string;
+    name: string;
+    healthScore: number;
+    avgResponseMs: number;
+    successRate: number;
+    successes: number;
+    failures: number;
+    lastError?: string;
+  }>>([]);
+  const [aniListStats, setAniListStats] = useState<{
+    listEntries: number;
+    detailEntries: number;
+    jikanEntries: number;
+    mappingEntries: number;
+    recentMappings: Array<{
+      anilistId: number;
+      malId?: number;
+      tmdbId: number | null;
+      matchedTitle?: string;
+      mediaKind: 'movie' | 'tv';
+      resolvedAt: string;
+    }>;
+  } | null>(null);
+  const [animeCacheCleared, setAnimeCacheCleared] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
 
   // Load Analytics
@@ -230,7 +288,7 @@ export const AdminPage: React.FC = () => {
     };
   }, [isAdmin]);
 
-  // Fetch real movie views when tab is activated
+  // Fetch real movie views, operations data, or live diagnostics when tab is activated
   useEffect(() => {
     if (!isAdmin) return;
     if (activeTab === 'views') {
@@ -239,6 +297,17 @@ export const AdminPage: React.FC = () => {
         setMovieStatsList(data);
         setStatsLoading(false);
       });
+    } else if (activeTab === 'operations') {
+      setIntroLoading(true);
+      Promise.all([listIntroTimingOverrides(50), listFeaturedContent()])
+        .then(([intros, feat]) => {
+          setIntroOverrides(intros);
+          setFeaturedItems(feat);
+        })
+        .catch(() => {})
+        .finally(() => setIntroLoading(false));
+    } else if (activeTab === 'diagnostics') {
+      void runDiagnostics();
     }
   }, [activeTab, isAdmin]);
 
@@ -291,24 +360,32 @@ export const AdminPage: React.FC = () => {
 
   const runDiagnostics = async () => {
     setTesting(true);
-    setTestResults({
-      fmov: 'checking',
-      vdrk: 'checking',
-      movietvapi: 'checking',
-      vidsrc: 'checking',
-      tmdb: 'checking'
-    });
+    try {
+      const [healthRes, aniStats] = await Promise.all([
+        fetch('/api/stream/health')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+        fetchAniListCacheStats()
+      ]);
+      if (healthRes && Array.isArray(healthRes.providers)) {
+        setStreamHealthList(healthRes.providers);
+      }
+      if (aniStats) {
+        setAniListStats(aniStats);
+      }
+    } finally {
+      setTesting(false);
+    }
+  };
 
-    await new Promise((r) => setTimeout(r, 700));
-
-    setTestResults({
-      fmov: 'ok',
-      vdrk: 'ok',
-      movietvapi: 'ok',
-      vidsrc: 'ok',
-      tmdb: 'ok'
-    });
-    setTesting(false);
+  const handleClearAnimeCache = async () => {
+    try {
+      await fetch('/api/anilist/cache/clear', { method: 'POST' });
+      const fresh = await fetchAniListCacheStats();
+      if (fresh) setAniListStats(fresh);
+      setAnimeCacheCleared(true);
+      setTimeout(() => setAnimeCacheCleared(false), 3000);
+    } catch {}
   };
 
   const handleClearCache = () => {
@@ -322,9 +399,12 @@ export const AdminPage: React.FC = () => {
   };
 
   const handleDeleteReport = async (reportId: string) => {
-    if (confirm('Are you sure you want to delete this report?')) {
-      await deletePlaybackReport(reportId);
+    if (confirmDeleteReportId !== reportId) {
+      setConfirmDeleteReportId(reportId);
+      return;
     }
+    setConfirmDeleteReportId(null);
+    await deletePlaybackReport(reportId);
   };
 
   const copyToClipboard = (text: string, id: string) => {
@@ -380,15 +460,59 @@ export const AdminPage: React.FC = () => {
   };
 
   const handleDeleteServer = async (server: EmbedServerConfig) => {
-    if (confirm(`Are you sure you want to delete "${server.name}"?`)) {
-      await deleteEmbedServer(server.id);
+    if (confirmDeleteServerId !== server.id) {
+      setConfirmDeleteServerId(server.id);
+      return;
     }
+    setConfirmDeleteServerId(null);
+    await deleteEmbedServer(server.id);
   };
 
   const handleResetServers = async () => {
-    if (confirm('Restore the default 4 servers (Core Direct Native Stream, MovieTV API, VidSrc Cloud, FMov Ultra)?')) {
-      await resetEmbedServersToDefault();
+    if (!confirmResetServers) {
+      setConfirmResetServers(true);
+      return;
     }
+    setConfirmResetServers(false);
+    await resetEmbedServersToDefault();
+  };
+
+  const handleSaveIntroOverride = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!introForm.providerId.trim()) return;
+    setSavingIntro(true);
+    try {
+      await saveIntroTimingOverride({
+        provider: introForm.provider,
+        providerId: introForm.providerId.trim(),
+        season: Number(introForm.season || 1),
+        episode: Number(introForm.episode || 1),
+        introStart: introForm.introStart ? Number(introForm.introStart) : undefined,
+        introEnd: introForm.introEnd ? Number(introForm.introEnd) : undefined,
+        recapStart: introForm.recapStart ? Number(introForm.recapStart) : undefined,
+        recapEnd: introForm.recapEnd ? Number(introForm.recapEnd) : undefined,
+        creditsStart: introForm.creditsStart ? Number(introForm.creditsStart) : undefined
+      });
+      const updated = await listIntroTimingOverrides(50);
+      setIntroOverrides(updated);
+    } finally {
+      setSavingIntro(false);
+    }
+  };
+
+  const handleSaveFeaturedEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!featuredForm.numericId.trim() || !featuredForm.title.trim()) return;
+    await saveFeaturedContentEntry({
+      mediaType: featuredForm.mediaType,
+      numericId: featuredForm.numericId.trim(),
+      title: featuredForm.title.trim(),
+      order: Number(featuredForm.order || 1),
+      enabled: true
+    });
+    const list = await listFeaturedContent();
+    setFeaturedItems(list);
+    setFeaturedForm({ ...featuredForm, numericId: '', title: '' });
   };
 
   const handleToggleDirectStream = async () => {
@@ -665,6 +789,19 @@ export const AdminPage: React.FC = () => {
           <span>Stream Views &amp; Ratings</span>
         </button>
 
+        {/* Tab: Operations (Skip Timings & Featured Content) */}
+        <button
+          onClick={() => setActiveTab('operations')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+            activeTab === 'operations'
+              ? 'bg-[#F5C400] text-black font-black shadow-md'
+              : 'text-[#A6A6AC] hover:text-white'
+          }`}
+        >
+          <Sliders className="w-4 h-4" />
+          <span>Skip Timings &amp; Featured</span>
+        </button>
+
         {/* Tab: Diagnostics */}
         <button
           onClick={() => setActiveTab('diagnostics')}
@@ -675,7 +812,7 @@ export const AdminPage: React.FC = () => {
           }`}
         >
           <Activity className="w-4 h-4" />
-          <span>Nodes &amp; Diagnostics</span>
+          <span>Stream Health &amp; Cache</span>
         </button>
       </div>
 
@@ -1359,13 +1496,30 @@ export const AdminPage: React.FC = () => {
                         <option value="resolved">Resolved</option>
                       </select>
 
-                      <button
-                        onClick={() => handleDeleteReport(report.id)}
-                        className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors cursor-pointer"
-                        title="Delete Ticket"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {confirmDeleteReportId === report.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleDeleteReport(report.id)}
+                            className="px-2.5 py-1 rounded-lg bg-red-600 text-white text-[11px] font-bold cursor-pointer"
+                          >
+                            Confirm Delete
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteReportId(null)}
+                            className="px-2 py-1 rounded-lg bg-[#25252c] text-[#A6A6AC] text-[11px] font-semibold cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleDeleteReport(report.id)}
+                          className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors cursor-pointer"
+                          title="Delete Ticket"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1576,14 +1730,33 @@ export const AdminPage: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleResetServers}
-                className="px-3.5 py-2 rounded-xl bg-[#22222a] hover:bg-[#2c2c36] text-[#E5E5EA] text-xs font-bold border border-[#3A3A40] transition-colors cursor-pointer flex items-center gap-1.5"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reset Defaults</span>
-              </button>
+              {confirmResetServers ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleResetServers}
+                    className="px-3.5 py-2 rounded-xl bg-red-600 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Confirm Reset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmResetServers(false)}
+                    className="px-3 py-2 rounded-xl bg-[#22222a] text-[#A6A6AC] text-xs font-bold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleResetServers}
+                  className="px-3.5 py-2 rounded-xl bg-[#22222a] hover:bg-[#2c2c36] text-[#E5E5EA] text-xs font-bold border border-[#3A3A40] transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset Defaults</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1660,13 +1833,32 @@ export const AdminPage: React.FC = () => {
                       <Edit3 className="w-3 h-3 text-[#F5C400]" />
                       <span>Edit</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteServer(srv)}
-                      className="p-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {confirmDeleteServerId === srv.id ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteServer(srv)}
+                          className="px-2 py-1 rounded-lg bg-red-600 text-white text-[11px] font-bold cursor-pointer"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteServerId(null)}
+                          className="px-2 py-1 rounded-lg bg-[#25252c] text-[#A6A6AC] text-[11px] cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteServer(srv)}
+                        className="p-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1734,38 +1926,354 @@ export const AdminPage: React.FC = () => {
       )}
 
       {/* =========================================================================
-          TAB 6: NODES & SYSTEM DIAGNOSTICS
+          TAB 6: SKIP TIMINGS & FEATURED CONTENT
+         ========================================================================= */}
+      {activeTab === 'operations' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Intro / Recap / Credits Override Manager */}
+          <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34] space-y-5">
+            <div>
+              <h3 className="text-base font-bold text-white">Episode Intro / Recap / Credits Timings</h3>
+              <p className="text-xs text-[#A6A6AC] mt-1">
+                Overrides supplement AniSkip v2 intervals for specific episodes without fabricating missing timings.
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveIntroOverride} className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
+              <select
+                value={introForm.provider}
+                onChange={(e) => setIntroForm({ ...introForm, provider: e.target.value as any })}
+                className="h-9 px-2.5 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              >
+                <option value="anilist">AniList</option>
+                <option value="mal">MAL</option>
+                <option value="tmdb">TMDB</option>
+              </select>
+              <input
+                type="text"
+                required
+                placeholder="ID (e.g. 21)"
+                value={introForm.providerId}
+                onChange={(e) => setIntroForm({ ...introForm, providerId: e.target.value })}
+                className="h-9 px-2.5 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              />
+              <input
+                type="number"
+                min="0"
+                placeholder="Season"
+                value={introForm.season}
+                onChange={(e) => setIntroForm({ ...introForm, season: e.target.value })}
+                className="h-9 px-2.5 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              />
+              <input
+                type="number"
+                min="1"
+                placeholder="Episode"
+                value={introForm.episode}
+                onChange={(e) => setIntroForm({ ...introForm, episode: e.target.value })}
+                className="h-9 px-2.5 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              />
+              <input
+                type="number"
+                min="0"
+                placeholder="Intro Start (s)"
+                value={introForm.introStart}
+                onChange={(e) => setIntroForm({ ...introForm, introStart: e.target.value })}
+                className="h-9 px-2.5 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              />
+              <input
+                type="number"
+                min="0"
+                placeholder="Intro End (s)"
+                value={introForm.introEnd}
+                onChange={(e) => setIntroForm({ ...introForm, introEnd: e.target.value })}
+                className="h-9 px-2.5 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              />
+              <input
+                type="number"
+                min="0"
+                placeholder="Credits Start (s)"
+                value={introForm.creditsStart}
+                onChange={(e) => setIntroForm({ ...introForm, creditsStart: e.target.value })}
+                className="h-9 px-2.5 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              />
+              <button
+                type="submit"
+                disabled={savingIntro}
+                className="h-9 px-3 rounded-lg bg-[#F5C400] text-black text-xs font-black cursor-pointer disabled:opacity-50"
+              >
+                {savingIntro ? 'Saving...' : 'Save Timing'}
+              </button>
+            </form>
+
+            {introLoading ? (
+              <p className="text-xs text-[#8E8E93]">Loading saved overrides...</p>
+            ) : introOverrides.length === 0 ? (
+              <p className="text-xs text-[#8E8E93]">No manual intro overrides configured yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {introOverrides.map((ov) => (
+                  <div
+                    key={ov.id}
+                    className="p-3 rounded-xl bg-[#0d0d10] border border-[#26262c] flex items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-[#F5C400] font-bold">{ov.id}</span>
+                      {ov.introStart !== undefined && ov.introEnd !== undefined && (
+                        <span className="text-[#D1D1D6]">Intro: {ov.introStart}s–{ov.introEnd}s</span>
+                      )}
+                      {ov.creditsStart !== undefined && (
+                        <span className="text-[#8E8E93]">Credits: {ov.creditsStart}s</span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await deleteIntroTimingOverride(ov.id);
+                        setIntroOverrides((prev) => prev.filter((item) => item.id !== ov.id));
+                      }}
+                      className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Featured Content & Hidden Titles */}
+          <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34] space-y-5">
+            <div>
+              <h3 className="text-base font-bold text-white">Homepage Featured Spotlight &amp; Hidden Titles</h3>
+              <p className="text-xs text-[#A6A6AC] mt-1">
+                Pin featured Movie/TV/Anime titles or hide entries via canonical media keys (e.g. movie_550, anime_21).
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveFeaturedEntry} className="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
+              <select
+                value={featuredForm.mediaType}
+                onChange={(e) => setFeaturedForm({ ...featuredForm, mediaType: e.target.value as MediaType })}
+                className="h-9 px-3 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              >
+                <option value="movie">Movie</option>
+                <option value="tv">TV Series</option>
+                <option value="anime">Anime</option>
+              </select>
+              <input
+                type="text"
+                required
+                placeholder="ID (TMDB or AniList)"
+                value={featuredForm.numericId}
+                onChange={(e) => setFeaturedForm({ ...featuredForm, numericId: e.target.value })}
+                className="h-9 px-3 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+              />
+              <input
+                type="text"
+                required
+                placeholder="Display Title"
+                value={featuredForm.title}
+                onChange={(e) => setFeaturedForm({ ...featuredForm, title: e.target.value })}
+                className="h-9 px-3 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white sm:col-span-2"
+              />
+              <button
+                type="submit"
+                className="h-9 px-3 rounded-lg bg-[#F5C400] text-black text-xs font-black cursor-pointer"
+              >
+                Add Spotlight
+              </button>
+            </form>
+
+            {featuredItems.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {featuredItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="p-3 rounded-xl bg-[#0d0d10] border border-[#26262c] flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div>
+                      <span className="font-bold text-white block">{item.title}</span>
+                      <span className="text-[11px] font-mono text-[#8E8E93]">{item.id}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await deleteFeaturedContentEntry(item.id);
+                        setFeaturedItems((prev) => prev.filter((f) => f.id !== item.id));
+                      }}
+                      className="p-1.5 rounded-lg bg-red-500/10 text-red-400 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-4 border-t border-[#25252c] space-y-2.5">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Hide key (e.g. movie_12345 or anime_999)"
+                  value={hiddenKeyInput}
+                  onChange={(e) => setHiddenKeyInput(e.target.value)}
+                  className="flex-1 h-9 px-3 rounded-lg bg-[#0d0d10] border border-[#2d2d34] text-xs text-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!hiddenKeyInput.trim()) return;
+                    setHiddenTitleKeys(toggleHiddenTitleKey(hiddenKeyInput.trim()));
+                    setHiddenKeyInput('');
+                  }}
+                  className="h-9 px-3 rounded-lg bg-[#22222a] border border-[#3A3A40] text-xs font-bold text-white cursor-pointer"
+                >
+                  Toggle Hide
+                </button>
+              </div>
+              {hiddenTitleKeys.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {hiddenTitleKeys.map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setHiddenTitleKeys(toggleHiddenTitleKey(k))}
+                      className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[11px] font-mono text-[#D1D1D6] hover:text-white cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>{k}</span>
+                      <X className="w-3 h-3 text-red-400" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 7: STREAM PROVIDER HEALTH & ANILIST CACHE DIAGNOSTICS
          ========================================================================= */}
       {activeTab === 'diagnostics' && (
         <div className="space-y-6 animate-in fade-in duration-200">
-          <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34]">
-            <h3 className="text-base font-bold text-white mb-1">
-              Playback Infrastructure Health
-            </h3>
-            <p className="text-xs text-[#8E8E93] mb-6">
-              Network verification of TMDB APIs and stream delivery providers.
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {[
-                { name: 'TMDB Metadata API', status: testResults.tmdb },
-                { name: 'MovieTV API Mirror', status: testResults.movietvapi },
-                { name: 'VidSrc Cloud Node', status: testResults.vidsrc },
-                { name: 'FMov Ultra Player', status: testResults.fmov },
-                { name: 'Vidsrc.vip Stream Host', status: testResults.vdrk }
-              ].map((node) => (
-                <div
-                  key={node.name}
-                  className="p-4 rounded-xl bg-[#0f0f12] border border-[#26262c] flex items-center justify-between"
-                >
-                  <span className="text-xs font-bold text-white">{node.name}</span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" />
-                    Online
-                  </span>
-                </div>
-              ))}
+          <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34] space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-white">Live Stream Provider Health</h3>
+                <p className="text-xs text-[#8E8E93] mt-0.5">
+                  Real EWMA response latency, success rates, and latest errors recorded by the server stream resolver.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={runDiagnostics}
+                disabled={testing}
+                className="px-3.5 py-2 rounded-xl bg-[#22222a] hover:bg-[#2c2c36] border border-[#3A3A40] text-xs font-bold text-white cursor-pointer flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${testing ? 'animate-spin' : ''}`} />
+                <span>Refresh Health</span>
+              </button>
             </div>
+
+            {streamHealthList.length === 0 ? (
+              <p className="text-xs text-[#8E8E93]">No provider telemetry returned yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-[#2d2d34] text-[#8E8E93]">
+                      <th className="py-2.5 pr-3">Provider</th>
+                      <th className="py-2.5 px-3">Health</th>
+                      <th className="py-2.5 px-3">Avg Latency</th>
+                      <th className="py-2.5 px-3">Success Rate</th>
+                      <th className="py-2.5 px-3">Calls</th>
+                      <th className="py-2.5 pl-3">Last Error</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#22222a]">
+                    {streamHealthList.map((p) => (
+                      <tr key={p.id}>
+                        <td className="py-2.5 pr-3 font-bold text-white">{p.name}</td>
+                        <td className="py-2.5 px-3 font-mono text-[#F5C400]">{p.healthScore}/100</td>
+                        <td className="py-2.5 px-3 font-mono text-[#D1D1D6]">
+                          {p.avgResponseMs > 0 ? `${Math.round(p.avgResponseMs)}ms` : '—'}
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-emerald-400">
+                          {Math.round((p.successRate ?? 1) * 100)}%
+                        </td>
+                        <td className="py-2.5 px-3 text-[#8E8E93]">
+                          {p.successes} ok / {p.failures} err
+                        </td>
+                        <td className="py-2.5 pl-3 text-[11px] text-red-400 truncate max-w-[220px]">
+                          {p.lastError || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* AniList Cache & ID Mappings Inspector */}
+          <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34] space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-white">AniList Cache &amp; TMDB Mapping Inspector</h3>
+                <p className="text-xs text-[#8E8E93] mt-0.5">
+                  Bounded server cache entries and resolved AniList ↔ TMDB stream mappings.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleClearAnimeCache}
+                className="px-4 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-[#F5C400] text-xs font-bold border border-amber-500/30 cursor-pointer"
+              >
+                {animeCacheCleared ? 'AniList Cache Cleared!' : 'Clear Server Anime Cache'}
+              </button>
+            </div>
+
+            {aniListStats && (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-[#0d0d10] border border-[#26262c]">
+                    <span className="text-[#8E8E93] block">List Pages Cached</span>
+                    <span className="text-lg font-black text-white">{aniListStats.listEntries}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#0d0d10] border border-[#26262c]">
+                    <span className="text-[#8E8E93] block">Detail Entries</span>
+                    <span className="text-lg font-black text-white">{aniListStats.detailEntries}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#0d0d10] border border-[#26262c]">
+                    <span className="text-[#8E8E93] block">Jikan Episode Caches</span>
+                    <span className="text-lg font-black text-white">{aniListStats.jikanEntries}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#0d0d10] border border-[#26262c]">
+                    <span className="text-[#8E8E93] block">AniList → TMDB Maps</span>
+                    <span className="text-lg font-black text-[#F5C400]">{aniListStats.mappingEntries}</span>
+                  </div>
+                </div>
+
+                {aniListStats.recentMappings.length > 0 && (
+                  <div className="space-y-1.5 text-xs">
+                    {aniListStats.recentMappings.slice(0, 8).map((m) => (
+                      <div
+                        key={m.anilistId}
+                        className="p-2.5 rounded-lg bg-[#0d0d10] border border-[#26262c] flex items-center justify-between gap-3"
+                      >
+                        <span className="font-semibold text-white truncate">
+                          {m.matchedTitle || `AniList #${m.anilistId}`}
+                        </span>
+                        <span className="font-mono text-[#A6A6AC] shrink-0">
+                          AL:{m.anilistId} {m.malId ? `· MAL:${m.malId}` : ''} → {m.tmdbId ? `TMDB:${m.tmdbId}` : 'unmapped'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="p-6 rounded-2xl bg-[#16161a] border border-[#2d2d34] flex items-center justify-between">
@@ -1780,7 +2288,7 @@ export const AdminPage: React.FC = () => {
               onClick={handleClearCache}
               className="px-4 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold border border-red-500/20 transition-colors cursor-pointer"
             >
-              {cacheCleared ? 'Cache Cleared!' : 'Flush Cache'}
+              {cacheCleared ? 'Cache Cleared!' : 'Flush Client Cache'}
             </button>
           </div>
         </div>

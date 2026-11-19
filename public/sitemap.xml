@@ -12,4 +12,7 @@
   <sitemap>
     <loc>https://tstream.online/sitemap-episodes.xml</loc>
   </sitemap>
+  <sitemap>
+    <loc>https://tstream.online/sitemap-anime.xml</loc>
+  </sitemap>
 </sitemapindex>

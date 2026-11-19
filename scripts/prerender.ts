@@ -26,6 +26,7 @@ import {
   type AuthoritativeInventoryResult
 } from './routeInventory.ts';
 import type { TmdbDiscoveryOptions } from './tmdbDiscovery.ts';
+import { resolveAnimeGenreSlugMeta } from './animeDiscovery.ts';
 import { PRIMARY_ORIGIN } from '../src/utils/seo.ts';
 
 loadBuildEnv();
@@ -35,6 +36,7 @@ const DEFAULT_DIST_DIR = path.resolve(process.cwd(), 'dist');
 export const DEFAULT_PRERENDER_MAX_DYNAMIC_MOVIES = 100;
 export const DEFAULT_PRERENDER_MAX_DYNAMIC_TV = 50;
 export const DEFAULT_PRERENDER_MAX_DYNAMIC_EPISODES = 50;
+export const DEFAULT_PRERENDER_MAX_DYNAMIC_ANIME = 25;
 
 export interface PrerenderOptions extends TmdbDiscoveryOptions {
   inventory?: AuthoritativeInventoryResult;
@@ -42,6 +44,8 @@ export interface PrerenderOptions extends TmdbDiscoveryOptions {
   maxDynamicMovies?: number;
   maxDynamicTv?: number;
   maxDynamicEpisodes?: number;
+  maxDynamicAnime?: number;
+  animeFetchImpl?: typeof fetch;
 }
 
 export interface PrerenderValidationResult {
@@ -71,24 +75,29 @@ export interface PrerenderReport {
     movies: number;
     tvShows: number;
     episodes: number;
+    anime: number;
   };
   prerenderedCounts: {
     movies: number;
     tvShows: number;
     episodes: number;
+    anime: number;
     dynamicMovies: number;
     dynamicTvShows: number;
     dynamicEpisodes: number;
+    dynamicAnime: number;
   };
   hybridSsrDynamicCounts: {
     movies: number;
     tvShows: number;
     episodes: number;
+    anime: number;
   };
   sampleDynamicSsrRoutes: {
     movies: string[];
     tvShows: string[];
     episodes: string[];
+    anime: string[];
   };
   routes: PrerenderValidationResult[];
 }
@@ -312,6 +321,10 @@ export async function prerenderAll(
     options.maxDynamicEpisodes ?? process.env.PRERENDER_MAX_DYNAMIC_EPISODES,
     DEFAULT_PRERENDER_MAX_DYNAMIC_EPISODES
   );
+  const maxDynamicAnime = parseDynamicLimit(
+    options.maxDynamicAnime ?? process.env.PRERENDER_MAX_DYNAMIC_ANIME,
+    DEFAULT_PRERENDER_MAX_DYNAMIC_ANIME
+  );
 
   let inventory: AuthoritativeInventoryResult | null = options.inventory || null;
   let usedBuildSnapshot = false;
@@ -339,7 +352,7 @@ export async function prerenderAll(
 
   console.log(
     `[Prerender Inventory] source=getAuthoritativeRouteInventory, usedBuildSnapshot=${usedBuildSnapshot}, ` +
-      `movies=${inventory.movies.length}, tv=${inventory.tvShows.length}, episodes=${inventory.episodes.length}`
+      `movies=${inventory.movies.length}, tv=${inventory.tvShows.length}, episodes=${inventory.episodes.length}, anime=${(inventory.anime || []).length}`
   );
 
   const routeResults: PrerenderValidationResult[] = [];
@@ -519,9 +532,52 @@ export async function prerenderAll(
     );
   }
 
+  // 11. Anime Hubs, Genre Landings & Verified Anime Series/Movie Detail Routes
+  const animeInventory = inventory.anime || [];
+  const allAnimeMedia = animeInventory.map(a => a.media);
+  const animeHubs = inventory.animeHubs || [];
+
+  for (const ah of animeHubs) {
+    let hubItems: any[] = [];
+    if (ah.url === '/anime/movies') {
+      hubItems = allAnimeMedia.filter(a => String(a.format || '').toUpperCase() === 'MOVIE').slice(0, 12);
+    } else if (ah.url === '/anime/upcoming') {
+      hubItems = allAnimeMedia.filter(a => String(a.status || '').toUpperCase() === 'NOT_YET_RELEASED').slice(0, 12);
+    } else if (ah.url === '/anime/genres') {
+      hubItems = [];
+    } else if (ah.url.startsWith('/anime/genres/')) {
+      const gSlug = ah.url.slice('/anime/genres/'.length);
+      const gMeta = resolveAnimeGenreSlugMeta(gSlug);
+      const gLower = (gMeta?.name || gSlug).toLowerCase();
+      hubItems = allAnimeMedia
+        .filter(a => Array.isArray(a.genres) && a.genres.some((g: string) => String(g).toLowerCase() === gLower))
+        .slice(0, 12);
+    } else {
+      hubItems = allAnimeMedia.slice(0, 12);
+    }
+    await processRoute(ah.url, path.join(distDir, ah.file), hubItems, ah.can, ah.noindex);
+  }
+
+  const curatedAnimeToPrerender = animeInventory.filter(a => a.source !== 'anilist');
+  const dynamicAnime = animeInventory.filter(a => a.source === 'anilist');
+  const dynamicAnimeToPrerender = dynamicAnime.slice(0, maxDynamicAnime);
+  const hybridSsrAnime = dynamicAnime.slice(maxDynamicAnime);
+
+  for (const animeEntry of [...curatedAnimeToPrerender, ...dynamicAnimeToPrerender]) {
+    const outRel = `${animeEntry.detailPath.replace(/^\/+/, '')}/index.html`;
+    await processRoute(
+      animeEntry.detailPath,
+      path.join(distDir, outRel),
+      animeEntry.media,
+      animeEntry.canonicalUrl,
+      false
+    );
+  }
+
   const authoritativeMainCount =
     1 +
     inventory.hubs.filter(h => !h.noindex).length +
+    animeHubs.filter(h => !h.noindex).length +
     inventory.tags.length +
     inventory.genres.filter(g => g.indexable).length +
     inventory.platforms.filter(p => p.indexable).length +
@@ -548,6 +604,13 @@ export async function prerenderAll(
       ...hybridSsrEpisodes.slice(-5).map(e => e.urlPath)
     ])
   );
+  const sampleDynamicAnimeRoutes = Array.from(
+    new Set([
+      ...dynamicAnimeToPrerender.slice(0, 3).map(a => a.detailPath),
+      ...hybridSsrAnime.slice(0, 5).map(a => a.detailPath),
+      ...hybridSsrAnime.slice(-5).map(a => a.detailPath)
+    ])
+  );
 
   const succeededList = routeResults.filter(r => r.success);
   const failedList = routeResults.filter(r => !r.success);
@@ -568,25 +631,30 @@ export async function prerenderAll(
       main: authoritativeMainCount,
       movies: inventory.movies.length,
       tvShows: inventory.tvShows.length,
-      episodes: inventory.episodes.length
+      episodes: inventory.episodes.length,
+      anime: animeInventory.length
     },
     prerenderedCounts: {
       movies: curatedMoviesToPrerender.length + dynamicMoviesToPrerender.length,
       tvShows: curatedTvToPrerender.length + dynamicTvToPrerender.length,
       episodes: curatedEpisodesToPrerender.length + dynamicEpisodesToPrerender.length,
+      anime: curatedAnimeToPrerender.length + dynamicAnimeToPrerender.length,
       dynamicMovies: dynamicMoviesToPrerender.length,
       dynamicTvShows: dynamicTvToPrerender.length,
-      dynamicEpisodes: dynamicEpisodesToPrerender.length
+      dynamicEpisodes: dynamicEpisodesToPrerender.length,
+      dynamicAnime: dynamicAnimeToPrerender.length
     },
     hybridSsrDynamicCounts: {
       movies: hybridSsrMovies.length,
       tvShows: hybridSsrTv.length,
-      episodes: hybridSsrEpisodes.length
+      episodes: hybridSsrEpisodes.length,
+      anime: hybridSsrAnime.length
     },
     sampleDynamicSsrRoutes: {
       movies: sampleDynamicMovieRoutes,
       tvShows: sampleDynamicTvRoutes,
-      episodes: sampleDynamicEpisodeRoutes
+      episodes: sampleDynamicEpisodeRoutes,
+      anime: sampleDynamicAnimeRoutes
     },
     routes: routeResults
   };
@@ -600,8 +668,8 @@ export async function prerenderAll(
   console.log(`  - Indexable HTML:   ${report.indexableSucceeded}`);
   console.log(`  - Noindex/404 HTML: ${report.noindexSucceeded}`);
   console.log(
-    `- Dynamic routes:     prerendered(movies=${report.prerenderedCounts.dynamicMovies}, tv=${report.prerenderedCounts.dynamicTvShows}, ep=${report.prerenderedCounts.dynamicEpisodes}), ` +
-      `hybridSSR(movies=${report.hybridSsrDynamicCounts.movies}, tv=${report.hybridSsrDynamicCounts.tvShows}, ep=${report.hybridSsrDynamicCounts.episodes})`
+    `- Dynamic routes:     prerendered(movies=${report.prerenderedCounts.dynamicMovies}, tv=${report.prerenderedCounts.dynamicTvShows}, ep=${report.prerenderedCounts.dynamicEpisodes}, anime=${report.prerenderedCounts.dynamicAnime}), ` +
+      `hybridSSR(movies=${report.hybridSsrDynamicCounts.movies}, tv=${report.hybridSsrDynamicCounts.tvShows}, ep=${report.hybridSsrDynamicCounts.episodes}, anime=${report.hybridSsrDynamicCounts.anime})`
   );
   if (report.failed > 0) {
     console.log(`- Failed routes:      ${report.failed}`);

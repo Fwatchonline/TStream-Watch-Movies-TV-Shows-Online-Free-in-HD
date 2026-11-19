@@ -228,7 +228,7 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
           overview: `Season ${i} of ${tvDetail.title}.`,
           posterPath: tvDetail.posterPath,
           airDate: '',
-          episodeCount: 10,
+          episodeCount: 0,
           episodes: undefined
         });
       }
@@ -439,7 +439,9 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                     <span>
                       {detail.numberOfEpisodes
                         ? `${detail.numberOfEpisodes} Episodes`
-                        : `${tvDetail?.seasons?.[0]?.episodeCount || 8} Episodes`}
+                        : tvDetail?.seasons?.[0]?.episodeCount
+                        ? `${tvDetail.seasons[0].episodeCount} Episodes`
+                        : 'Full Series'}
                     </span>
                   </>
                 )}
@@ -707,7 +709,7 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                 >
                   {allSeasons.map(s => (
                     <option key={s.seasonNumber} value={s.seasonNumber}>
-                      {s.name} ({s.episodeCount || 10} eps)
+                      {s.name}{s.episodeCount > 0 ? ` (${s.episodeCount} eps)` : ''}
                     </option>
                   ))}
                 </select>
@@ -731,13 +733,15 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                     }`}
                   >
                     <span>{season.name}</span>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
-                        isSelected ? 'bg-black/20 text-black' : 'bg-white/5 text-[#A6A6AC]'
-                      }`}
-                    >
-                      {season.episodeCount || 10} eps
-                    </span>
+                    {season.episodeCount > 0 && (
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                          isSelected ? 'bg-black/20 text-black' : 'bg-white/5 text-[#A6A6AC]'
+                        }`}
+                      >
+                        {season.episodeCount} eps
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -772,7 +776,9 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                     </h4>
                     <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
                       {currentSeason.overview ||
-                        `Season ${currentSeason.seasonNumber} features ${currentSeason.episodeCount} episodes.`}
+                        (currentSeason.episodeCount > 0
+                          ? `Season ${currentSeason.seasonNumber} features ${currentSeason.episodeCount} episodes.`
+                          : `Browse Season ${currentSeason.seasonNumber} episodes.`)}
                     </p>
                   </div>
                 </div>
@@ -814,23 +820,22 @@ export const DetailsPage: React.FC<DetailsPageProps> = ({
                   className="group cursor-pointer rounded-2xl overflow-hidden bg-[#29292D] border border-[#3A3A40] hover:border-[#F5C400] hover:bg-[#303035] transition-all flex flex-col sm:flex-row gap-3.5 p-3 sm:p-3.5 shadow-sm hover:shadow-lg"
                 >
                   {/* Thumbnail Still */}
-                  <div className="relative aspect-video w-full sm:w-44 rounded-xl overflow-hidden bg-[#232326] shrink-0 border border-[#3A3A40]">
-                    <img
-                      src={
-                        ep.stillPath ||
-                        detail.backdropPath ||
-                        'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=600&auto=format&fit=crop&q=80'
-                      }
-                      alt={ep.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        const fallback = 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=600&auto=format&fit=crop&q=80';
-                        if (e.currentTarget.src !== fallback) {
-                          e.currentTarget.src = fallback;
-                        }
-                      }}
-                    />
+                  <div className="relative aspect-video w-full sm:w-44 rounded-xl overflow-hidden bg-gradient-to-br from-[#1d1d24] to-[#29292D] shrink-0 border border-[#3A3A40]">
+                    {(ep.stillPath || detail.backdropPath) && (
+                      <img
+                        src={ep.stillPath || detail.backdropPath}
+                        alt={ep.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          if (detail.backdropPath && e.currentTarget.src !== detail.backdropPath) {
+                            e.currentTarget.src = detail.backdropPath;
+                          } else {
+                            e.currentTarget.style.display = 'none';
+                          }
+                        }}
+                      />
+                    )}
                     <div className="absolute inset-0 bg-black/40 group-hover:bg-black/20 flex items-center justify-center transition-colors">
                       <div className="w-10 h-10 rounded-full bg-[#F5C400] flex items-center justify-center text-black shadow-lg group-hover:scale-110 transition-transform">
                         <Play className="w-4 h-4 fill-black text-black ml-0.5" />

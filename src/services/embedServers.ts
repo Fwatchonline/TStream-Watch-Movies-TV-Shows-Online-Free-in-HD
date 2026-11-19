@@ -1,5 +1,6 @@
 import { doc, getDoc, setDoc, onSnapshot, Unsubscribe } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, isFirestoreQuotaExceeded, markFirestoreQuotaExceeded, isQuotaExceededError } from './firebase';
+import { MediaType } from '../types/media';
 
 export interface EmbedServerConfig {
   id: string;
@@ -211,11 +212,11 @@ function saveLocalDefaultServerPreferences(prefs: DefaultServerPreferences): voi
 }
 
 /**
- * Resolve the effective default server for a given media type ('movie' | 'tv')
+ * Resolve the effective default server for a given media type ('movie' | 'tv' | 'anime')
  * based on Admin preferences, enabled server list, and Direct Stream toggle.
  */
 export function pickEffectiveDefaultServer(
-  mediaType: 'movie' | 'tv',
+  mediaType: MediaType,
   servers: EmbedServerConfig[],
   directEnabled: boolean,
   prefs: DefaultServerPreferences
@@ -254,18 +255,23 @@ export async function saveDefaultServerPreferences(
   const normalized = normalizeDefaultServerPreferences(prefs);
   saveLocalDefaultServerPreferences(normalized);
 
-  try {
-    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
-    await setDoc(
-      docRef,
-      {
-        defaultServerPrefs: normalized,
-        updatedAt: new Date().toISOString()
-      },
-      { merge: true }
-    );
-  } catch (err) {
-    console.warn('Error saving defaultServerPrefs to Firestore:', err);
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+      await setDoc(
+        docRef,
+        {
+          defaultServerPrefs: normalized,
+          updatedAt: new Date().toISOString()
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      if (isQuotaExceededError(err)) {
+        markFirestoreQuotaExceeded();
+      }
+      console.warn('Error saving defaultServerPrefs to Firestore:', err);
+    }
   }
   return normalized;
 }
@@ -286,26 +292,31 @@ export function subscribeToDefaultServerPreferences(
   window.addEventListener('tstream_default_server_prefs_updated', handleCustomEvent);
 
   let unsubscribeFirestore: Unsubscribe | null = null;
-  try {
-    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
-    unsubscribeFirestore = onSnapshot(
-      docRef,
-      (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          if (data?.defaultServerPrefs && typeof data.defaultServerPrefs === 'object') {
-            const normalized = normalizeDefaultServerPreferences(data.defaultServerPrefs);
-            saveLocalDefaultServerPreferences(normalized);
-            callback(normalized);
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+      unsubscribeFirestore = onSnapshot(
+        docRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data?.defaultServerPrefs && typeof data.defaultServerPrefs === 'object') {
+              const normalized = normalizeDefaultServerPreferences(data.defaultServerPrefs);
+              saveLocalDefaultServerPreferences(normalized);
+              callback(normalized);
+            }
           }
+        },
+        (err) => {
+          if (isQuotaExceededError(err)) {
+            markFirestoreQuotaExceeded();
+          }
+          console.warn('Firestore defaultServerPrefs listener error:', err);
         }
-      },
-      (err) => {
-        console.warn('Firestore defaultServerPrefs listener error:', err);
-      }
-    );
-  } catch (err) {
-    console.warn('Firestore defaultServerPrefs subscription failed:', err);
+      );
+    } catch (err) {
+      console.warn('Firestore defaultServerPrefs subscription failed:', err);
+    }
   }
 
   return () => {
@@ -329,19 +340,24 @@ export async function setDirectStreamEnabled(enabled: boolean): Promise<void> {
   const sorted = [...updatedServers].sort((a, b) => a.order - b.order);
   saveLocalServers(sorted);
 
-  try {
-    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
-    await setDoc(
-      docRef,
-      {
-        servers: sorted,
-        directStreamEnabled: enabled,
-        updatedAt: new Date().toISOString()
-      },
-      { merge: true }
-    );
-  } catch (err) {
-    console.warn('Error saving directStreamEnabled to Firestore:', err);
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+      await setDoc(
+        docRef,
+        {
+          servers: sorted,
+          directStreamEnabled: enabled,
+          updatedAt: new Date().toISOString()
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      if (isQuotaExceededError(err)) {
+        markFirestoreQuotaExceeded();
+      }
+      console.warn('Error saving directStreamEnabled to Firestore:', err);
+    }
   }
 }
 
@@ -361,34 +377,39 @@ export function subscribeToDirectStreamEnabled(
   window.addEventListener('tstream_direct_stream_updated', handleCustomEvent);
 
   let unsubscribeFirestore: Unsubscribe | null = null;
-  try {
-    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
-    unsubscribeFirestore = onSnapshot(
-      docRef,
-      (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          let resolved: boolean | undefined;
-          if (typeof data?.directStreamEnabled === 'boolean') {
-            resolved = data.directStreamEnabled;
-          } else if (Array.isArray(data?.servers)) {
-            const directSrv = data.servers.find((s: any) => s.id === 'server_1_direct' || s.type === 'direct');
-            if (directSrv && typeof directSrv.enabled === 'boolean') {
-              resolved = directSrv.enabled;
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+      unsubscribeFirestore = onSnapshot(
+        docRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            let resolved: boolean | undefined;
+            if (typeof data?.directStreamEnabled === 'boolean') {
+              resolved = data.directStreamEnabled;
+            } else if (Array.isArray(data?.servers)) {
+              const directSrv = data.servers.find((s: any) => s.id === 'server_1_direct' || s.type === 'direct');
+              if (directSrv && typeof directSrv.enabled === 'boolean') {
+                resolved = directSrv.enabled;
+              }
+            }
+            if (typeof resolved === 'boolean') {
+              saveLocalDirectStreamEnabled(resolved);
+              callback(resolved);
             }
           }
-          if (typeof resolved === 'boolean') {
-            saveLocalDirectStreamEnabled(resolved);
-            callback(resolved);
+        },
+        (err) => {
+          if (isQuotaExceededError(err)) {
+            markFirestoreQuotaExceeded();
           }
+          console.warn('Firestore directStreamEnabled listener error:', err);
         }
-      },
-      (err) => {
-        console.warn('Firestore directStreamEnabled listener error:', err);
-      }
-    );
-  } catch (err) {
-    console.warn('Firestore directStreamEnabled subscription failed:', err);
+      );
+    } catch (err) {
+      console.warn('Firestore directStreamEnabled subscription failed:', err);
+    }
   }
 
   return () => {
@@ -402,6 +423,8 @@ export function subscribeToDirectStreamEnabled(
  */
 export async function getEmbedServers(): Promise<EmbedServerConfig[]> {
   const local = getLocalServers();
+  if (isFirestoreQuotaExceeded()) return local;
+
   try {
     const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
     const snap = await getDoc(docRef);
@@ -422,6 +445,9 @@ export async function getEmbedServers(): Promise<EmbedServerConfig[]> {
       }
     }
   } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExceeded();
+    }
     console.warn('Error fetching embed servers from Firestore, using local cache:', err);
   }
   return local;
@@ -438,6 +464,8 @@ export async function saveEmbedServers(servers: EmbedServerConfig[]): Promise<vo
   const directEnabled = directSrv ? directSrv.enabled !== false : getDirectStreamEnabled();
   saveLocalDirectStreamEnabled(directEnabled);
 
+  if (isFirestoreQuotaExceeded()) return;
+
   try {
     const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
     await setDoc(
@@ -450,6 +478,9 @@ export async function saveEmbedServers(servers: EmbedServerConfig[]): Promise<vo
       { merge: true }
     );
   } catch (err) {
+    if (isQuotaExceededError(err)) {
+      markFirestoreQuotaExceeded();
+    }
     console.warn('Error saving embed servers to Firestore:', err);
   }
 }
@@ -522,34 +553,39 @@ export function subscribeToEmbedServers(
 
   // 3. Listen to Firestore doc updates
   let unsubscribeFirestore: Unsubscribe | null = null;
-  try {
-    const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
-    unsubscribeFirestore = onSnapshot(
-      docRef,
-      (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          if (typeof data?.directStreamEnabled === 'boolean') {
-            saveLocalDirectStreamEnabled(data.directStreamEnabled);
+  if (!isFirestoreQuotaExceeded()) {
+    try {
+      const docRef = doc(db, 'systemSettings', FIRESTORE_DOC_PATH);
+      unsubscribeFirestore = onSnapshot(
+        docRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            if (typeof data?.directStreamEnabled === 'boolean') {
+              saveLocalDirectStreamEnabled(data.directStreamEnabled);
+            }
+            if (data?.defaultServerPrefs && typeof data.defaultServerPrefs === 'object') {
+              saveLocalDefaultServerPreferences(
+                normalizeDefaultServerPreferences(data.defaultServerPrefs)
+              );
+            }
+            if (Array.isArray(data?.servers) && data.servers.length > 0) {
+              const normalized = normalizeServerList(data.servers);
+              saveLocalServers(normalized);
+              callback(normalized);
+            }
           }
-          if (data?.defaultServerPrefs && typeof data.defaultServerPrefs === 'object') {
-            saveLocalDefaultServerPreferences(
-              normalizeDefaultServerPreferences(data.defaultServerPrefs)
-            );
+        },
+        (err) => {
+          if (isQuotaExceededError(err)) {
+            markFirestoreQuotaExceeded();
           }
-          if (Array.isArray(data?.servers) && data.servers.length > 0) {
-            const normalized = normalizeServerList(data.servers);
-            saveLocalServers(normalized);
-            callback(normalized);
-          }
+          console.warn('Firestore embed servers listener error, fallback to local:', err);
         }
-      },
-      (err) => {
-        console.warn('Firestore embed servers listener error, fallback to local:', err);
-      }
-    );
-  } catch (err) {
-    console.warn('Firestore subscription failed:', err);
+      );
+    } catch (err) {
+      console.warn('Firestore subscription failed:', err);
+    }
   }
 
   return () => {

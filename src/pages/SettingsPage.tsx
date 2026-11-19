@@ -68,19 +68,17 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
   const [servers, setServers] = useState<EmbedServerConfig[]>(DEFAULT_SERVERS);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isLoadingSettings, setIsLoadingSettings] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
-  // Load cloud settings from Firestore database if user is logged in
+  // Load cloud settings from Firestore database if user is logged in, else load guest local settings
   useEffect(() => {
     if (user?.uid) {
-      setIsLoadingSettings(true);
-      loadUserPlayerSettingsFromFirestore(user.uid)
-        .then((loaded) => {
-          setSettings(loaded);
-        })
-        .finally(() => {
-          setIsLoadingSettings(false);
-        });
+      loadUserPlayerSettingsFromFirestore(user.uid).then((loaded) => {
+        setSettings(loaded);
+      });
+    } else {
+      setSettings(getUserPlayerSettings());
     }
   }, [user?.uid]);
 
@@ -96,6 +94,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
     key: K,
     value: UserPlayerSettings[K]
   ) => {
+    setErrorMsg(null);
+    setConfirmReset(false);
     setSettings((prev) => ({
       ...prev,
       [key]: value
@@ -103,150 +103,38 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
   };
 
   const handleSave = async () => {
-    if (!user) {
-      openAuthModal('login');
-      return;
-    }
-
     setIsSaving(true);
+    setErrorMsg(null);
     try {
-      await saveUserPlayerSettings(settings, user.uid);
+      await saveUserPlayerSettings(settings, user?.uid);
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
     } catch (err: any) {
-      console.error('Error saving settings to cloud database:', err);
-      alert(err?.message || 'Failed to save settings to database.');
+      console.error('Error saving settings:', err);
+      setErrorMsg(err?.message || 'Failed to save settings.');
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleReset = async () => {
-    if (!user) {
-      openAuthModal('login');
+    if (!confirmReset) {
+      setConfirmReset(true);
+      setTimeout(() => setConfirmReset(false), 5000);
       return;
     }
-
-    if (window.confirm('Are you sure you want to restore all player settings to default factory values?')) {
-      const defaults = { ...DEFAULT_PLAYER_SETTINGS };
-      setSettings(defaults);
-      try {
-        await saveUserPlayerSettings(defaults, user.uid);
-        setSavedSuccess(true);
-        setTimeout(() => setSavedSuccess(false), 3000);
-      } catch (e: any) {
-        console.error('Error resetting defaults:', e);
-      }
+    setConfirmReset(false);
+    const defaults = { ...DEFAULT_PLAYER_SETTINGS };
+    setSettings(defaults);
+    try {
+      await saveUserPlayerSettings(defaults, user?.uid);
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (e: any) {
+      console.error('Error resetting defaults:', e);
+      setErrorMsg(e?.message || 'Failed to reset defaults.');
     }
   };
-
-  // If user is not authenticated, render the exclusive registered member gate
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-[#18181c] text-[#F3F3F3] pb-24 font-sans select-none selection:bg-[#F5C400] selection:text-black">
-        {/* Top Header Banner */}
-        <div className="border-b border-[#3A3A40] bg-gradient-to-b from-[#25252c] to-[#1c1c22] py-10 px-4 sm:px-6 lg:px-8">
-          <div className="max-w-5xl mx-auto flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2.5 mb-2">
-                <span className="p-2 rounded-xl bg-[#F5C400]/15 text-[#F5C400] border border-[#F5C400]/30">
-                  <Sliders className="w-5 h-5" />
-                </span>
-                <span className="text-xs font-black tracking-wider uppercase text-[#F5C400]">
-                  Cloud Preferences
-                </span>
-              </div>
-              <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-                Player &amp; Server Settings
-              </h1>
-              <p className="text-sm text-[#A6A6AC] mt-1 max-w-2xl">
-                Personalized streaming servers, subtitles, and player settings saved directly to your cloud profile in the database.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Member Access Required Gate */}
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 mt-12">
-          <div className="rounded-2xl border border-[#3A3A40] bg-[#212128]/95 p-8 sm:p-12 text-center shadow-2xl relative overflow-hidden backdrop-blur-sm">
-            {/* Background Glow */}
-            <div className="absolute top-0 right-1/4 w-96 h-96 bg-[#F5C400]/10 rounded-full blur-3xl pointer-events-none" />
-
-            <div className="relative z-10 max-w-xl mx-auto">
-              <div className="w-16 h-16 rounded-2xl bg-[#F5C400]/15 border border-[#F5C400]/40 text-[#F5C400] flex items-center justify-center mx-auto mb-6 shadow-lg shadow-[#F5C400]/5">
-                <Lock className="w-8 h-8" />
-              </div>
-
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#F5C400]/15 text-[#F5C400] text-xs font-bold uppercase tracking-wider mb-3 border border-[#F5C400]/30">
-                <Shield className="w-3.5 h-3.5" />
-                Registered Members Only
-              </span>
-
-              <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight mb-3">
-                Cloud Settings Require an Account
-              </h2>
-
-              <p className="text-sm sm:text-base text-[#A6A6AC] leading-relaxed mb-8">
-                Player and server settings are stored in the cloud database and synced to your personal profile. Sign in or create a free account to customize your default servers, subtitle styles, and playback options.
-              </p>
-
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => openAuthModal('login')}
-                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] text-black font-extrabold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-[#F5C400]/20 active:scale-95"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>Sign In / Create Free Account</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => onNavigate('home')}
-                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-[#2b2b34] hover:bg-[#34343f] text-[#E5E5EA] font-bold text-sm transition-all cursor-pointer"
-                >
-                  Return to Home
-                </button>
-              </div>
-
-              {/* Feature Highlights Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-10 pt-8 border-t border-[#3A3A40]/60 text-left">
-                <div className="p-4 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/40">
-                  <div className="flex items-center gap-2 text-[#F5C400] mb-1 font-bold text-xs">
-                    <Server className="w-4 h-4" />
-                    <span>Default Server</span>
-                  </div>
-                  <p className="text-xs text-[#A6A6AC]">
-                    Choose between Direct HLS or HD mirrors with auto-fallback.
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/40">
-                  <div className="flex items-center gap-2 text-[#F5C400] mb-1 font-bold text-xs">
-                    <Subtitles className="w-4 h-4" />
-                    <span>Custom Subtitles</span>
-                  </div>
-                  <p className="text-xs text-[#A6A6AC]">
-                    Default language, font size, colors, and live real-time preview.
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/40">
-                  <div className="flex items-center gap-2 text-[#F5C400] mb-1 font-bold text-xs">
-                    <Zap className="w-4 h-4" />
-                    <span>Database Sync</span>
-                  </div>
-                  <p className="text-xs text-[#A6A6AC]">
-                    Instantly synced across your TV, PC, tablet, and mobile devices.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-[#18181c] text-[#F3F3F3] pb-28 font-sans select-none selection:bg-[#F5C400] selection:text-black">
@@ -259,18 +147,31 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
                 <Sliders className="w-5 h-5" />
               </span>
               <span className="text-xs font-black tracking-wider uppercase text-[#F5C400]">
-                Cloud Preferences
+                {user ? 'Cloud Preferences' : 'Device Preferences'}
               </span>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-1">
-                <UserCheck className="w-3 h-3" />
-                Database Synced ({user.email})
-              </span>
+              {user ? (
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-1">
+                  <UserCheck className="w-3 h-3" />
+                  Synced ({user.email})
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('login')}
+                  className="px-2.5 py-0.5 rounded-full bg-[#F5C400]/15 hover:bg-[#F5C400]/25 text-[#F5C400] border border-[#F5C400]/30 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <LogIn className="w-3 h-3" />
+                  Saved Locally · Sign In to Sync
+                </button>
+              )}
             </div>
             <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
               Player &amp; Server Settings
             </h1>
             <p className="text-sm text-[#A6A6AC] mt-1 max-w-2xl">
-              Configure your default streaming server, subtitle styling, and playback preferences. Changes are saved directly to your cloud profile in the database.
+              {user
+                ? 'Configure your default streaming server, subtitle styling, skip rules, and playback preferences. Synced across devices via Firestore.'
+                : 'Configure your default streaming server, subtitle styling, skip rules, and playback preferences. Saved automatically on this device.'}
             </p>
           </div>
 
@@ -279,10 +180,14 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
             <button
               type="button"
               onClick={handleReset}
-              className="px-3.5 py-2 rounded-xl bg-[#2b2b34] hover:bg-[#34343f] text-[#E5E5EA] text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                confirmReset
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                  : 'bg-[#2b2b34] hover:bg-[#34343f] text-[#E5E5EA]'
+              }`}
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset Defaults</span>
+              <span>{confirmReset ? 'Click Again to Reset' : 'Reset Defaults'}</span>
             </button>
 
             <button
@@ -294,17 +199,17 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
               {isSaving ? (
                 <>
                   <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                  <span>Saving to Database...</span>
+                  <span>Saving...</span>
                 </>
               ) : savedSuccess ? (
                 <>
                   <Check className="w-3.5 h-3.5 text-black" />
-                  <span>Saved to Cloud!</span>
+                  <span>{user ? 'Saved to Cloud!' : 'Saved Locally!'}</span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Save Cloud Settings</span>
+                  <span>{user ? 'Save Cloud Settings' : 'Save Preferences'}</span>
                 </>
               )}
             </button>
@@ -314,12 +219,23 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
 
       {/* Main Form Content Container */}
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
+        {errorMsg && (
+          <div className="p-4 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-200 flex items-center justify-between text-xs font-bold">
+            <span>{errorMsg}</span>
+            <button type="button" onClick={() => setErrorMsg(null)} className="underline cursor-pointer">Dismiss</button>
+          </div>
+        )}
+
         {/* Success Alert Toast */}
         {savedSuccess && (
           <div className="p-4 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 flex items-center justify-between text-xs font-bold animate-in fade-in slide-in-from-top-2 duration-200">
             <div className="flex items-center gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <span>All player and server settings successfully synced to your cloud account in the database!</span>
+              <span>
+                {user
+                  ? 'All player and server settings successfully synced to your cloud account!'
+                  : 'All player and server settings saved locally on this device!'}
+              </span>
             </div>
             <button
               type="button"
@@ -568,12 +484,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
                 Live Subtitle Preview
               </span>
               <div className="flex-1 rounded-2xl bg-black border border-[#3A3A40] relative overflow-hidden flex flex-col justify-between p-4 min-h-[260px] shadow-inner">
-                {/* Simulated Movie Backdrop Scene */}
+                {/* Simulated Cinema Backdrop */}
                 <div
-                  className="absolute inset-0 bg-cover bg-center opacity-35 filter brightness-75 pointer-events-none"
+                  className="absolute inset-0 pointer-events-none"
                   style={{
                     backgroundImage:
-                      'url(https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1200&q=80)'
+                      'radial-gradient(circle at 50% 35%, rgba(245, 196, 0, 0.14), rgba(20, 20, 28, 0.9) 55%, #09090d 100%)'
                   }}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/60 pointer-events-none" />
@@ -691,64 +607,134 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
               </div>
             </div>
 
+            {/* Subtitle Position & Delay */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-4 border-t border-[#3A3A40]/60">
+              <div className="p-3.5 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/70">
+                <span className="text-xs font-bold text-white block mb-2">Subtitle Position &amp; Timing</span>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  {(['bottom', 'top'] as const).map((pos) => (
+                    <button
+                      key={pos}
+                      type="button"
+                      onClick={() => handleChange('subtitlePosition', pos)}
+                      className={`py-1.5 rounded-lg text-xs font-bold capitalize border cursor-pointer transition-colors ${
+                        settings.subtitlePosition === pos
+                          ? 'bg-[#F5C400] text-black border-[#F5C400]'
+                          : 'bg-[#25252e] text-[#A6A6AC] border-[#3A3A40] hover:text-white'
+                      }`}
+                    >
+                      {pos}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-[#A6A6AC] mb-1">
+                  <span>Default Sync Offset</span>
+                  <span className="font-mono text-white font-bold">
+                    {settings.subtitleDelay > 0 ? `+${settings.subtitleDelay.toFixed(1)}s` : `${settings.subtitleDelay.toFixed(1)}s`}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="-5"
+                  max="5"
+                  step="0.5"
+                  value={settings.subtitleDelay}
+                  onChange={(e) => handleChange('subtitleDelay', parseFloat(e.target.value))}
+                  className="w-full accent-[#F5C400] bg-white/15 h-1.5 rounded-full cursor-pointer"
+                />
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/70">
+                <span className="text-xs font-bold text-white block mb-2">Audio &amp; Anime Preference</span>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  {([
+                    { id: 'sub', label: 'Sub (Original)' },
+                    { id: 'dub', label: 'Dub (Localized)' }
+                  ] as const).map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => handleChange('animeAudioPreference', mode.id)}
+                      className={`py-1.5 rounded-lg text-xs font-bold border cursor-pointer transition-colors ${
+                        settings.animeAudioPreference === mode.id
+                          ? 'bg-[#F5C400] text-black border-[#F5C400]'
+                          : 'bg-[#25252e] text-[#A6A6AC] border-[#3A3A40] hover:text-white'
+                      }`}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
+                <select
+                  value={settings.preferredAudioLang}
+                  onChange={(e) => handleChange('preferredAudioLang', e.target.value)}
+                  className="w-full bg-[#25252e] border border-[#3A3A40] text-white text-xs rounded-lg px-2.5 py-1.5 focus:border-[#F5C400] focus:outline-none cursor-pointer"
+                >
+                  <option value="auto">Auto (Stream Default)</option>
+                  <option value="ja">Japanese (Original)</option>
+                  <option value="en">English</option>
+                  <option value="de">German</option>
+                  <option value="fr">French</option>
+                  <option value="es">Spanish</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Countdown Before Next Episode */}
+            <div className="p-3.5 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-xs font-bold text-white block">Countdown Before Next Episode</span>
+                <span className="text-[10px] text-[#8E8E93]">
+                  Delay before auto-advancing when an episode finishes (0s for instant transition)
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {[0, 3, 5, 10].map((secs) => (
+                  <button
+                    key={secs}
+                    type="button"
+                    onClick={() => handleChange('nextEpisodeCountdownSeconds', secs)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border cursor-pointer tabular-nums transition-colors ${
+                      settings.nextEpisodeCountdownSeconds === secs
+                        ? 'bg-[#F5C400] text-black border-[#F5C400]'
+                        : 'bg-[#25252e] text-[#A6A6AC] border-[#3A3A40] hover:text-white'
+                    }`}
+                  >
+                    {secs === 0 ? 'Instant' : `${secs}s`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Smart Automated Toggles Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-4 border-t border-[#3A3A40]/60">
-              {/* Autoplay Next Episode */}
-              <div className="p-3.5 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/70 flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold text-white block">Autoplay Next Episode</span>
-                  <span className="text-[10px] text-[#8E8E93]">
-                    Automatically advance TV series
-                  </span>
+              {[
+                { key: 'autoplayNextEpisode', title: 'Autoplay Next Episode', desc: 'Automatically advance TV & anime episodes' },
+                { key: 'autoPlayNextSeason', title: 'Auto Play Next Season', desc: 'Continue seamlessly into Season N+1 Episode 1' },
+                { key: 'maintainFullscreen', title: 'Maintain Fullscreen', desc: 'Preserve fullscreen container across episodes' },
+                { key: 'autoSkipIntro', title: 'Auto Skip Intro', desc: 'Skip verified AniSkip / admin intro timings' },
+                { key: 'skipRecap', title: 'Auto Skip Recap', desc: 'Automatically skip verified recap segments' },
+                { key: 'skipCredits', title: 'Auto Skip Credits', desc: 'Jump past ending credits when verified' },
+                { key: 'autoResumePlayback', title: 'Auto-Resume Position', desc: 'Resume exactly where you left off' },
+                { key: 'rememberLastServer', title: 'Remember Last Server', desc: 'Keep preferred direct server active' },
+                { key: 'defaultTheaterMode', title: 'Default Theater Mode', desc: 'Full width & dimmed backdrop' }
+              ].map((item) => (
+                <div key={item.key} className="p-3.5 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/70 flex items-center justify-between gap-2">
+                  <div>
+                    <span className="text-xs font-bold text-white block">{item.title}</span>
+                    <span className="text-[10px] text-[#8E8E93]">{item.desc}</span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(settings[item.key as keyof UserPlayerSettings])}
+                      onChange={(e) => handleChange(item.key as keyof UserPlayerSettings, e.target.checked as any)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-[#303038] rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#F5C400]"></div>
+                  </label>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.autoplayNextEpisode}
-                    onChange={(e) => handleChange('autoplayNextEpisode', e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-[#303038] rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#F5C400]"></div>
-                </label>
-              </div>
-
-              {/* Auto Resume Playback */}
-              <div className="p-3.5 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/70 flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold text-white block">Auto-Resume Position</span>
-                  <span className="text-[10px] text-[#8E8E93]">
-                    Resume exactly where you left off
-                  </span>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.autoResumePlayback}
-                    onChange={(e) => handleChange('autoResumePlayback', e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-[#303038] rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#F5C400]"></div>
-                </label>
-              </div>
-
-              {/* Default Theater Mode */}
-              <div className="p-3.5 rounded-xl bg-[#1b1b22] border border-[#3A3A40]/70 flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold text-white block">Default Theater Mode</span>
-                  <span className="text-[10px] text-[#8E8E93]">
-                    Full width &amp; dimmed backdrop
-                  </span>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.defaultTheaterMode}
-                    onChange={(e) => handleChange('defaultTheaterMode', e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-9 h-5 bg-[#303038] rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#F5C400]"></div>
-                </label>
-              </div>
+              ))}
             </div>
           </div>
         </section>
@@ -816,10 +802,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
             </span>
             <div>
               <span className="text-xs font-bold text-white block">
-                Preferences Synced to Cloud Database
+                {user ? 'Preferences Synced to Cloud Database' : 'Preferences Saved Locally on Device'}
               </span>
               <span className="text-[11px] text-[#A6A6AC]">
-                Your settings are safely stored in Firestore for {user.email} and take effect on all your playback sessions.
+                {user
+                  ? `Your settings are safely stored in Firestore for ${user.email} and take effect across your sessions.`
+                  : 'Your settings take effect immediately on this device. Sign in anytime to sync across devices.'}
               </span>
             </div>
           </div>
@@ -828,9 +816,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
             <button
               type="button"
               onClick={handleReset}
-              className="px-4 py-2.5 rounded-xl bg-[#1b1b22] hover:bg-[#282830] text-[#E5E5EA] text-xs font-bold transition-all cursor-pointer"
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                confirmReset
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                  : 'bg-[#1b1b22] hover:bg-[#282830] text-[#E5E5EA]'
+              }`}
             >
-              Reset
+              {confirmReset ? 'Confirm Reset' : 'Reset'}
             </button>
 
             <button
@@ -847,12 +839,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onNavigate }) => {
               ) : savedSuccess ? (
                 <>
                   <Check className="w-4 h-4 text-black stroke-[3]" />
-                  <span>Saved to Cloud!</span>
+                  <span>{user ? 'Saved to Cloud!' : 'Saved Locally!'}</span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Save Cloud Settings</span>
+                  <span>{user ? 'Save Cloud Settings' : 'Save Preferences'}</span>
                 </>
               )}
             </button>

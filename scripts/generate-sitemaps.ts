@@ -44,6 +44,7 @@ export interface GenerateSitemapsOptions extends TmdbDiscoveryOptions {
   preserveExistingOnOutage?: boolean;
   shrinkageThresholdRatio?: number;
   inventorySnapshotPath?: string | false;
+  animeFetchImpl?: typeof fetch;
 }
 
 export interface SitemapGenerationResult {
@@ -51,18 +52,21 @@ export interface SitemapGenerationResult {
   moviesCount: number;
   tvCount: number;
   episodesCount: number;
+  animeCount: number;
   totalCount: number;
   sitemapIndexXml: string;
   mainXml: string;
   moviesXml: string;
   tvXml: string;
   episodesXml: string | null;
+  animeXml: string | null;
   files: Record<string, string>;
   chunkFiles: {
     main: string[];
     movies: string[];
     tv: string[];
     episodes: string[];
+    anime: string[];
   };
   preservedExisting: boolean;
   mergedFromPreviousOnPartialOutage: boolean;
@@ -276,8 +280,9 @@ interface LoadedExistingSitemaps {
   moviesCount: number;
   tvCount: number;
   episodesCount: number;
-  chunkFiles: { main: string[]; movies: string[]; tv: string[]; episodes: string[] };
-  existingUrls: { main: string[]; movies: string[]; tv: string[]; episodes: string[] };
+  animeCount: number;
+  chunkFiles: { main: string[]; movies: string[]; tv: string[]; episodes: string[]; anime: string[] };
+  existingUrls: { main: string[]; movies: string[]; tv: string[]; episodes: string[]; anime: string[] };
 }
 
 function tryLoadValidExistingSitemaps(dir: string): LoadedExistingSitemaps | null {
@@ -287,12 +292,25 @@ function tryLoadValidExistingSitemaps(dir: string): LoadedExistingSitemaps | nul
     const indexXml = fs.readFileSync(indexPath, 'utf8');
     const idxCheck = validateSitemapIndexXml(indexXml);
     const files: Record<string, string> = { 'sitemap.xml': indexXml };
-    const chunkFiles = { main: [] as string[], movies: [] as string[], tv: [] as string[], episodes: [] as string[] };
-    const existingUrls = { main: [] as string[], movies: [] as string[], tv: [] as string[], episodes: [] as string[] };
+    const chunkFiles = {
+      main: [] as string[],
+      movies: [] as string[],
+      tv: [] as string[],
+      episodes: [] as string[],
+      anime: [] as string[]
+    };
+    const existingUrls = {
+      main: [] as string[],
+      movies: [] as string[],
+      tv: [] as string[],
+      episodes: [] as string[],
+      anime: [] as string[]
+    };
     let mainCount = 0;
     let moviesCount = 0;
     let tvCount = 0;
     let episodesCount = 0;
+    let animeCount = 0;
 
     for (const filename of idxCheck.childFilenames) {
       const childPath = path.join(dir, filename);
@@ -317,11 +335,15 @@ function tryLoadValidExistingSitemaps(dir: string): LoadedExistingSitemaps | nul
         chunkFiles.episodes.push(filename);
         existingUrls.episodes.push(...val.urls);
         episodesCount += val.count;
+      } else if (filename.startsWith('sitemap-anime')) {
+        chunkFiles.anime.push(filename);
+        existingUrls.anime.push(...val.urls);
+        animeCount += val.count;
       }
     }
 
     if (moviesCount === 0 || tvCount === 0 || mainCount === 0) return null;
-    return { files, mainCount, moviesCount, tvCount, episodesCount, chunkFiles, existingUrls };
+    return { files, mainCount, moviesCount, tvCount, episodesCount, animeCount, chunkFiles, existingUrls };
   } catch {
     return null;
   }
@@ -472,21 +494,25 @@ export async function generateSitemaps(
       const firstMovies = existingPublic.chunkFiles.movies[0] || 'sitemap-movies.xml';
       const firstTv = existingPublic.chunkFiles.tv[0] || 'sitemap-tv.xml';
       const firstEp = existingPublic.chunkFiles.episodes[0];
+      const firstAnime = existingPublic.chunkFiles.anime[0];
       return {
         mainCount: existingPublic.mainCount,
         moviesCount: existingPublic.moviesCount,
         tvCount: existingPublic.tvCount,
         episodesCount: existingPublic.episodesCount,
+        animeCount: existingPublic.animeCount,
         totalCount:
           existingPublic.mainCount +
           existingPublic.moviesCount +
           existingPublic.tvCount +
-          existingPublic.episodesCount,
+          existingPublic.episodesCount +
+          existingPublic.animeCount,
         sitemapIndexXml: existingPublic.files['sitemap.xml'],
         mainXml: existingPublic.files[firstMain],
         moviesXml: existingPublic.files[firstMovies],
         tvXml: existingPublic.files[firstTv],
         episodesXml: firstEp ? existingPublic.files[firstEp] : null,
+        animeXml: firstAnime ? existingPublic.files[firstAnime] : null,
         files: existingPublic.files,
         chunkFiles: existingPublic.chunkFiles,
         preservedExisting: true,
@@ -523,7 +549,16 @@ export async function generateSitemaps(
     }))
   );
 
-  // 4. Main Pages (Indexable Hubs + Canonical Kebab Tags + Populated Genres + Populated Platforms + Populated A-Z)
+  // 3B. First-class Anime series & films
+  let animeEntries = deduplicateEntries(
+    (inventory.anime || []).map(a => ({
+      url: a.canonicalUrl,
+      changefreq: 'weekly',
+      priority: '0.85'
+    }))
+  );
+
+  // 4. Main Pages (Indexable Hubs + Anime Hubs + Canonical Kebab Tags + Populated Genres + Populated Platforms + Populated A-Z)
   const rawMainEntries: SitemapUrlEntry[] = [
     { url: `${DOMAIN}/`, changefreq: 'daily', priority: '1.0' },
     ...inventory.hubs
@@ -532,6 +567,13 @@ export async function generateSitemaps(
         url: h.can,
         changefreq: (h.url === '/top-rated' || h.url === '/collections' || h.url === '/tags' ? 'weekly' : 'daily') as SitemapUrlEntry['changefreq'],
         priority: h.url === '/tags' ? '0.7' : h.url === '/top-rated' || h.url === '/collections' ? '0.8' : '0.9'
+      })),
+    ...(inventory.animeHubs || [])
+      .filter(h => !h.noindex)
+      .map(h => ({
+        url: h.can,
+        changefreq: 'daily' as const,
+        priority: h.url === '/anime' || h.url === '/anime/trending' ? '0.9' : '0.8'
       })),
     ...inventory.tags.map(tagEntry => ({
       url: tagEntry.canonicalUrl,
@@ -581,6 +623,9 @@ export async function generateSitemaps(
       const episodeShrinkage =
         existingPublic.episodesCount >= 10 &&
         episodeEntries.length < Math.floor(existingPublic.episodesCount * shrinkageThresholdRatio);
+      const animeShrinkage =
+        existingPublic.animeCount >= 10 &&
+        animeEntries.length < Math.floor(existingPublic.animeCount * shrinkageThresholdRatio);
 
       if (discoveryStats.hadPartialOutage || discoveryStats.movieFeedsDegraded || movieShrinkage) {
         const res = mergeWithPreviousUrls(movieEntries, existingPublic.existingUrls.movies, {
@@ -614,6 +659,15 @@ export async function generateSitemaps(
         preservedUrlsAddedCount += res.addedCount;
       }
 
+      if (discoveryStats.hadPartialOutage || animeShrinkage) {
+        const res = mergeWithPreviousUrls(animeEntries, existingPublic.existingUrls.anime, {
+          changefreq: 'weekly',
+          priority: '0.85'
+        });
+        animeEntries = res.entries;
+        preservedUrlsAddedCount += res.addedCount;
+      }
+
       if (discoveryStats.hadPartialOutage || movieShrinkage || tvShrinkage) {
         const res = mergeWithPreviousUrls(mainEntries, existingPublic.existingUrls.main, {
           changefreq: 'weekly',
@@ -640,8 +694,12 @@ export async function generateSitemaps(
   const episodeChunks = hasEpisodes
     ? splitAndBuildUrlsetChunks('sitemap-episodes', episodeEntries, maxUrlsPerFile, maxBytesPerFile)
     : [];
+  const hasAnime = animeEntries.length > 0;
+  const animeChunks = hasAnime
+    ? splitAndBuildUrlsetChunks('sitemap-anime', animeEntries, maxUrlsPerFile, maxBytesPerFile)
+    : [];
 
-  const allChildChunks = [...mainChunks, ...movieChunks, ...tvChunks, ...episodeChunks];
+  const allChildChunks = [...mainChunks, ...movieChunks, ...tvChunks, ...episodeChunks, ...animeChunks];
   const generatedFiles: Record<string, string> = {};
 
   // Cross-file deduplication & validation across ALL generated sitemaps
@@ -675,24 +733,35 @@ export async function generateSitemaps(
   if (hasEpisodes) {
     console.log(`- sitemap-episodes: ${episodeEntries.length} URLs across ${episodeChunks.length} file(s)`);
   }
+  if (hasAnime) {
+    console.log(`- sitemap-anime:    ${animeEntries.length} URLs across ${animeChunks.length} file(s)`);
+  }
 
   const summary: SitemapGenerationResult = {
     mainCount: mainEntries.length,
     moviesCount: movieEntries.length,
     tvCount: tvEntries.length,
     episodesCount: episodeEntries.length,
-    totalCount: mainEntries.length + movieEntries.length + tvEntries.length + episodeEntries.length,
+    animeCount: animeEntries.length,
+    totalCount:
+      mainEntries.length +
+      movieEntries.length +
+      tvEntries.length +
+      episodeEntries.length +
+      animeEntries.length,
     sitemapIndexXml,
     mainXml: mainChunks[0].xml,
     moviesXml: movieChunks[0].xml,
     tvXml: tvChunks[0].xml,
     episodesXml: hasEpisodes ? episodeChunks[0].xml : null,
+    animeXml: hasAnime ? animeChunks[0].xml : null,
     files: generatedFiles,
     chunkFiles: {
       main: mainChunks.map(c => c.filename),
       movies: movieChunks.map(c => c.filename),
       tv: tvChunks.map(c => c.filename),
-      episodes: episodeChunks.map(c => c.filename)
+      episodes: episodeChunks.map(c => c.filename),
+      anime: animeChunks.map(c => c.filename)
     },
     preservedExisting: false,
     mergedFromPreviousOnPartialOutage,

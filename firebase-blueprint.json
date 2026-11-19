@@ -1,16 +1,28 @@
 {
   "entities": {
-    "UserProfile": {
-      "title": "UserProfile",
-      "description": "User profile document with identification and account timestamps",
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Explicit Firestore RBAC administrator allowlist document keyed by Firebase UID",
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
-        "email": { "type": "string" },
-        "displayName": { "type": "string" },
-        "photoURL": { "type": "string" },
-        "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 254 },
+        "role": { "type": "string", "enum": ["admin"] },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "role"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile document with identification, account timestamps, and player settings",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 254 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "photoURL": { "type": "string", "maxLength": 1024 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
         "playerSettings": {
           "type": "object",
           "description": "User custom streaming server, subtitle preferences, and player settings"
@@ -20,97 +32,209 @@
     },
     "WatchlistItem": {
       "title": "WatchlistItem",
-      "description": "Individual movie or TV series saved in the user's watchlist",
+      "description": "Movie, TV series, or anime saved in the user's watchlist",
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
-        "tmdbId": { "type": "string" },
-        "mediaType": { "type": "string" },
-        "title": { "type": "string" },
-        "posterPath": { "type": "string" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "mediaKey": { "type": "string", "maxLength": 128 },
+        "tmdbId": { "type": "string", "maxLength": 64 },
+        "anilistId": { "type": "number" },
+        "malId": { "type": "number" },
+        "mediaType": { "type": "string", "enum": ["movie", "tv", "anime"] },
+        "title": { "type": "string", "maxLength": 300 },
+        "posterPath": { "type": "string", "maxLength": 1024 },
+        "backdropPath": { "type": "string", "maxLength": 1024 },
         "voteAverage": { "type": "number" },
-        "releaseDate": { "type": "string" },
-        "addedAt": { "type": "string" }
+        "releaseDate": { "type": "string", "maxLength": 64 },
+        "addedAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["userId", "tmdbId", "mediaType", "title"]
+      "required": ["userId", "mediaType", "title"]
     },
     "ContinueWatchingItem": {
       "title": "ContinueWatchingItem",
-      "description": "Playback progress item saved in Firestore exclusively for registered users",
+      "description": "Playback progress record saved for registered user resume",
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
-        "tmdbId": { "type": "string" },
-        "mediaType": { "type": "string" },
-        "title": { "type": "string" },
-        "posterPath": { "type": "string" },
-        "backdropPath": { "type": "string" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "mediaKey": { "type": "string", "maxLength": 128 },
+        "tmdbId": { "type": "string", "maxLength": 64 },
+        "anilistId": { "type": "number" },
+        "malId": { "type": "number" },
+        "mediaType": { "type": "string", "enum": ["movie", "tv", "anime"] },
+        "title": { "type": "string", "maxLength": 300 },
+        "posterPath": { "type": "string", "maxLength": 1024 },
+        "backdropPath": { "type": "string", "maxLength": 1024 },
         "progressSeconds": { "type": "number" },
         "durationSeconds": { "type": "number" },
         "percentage": { "type": "number" },
         "seasonNumber": { "type": "number" },
         "episodeNumber": { "type": "number" },
-        "episodeName": { "type": "string" },
-        "updatedAt": { "type": "string" }
+        "episodeName": { "type": "string", "maxLength": 300 },
+        "completed": { "type": "boolean" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["userId", "tmdbId", "mediaType", "title", "progressSeconds", "durationSeconds", "percentage", "updatedAt"]
+      "required": ["userId", "mediaType", "title", "progressSeconds", "durationSeconds", "percentage", "updatedAt"]
+    },
+    "WatchHistoryItem": {
+      "title": "WatchHistoryItem",
+      "description": "Unified watch history record for movies, TV episodes, and anime episodes",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "mediaKey": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "seriesKey": { "type": "string", "maxLength": 128 },
+        "mediaType": { "type": "string", "enum": ["movie", "tv", "anime"] },
+        "tmdbId": { "type": "string", "maxLength": 64 },
+        "anilistId": { "type": "number" },
+        "malId": { "type": "number" },
+        "mediaFormat": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 300 },
+        "posterPath": { "type": "string", "maxLength": 1024 },
+        "backdropPath": { "type": "string", "maxLength": 1024 },
+        "seasonNumber": { "type": "number" },
+        "episodeNumber": { "type": "number" },
+        "episodeName": { "type": "string", "maxLength": 300 },
+        "progressSeconds": { "type": "number" },
+        "durationSeconds": { "type": "number" },
+        "percentage": { "type": "number" },
+        "completed": { "type": "boolean" },
+        "completedAt": { "type": "string", "maxLength": 64 },
+        "lastWatchedAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "device": { "type": "string", "maxLength": 64 },
+        "serverId": { "type": "string", "maxLength": 128 },
+        "audioLang": { "type": "string", "maxLength": 32 },
+        "genres": { "type": "array" }
+      },
+      "required": ["userId", "mediaKey", "mediaType", "title", "progressSeconds", "durationSeconds", "percentage", "updatedAt"]
+    },
+    "CompletedMediaItem": {
+      "title": "CompletedMediaItem",
+      "description": "Completed movie, episode, or series milestone",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "mediaKey": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mediaType": { "type": "string", "enum": ["movie", "tv", "anime"] },
+        "tmdbId": { "type": "string", "maxLength": 64 },
+        "anilistId": { "type": "number" },
+        "malId": { "type": "number" },
+        "title": { "type": "string", "maxLength": 300 },
+        "posterPath": { "type": "string", "maxLength": 1024 },
+        "seasonNumber": { "type": "number" },
+        "episodeNumber": { "type": "number" },
+        "completedAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "mediaKey", "mediaType", "title", "completedAt", "updatedAt"]
+    },
+    "UserPreferenceDoc": {
+      "title": "UserPreferenceDoc",
+      "description": "Synced player, region, subtitle, or recommendation preference document",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "prefId": { "type": "string", "maxLength": 64 },
+        "data": { "type": "object" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "updatedAt"]
     },
     "ReportItem": {
       "title": "ReportItem",
       "description": "User reported video or stream problem displayed in the admin panel",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "mediaId": { "type": "string" },
-        "mediaType": { "type": "string" },
-        "mediaTitle": { "type": "string" },
-        "posterPath": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128 },
+        "mediaId": { "type": "string", "maxLength": 64 },
+        "mediaType": { "type": "string", "enum": ["movie", "tv", "anime"] },
+        "mediaTitle": { "type": "string", "maxLength": 300 },
+        "posterPath": { "type": "string", "maxLength": 1024 },
         "season": { "type": "number" },
         "episode": { "type": "number" },
-        "server": { "type": "string" },
-        "reason": { "type": "string" },
-        "reportedAt": { "type": "string" },
-        "status": { "type": "string" },
-        "userEmail": { "type": "string" },
-        "userId": { "type": "string" }
+        "server": { "type": "string", "maxLength": 120 },
+        "reason": { "type": "string", "maxLength": 200 },
+        "details": { "type": "string", "maxLength": 1000 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "reportedAt": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["open", "investigating", "resolved"] },
+        "userEmail": { "type": "string", "maxLength": 254 },
+        "userId": { "type": "string", "maxLength": 128 }
       },
-      "required": ["id", "mediaId", "mediaTitle", "server", "reason", "reportedAt", "status"]
+      "required": ["id", "mediaId", "mediaType", "mediaTitle", "server", "reason", "reportedAt", "status"]
     },
     "MovieStats": {
       "title": "MovieStats",
-      "description": "Real view count and user rating stats for movies and shows",
+      "description": "View count and user rating statistics for movies, shows, and anime",
       "type": "object",
       "properties": {
-        "mediaId": { "type": "string" },
-        "mediaType": { "type": "string" },
-        "title": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128 },
+        "mediaId": { "type": "string", "maxLength": 64 },
+        "mediaType": { "type": "string", "enum": ["movie", "tv", "anime"] },
+        "mediaTitle": { "type": "string", "maxLength": 300 },
+        "title": { "type": "string", "maxLength": 300 },
         "views": { "type": "number" },
         "ratingSum": { "type": "number" },
         "ratingCount": { "type": "number" },
-        "lastViewedAt": { "type": "string" }
+        "ratingAverage": { "type": "number" },
+        "userRating": { "type": "number" },
+        "lastViewedAt": { "type": "string", "maxLength": 64 },
+        "lastRatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["mediaId", "views"]
+    },
+    "IntroTimingRecord": {
+      "title": "IntroTimingRecord",
+      "description": "Verified intro, recap, or credits skip timestamps managed by admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "mediaKey": { "type": "string", "maxLength": 128 },
+        "introStart": { "type": "number" },
+        "introEnd": { "type": "number" },
+        "recapStart": { "type": "number" },
+        "recapEnd": { "type": "number" },
+        "creditsStart": { "type": "number" },
+        "source": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "mediaKey", "updatedAt"]
+    },
+    "FeaturedContentItem": {
+      "title": "FeaturedContentItem",
+      "description": "Admin curated featured hero or homepage spotlight items",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "mediaKey": { "type": "string", "maxLength": 128 },
+        "mediaType": { "type": "string", "enum": ["movie", "tv", "anime"] },
+        "title": { "type": "string", "maxLength": 300 },
+        "order": { "type": "number" },
+        "enabled": { "type": "boolean" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "mediaType", "title", "enabled"]
     },
     "EmbedServerConfig": {
       "title": "EmbedServerConfig",
       "description": "Customizable streaming embed player and server configurations managed by administrator",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "type": { "type": "string" },
-        "badge": { "type": "string" },
-        "dotColor": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 120 },
+        "type": { "type": "string", "enum": ["direct", "embed"] },
+        "badge": { "type": "string", "maxLength": 64 },
+        "dotColor": { "type": "string", "maxLength": 32 },
         "enabled": { "type": "boolean" },
         "order": { "type": "number" },
-        "movieUrlTemplate": { "type": "string" },
-        "tvUrlTemplate": { "type": "string" }
+        "movieUrlTemplate": { "type": "string", "maxLength": 1024 },
+        "tvUrlTemplate": { "type": "string", "maxLength": 1024 }
       },
       "required": ["id", "name", "type", "enabled"]
     },
     "SystemEmbedSettings": {
       "title": "SystemEmbedSettings",
-      "description": "Global streaming settings including configured servers, Direct Stream toggle, and default movie/TV server preferences",
+      "description": "Global streaming settings including configured servers, Direct Stream toggle, and default server preferences",
       "type": "object",
       "properties": {
         "servers": { "type": "array" },
@@ -119,70 +243,73 @@
           "type": "object",
           "description": "Default movieServerId, tvServerId, movieDirectProvider, and tvDirectProvider"
         },
-        "updatedAt": { "type": "string" }
-      },
-      "required": ["servers"]
+        "providerOverrides": {
+          "type": "object",
+          "description": "Admin provider enablement, priority, and timeout overrides"
+        },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      }
     },
     "FollowedShow": {
       "title": "FollowedShow",
-      "description": "TV series followed by a registered user to receive new episode notifications",
+      "description": "TV or anime series followed by a registered user for new episode alerts",
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
-        "showId": { "type": "string" },
-        "title": { "type": "string" },
-        "posterPath": { "type": "string" },
-        "backdropPath": { "type": "string" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "showId": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 300 },
+        "posterPath": { "type": "string", "maxLength": 1024 },
+        "backdropPath": { "type": "string", "maxLength": 1024 },
         "voteAverage": { "type": "number" },
         "lastAiredSeason": { "type": "number" },
         "lastAiredEpisode": { "type": "number" },
-        "followedAt": { "type": "string" }
+        "followedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["userId", "showId", "title", "followedAt"]
     },
     "EpisodeNotification": {
       "title": "EpisodeNotification",
-      "description": "Notification alert sent to a user when a followed TV series releases a new episode",
+      "description": "Notification alert sent to a user when a followed series releases a new episode",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "userId": { "type": "string" },
-        "showId": { "type": "string" },
-        "showTitle": { "type": "string" },
-        "posterPath": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "showId": { "type": "string", "maxLength": 64 },
+        "showTitle": { "type": "string", "maxLength": 300 },
+        "posterPath": { "type": "string", "maxLength": 1024 },
         "seasonNumber": { "type": "number" },
         "episodeNumber": { "type": "number" },
-        "episodeName": { "type": "string" },
-        "airDate": { "type": "string" },
+        "episodeName": { "type": "string", "maxLength": 300 },
+        "airDate": { "type": "string", "maxLength": 64 },
         "read": { "type": "boolean" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "userId", "showId", "showTitle", "seasonNumber", "episodeNumber", "read", "createdAt"]
     },
     "SiteVisit": {
       "title": "SiteVisit",
-      "description": "Individual visitor page view log for real-time site analytics",
+      "description": "Individual visitor page view log for admin site analytics",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "path": { "type": "string" },
-        "referrer": { "type": "string" },
-        "device": { "type": "string" },
-        "browser": { "type": "string" },
-        "os": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128 },
+        "path": { "type": "string", "maxLength": 512 },
+        "referrer": { "type": "string", "maxLength": 512 },
+        "device": { "type": "string", "maxLength": 64 },
+        "browser": { "type": "string", "maxLength": 64 },
+        "os": { "type": "string", "maxLength": 64 },
         "isRegistered": { "type": "boolean" },
-        "userId": { "type": "string" },
-        "userEmail": { "type": "string" },
-        "timestamp": { "type": "string" }
+        "userId": { "type": "string", "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 254 },
+        "timestamp": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "path", "timestamp", "device", "browser"]
     },
     "DailyAnalytics": {
       "title": "DailyAnalytics",
-      "description": "Daily aggregated website traffic statistics",
+      "description": "Daily aggregated website traffic statistics (admin-only)",
       "type": "object",
       "properties": {
-        "date": { "type": "string" },
+        "date": { "type": "string", "maxLength": 32 },
         "pageViews": { "type": "number" },
         "uniqueVisits": { "type": "number" },
         "registeredVisits": { "type": "number" },
@@ -192,21 +319,29 @@
     },
     "AnalyticsSummary": {
       "title": "AnalyticsSummary",
-      "description": "Overall lifetime website metrics and registered users counter",
+      "description": "Overall lifetime website metrics and counters (admin-only)",
       "type": "object",
       "properties": {
         "totalVisits": { "type": "number" },
         "totalPageViews": { "type": "number" },
         "registeredUsersCount": { "type": "number" },
-        "lastUpdated": { "type": "string" }
+        "lastUpdated": { "type": "string", "maxLength": 64 }
       },
       "required": ["totalVisits"]
     }
   },
   "firestore": {
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Connection health check probe document (connection doc readable)"
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Explicit RBAC administrator UID registry"
+    },
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
-      "description": "User profile document storing basic user details"
+      "description": "User profile document storing PII and player settings"
     },
     "/users/{userId}/watchlist/{itemId}": {
       "schema": { "$ref": "#/entities/WatchlistItem" },
@@ -216,9 +351,21 @@
       "schema": { "$ref": "#/entities/ContinueWatchingItem" },
       "description": "User private continue watching progress records"
     },
+    "/users/{userId}/history/{mediaKey}": {
+      "schema": { "$ref": "#/entities/WatchHistoryItem" },
+      "description": "Unified per-user movie, TV episode, and anime watch history"
+    },
+    "/users/{userId}/completed/{mediaKey}": {
+      "schema": { "$ref": "#/entities/CompletedMediaItem" },
+      "description": "User completed media records"
+    },
+    "/users/{userId}/preferences/{prefId}": {
+      "schema": { "$ref": "#/entities/UserPreferenceDoc" },
+      "description": "User synced player, subtitle, region, and recommendation preferences"
+    },
     "/users/{userId}/followedShows/{showId}": {
       "schema": { "$ref": "#/entities/FollowedShow" },
-      "description": "TV series followed by the registered user for episode tracking"
+      "description": "Series followed by the user for episode tracking"
     },
     "/users/{userId}/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/EpisodeNotification" },
@@ -226,19 +373,27 @@
     },
     "/reports/{reportId}": {
       "schema": { "$ref": "#/entities/ReportItem" },
-      "description": "Playback reports and problem tickets visible in the admin panel"
+      "description": "Playback reports readable and manageable exclusively by admins"
     },
     "/movieStats/{mediaKey}": {
       "schema": { "$ref": "#/entities/MovieStats" },
-      "description": "Global movie and TV show view counts and interactive user ratings"
+      "description": "Global view counts and interactive user ratings"
     },
     "/systemSettings/{settingId}": {
       "schema": { "$ref": "#/entities/SystemEmbedSettings" },
-      "description": "Global application, server, and default movie/TV streaming configurations managed by administrator"
+      "description": "Global application, server, provider, and default streaming configuration"
+    },
+    "/introTimings/{timingKey}": {
+      "schema": { "$ref": "#/entities/IntroTimingRecord" },
+      "description": "Admin-managed skip intro/recap/credits timings"
+    },
+    "/featuredContent/{itemId}": {
+      "schema": { "$ref": "#/entities/FeaturedContentItem" },
+      "description": "Admin-curated featured content and homepage spotlights"
     },
     "/analytics_visits/{visitId}": {
       "schema": { "$ref": "#/entities/SiteVisit" },
-      "description": "Real-time individual site visit logs for administrator analytics"
+      "description": "Individual site visit logs for administrator analytics"
     },
     "/analytics_daily/{dateId}": {
       "schema": { "$ref": "#/entities/DailyAnalytics" },

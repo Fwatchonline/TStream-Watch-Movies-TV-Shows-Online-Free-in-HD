@@ -23,6 +23,7 @@ export interface PlatformDiscoverQueryOptions {
   genreId?: number;
   year?: number;
   minRating?: number;
+  language?: string;
   apiKeyQuery?: string; // server sets `api_key=...`; browser proxy omits it
 }
 
@@ -40,10 +41,10 @@ export function getPlatformCacheKey(
   mediaType: 'all' | 'movie' | 'tv',
   sortBy: string,
   page: number,
-  filters: { genreId?: number; year?: number; minRating?: number } = {}
+  filters: { genreId?: number; year?: number; minRating?: number; language?: string } = {}
 ): string {
   const normRegion = normalizeWatchRegion(watchRegion);
-  return `platform:${platformId}:${normRegion}:${mediaType}:${sortBy}:g=${filters.genreId || ''}:y=${filters.year || ''}:r=${filters.minRating || ''}:p=${page}`;
+  return `platform:${platformId}:${normRegion}:${mediaType}:${sortBy}:g=${filters.genreId || ''}:y=${filters.year || ''}:r=${filters.minRating || ''}:l=${filters.language || ''}:p=${page}`;
 }
 
 /**
@@ -80,6 +81,9 @@ export function buildPlatformDiscoverPlan(
     if (options.year) {
       params.set(type === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(options.year));
     }
+    if (options.language && /^[a-z]{2}$/i.test(options.language.trim())) {
+      params.set('with_original_language', options.language.trim().toLowerCase());
+    }
     return params.toString();
   };
 
@@ -89,7 +93,8 @@ export function buildPlatformDiscoverPlan(
     cacheKey: getPlatformCacheKey(platform.id, watchRegion, mediaType, sortBy, safePage, {
       genreId: options.genreId,
       year: options.year,
-      minRating: options.minRating
+      minRating: options.minRating,
+      language: options.language
     }),
     moviePathAndQuery:
       mediaType === 'tv' ? null : `/discover/movie?${makeParams('movie')}`,

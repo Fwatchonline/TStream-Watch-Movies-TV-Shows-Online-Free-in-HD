@@ -29,19 +29,38 @@ import {
   Sparkles,
   HelpCircle,
   X,
-  Search
+  Search,
+  SkipForward
 } from 'lucide-react';
-import { ResolvedStream, DirectProviderResult, cleanServerDisplay, formatQualityBadge, stripQualityFromName, getQualityPillClasses } from '../services/directStreamClient';
+import {
+  ResolvedStream,
+  DirectProviderResult,
+  cleanServerDisplay,
+  formatQualityBadge,
+  stripQualityFromName,
+  getQualityPillClasses,
+  reportStreamPlaybackOutcome
+} from '../services/directStreamClient';
 import { SubtitleTrack, Episode } from '../types/media';
 import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
-import { getUserPlayerSettings, UserPlayerSettings } from '../services/playerSettings';
+import {
+  getUserPlayerSettings,
+  getEffectiveAutoplayNextEpisode,
+  setAutoplayNextEpisodePreference,
+  UserPlayerSettings
+} from '../services/playerSettings';
+import { getUserSettings } from '../services/storage';
 import { LanguageFlag } from './LanguageFlag';
 import { detectStreamQualityFromDimensions, getMediaQuality, QualityInfo } from '../services/quality';
 import { QualityBadge } from './QualityBadge';
+import { EpisodeNavTarget, NormalizedAudioTrack, normalizeHlsAudioTracks } from '../utils/episodeNavigation';
+import { EpisodeSkipTimings, findActiveSkipSegment } from '../services/introSkip';
 
 interface DirectVideoPlayerProps {
   title: string;
+  episodeTitle?: string;
   isMovie: boolean;
+  isAnime?: boolean;
   genres?: string[];
   releaseYear?: string | number;
   currentSeason?: number;
@@ -51,14 +70,17 @@ interface DirectVideoPlayerProps {
   episodesList?: Episode[];
   onSelectEpisode?: (season: number, episode: number) => void;
   providerResults: DirectProviderResult[];
+  isFetchingStreams?: boolean;
   availableSubtitles?: SubtitleTrack[];
+  skipTimings?: EpisodeSkipTimings | null;
+  nextEpisodeTarget?: EpisodeNavTarget | null;
   onNextEpisode?: () => void;
   onPrevEpisode?: () => void;
   hasNextEpisode?: boolean;
   hasPrevEpisode?: boolean;
   storageKey?: string;
   initialResumeSeek?: number;
-  onProgressUpdate?: (currentTime: number, duration: number) => void;
+  onProgressUpdate?: (currentTime: number, duration: number, forceSync?: boolean) => void;
   onRefreshStreams?: () => void;
   isTheaterMode?: boolean;
   onToggleTheater?: () => void;
@@ -150,7 +172,9 @@ const LANGUAGE_FLAGS: Record<string, string> = {
 
 export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   title,
+  episodeTitle,
   isMovie,
+  isAnime = false,
   genres = [],
   releaseYear = 2026,
   currentSeason = 1,
@@ -160,7 +184,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   episodesList = [],
   onSelectEpisode,
   providerResults,
+  isFetchingStreams = false,
   availableSubtitles = [],
+  skipTimings = null,
+  nextEpisodeTarget = null,
   onNextEpisode,
   onPrevEpisode,
   hasNextEpisode,
@@ -184,6 +211,10 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const scrubberRef = useRef<HTMLDivElement>(null);
   const isDraggingScrubberRef = useRef<boolean>(false);
   const failoverSeekRef = useRef<number>(0);
+  const preferredServerKeyRef = useRef<string | null>(null);
+  const reportedStreamOutcomeRef = useRef<string | null>(null);
+  const autoSkippedKeysRef = useRef<Set<string>>(new Set());
+  const prevStorageKeyForStreamRef = useRef<string | undefined>(storageKey);
 
   // Web Audio Context & Gain Node for Volume Boost
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -248,7 +279,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [volumeBoost, setVolumeBoost] = useState<number>(100);
   const [isLoop, setIsLoop] = useState<boolean>(false);
-  const [autoplayNext, setAutoplayNext] = useState<boolean>(true);
+  const [autoplayNext, setAutoplayNext] = useState<boolean>(() => getEffectiveAutoplayNextEpisode());
 
   // Quality
   const [selectedQuality, setSelectedQuality] = useState<string>('Auto');
@@ -280,11 +311,27 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     [onResolvedQualityChange]
   );
 
-  // Audio tracks
-  const [audioTracks, setAudioTracks] = useState<Array<{ id: number; name: string }>>([
-    { id: 0, name: 'Original Audio' }
+  // Player preferences (initialized before audio/subtitle defaults)
+  const [playerSettings, setPlayerSettings] = useState<UserPlayerSettings>(() => getUserPlayerSettings());
+
+  // Audio tracks (strictly populated from real HLS audioTracks manifest; never fabricated)
+  const [audioTracks, setAudioTracks] = useState<NormalizedAudioTrack[]>([
+    { id: 0, code: 'und', languageName: 'Default', displayName: 'Default Audio Track', isDefault: true }
   ]);
   const [selectedAudioTrackId, setSelectedAudioTrackId] = useState<number>(0);
+  const preferredAudioCodeRef = useRef<string>(
+    playerSettings.preferredAudioLang && playerSettings.preferredAudioLang !== 'auto'
+      ? playerSettings.preferredAudioLang
+      : isAnime && playerSettings.animeAudioPreference === 'dub'
+      ? 'en'
+      : isAnime && playerSettings.animeAudioPreference === 'sub'
+      ? 'ja'
+      : 'auto'
+  );
+  const hasExplicitAudioChoiceRef = useRef<boolean>(false);
+
+  // Next-episode countdown state
+  const [nextEpisodeCountdown, setNextEpisodeCountdown] = useState<number | null>(null);
 
   // Subtitles
   const [activeSubTrackUrl, setActiveSubTrackUrl] = useState<string | null>(null);
@@ -293,14 +340,15 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   const [customSubtitleText, setCustomSubtitleText] = useState<string>('');
   const [subSearchQuery, setSubSearchQuery] = useState<string>('');
 
-  // Subtitle custom styles (image_659a6ea3.png)
-  const [subFontSize, setSubFontSize] = useState<number>(100); // 50% - 200%
-  const [subTextColor, setSubTextColor] = useState<string>('#FFFFFF'); // White, Yellow, Cyan, Green
-  const [subBgColor, setSubBgColor] = useState<string>('#000000'); // Black, White, Outline/None
-  const [subBgOpacity, setSubBgOpacity] = useState<number>(60); // 0% - 100%
+  // Subtitle custom styles
+  const [subFontSize, setSubFontSize] = useState<number>(100);
+  const [subTextColor, setSubTextColor] = useState<string>(playerSettings.subtitleColor || '#FFFFFF');
+  const [subBgColor, setSubBgColor] = useState<string>('#000000');
+  const [subBgOpacity, setSubBgOpacity] = useState<number>(60);
+  const [subPosition, setSubPosition] = useState<'bottom' | 'top'>(playerSettings.subtitlePosition || 'bottom');
 
-  // Subtitle delay in seconds (image_d377490c.png)
-  const [subDelay, setSubDelay] = useState<number>(0.0); // -10.0s to +10.0s
+  // Subtitle delay in seconds (-10.0s to +10.0s)
+  const [subDelay, setSubDelay] = useState<number>(playerSettings.subtitleDelay || 0.0);
 
   // HUD toast feedback
   const [hudFeedback, setHudFeedback] = useState<HudFeedback | null>(null);
@@ -308,16 +356,29 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   // Resume key
   const resumeKey = storageKey ? `stream_progress_${storageKey}` : null;
 
-  // Player preferences
-  const [playerSettings, setPlayerSettings] = useState<UserPlayerSettings>(() => getUserPlayerSettings());
-
   useEffect(() => {
     const handleSettingsChanged = () => {
       const updated = getUserPlayerSettings();
       setPlayerSettings(updated);
+      setAutoplayNext(getEffectiveAutoplayNextEpisode());
+      if (updated.subtitlePosition) setSubPosition(updated.subtitlePosition);
+      if (typeof updated.subtitleDelay === 'number') setSubDelay(updated.subtitleDelay);
+      if (updated.preferredAudioLang && updated.preferredAudioLang !== 'auto') {
+        preferredAudioCodeRef.current = updated.preferredAudioLang;
+      }
+    };
+    const handleStorageUpdate = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (!detail || detail.type === 'settings') {
+        setAutoplayNext(getUserSettings().autoplayNext);
+      }
     };
     window.addEventListener('tstream_player_settings_changed', handleSettingsChanged);
-    return () => window.removeEventListener('tstream_player_settings_changed', handleSettingsChanged);
+    window.addEventListener('tstream:storage_update', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('tstream_player_settings_changed', handleSettingsChanged);
+      window.removeEventListener('tstream:storage_update', handleStorageUpdate);
+    };
   }, []);
 
   // Format seconds to H:MM:SS or M:SS
@@ -342,10 +403,13 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
   }, []);
 
   // Automatic Failover Handler
-  const triggerFailover = useCallback(() => {
+  const triggerFailover = useCallback((reason = 'playback_error') => {
     const v = videoRef.current;
     if (v && v.currentTime > 2) {
       failoverSeekRef.current = v.currentTime;
+    }
+    if (activeStream?.providerKey) {
+      void reportStreamPlaybackOutcome(activeStream.providerKey, false, reason);
     }
     if (allStreams.length > 1) {
       setSelectedStreamIndex(prev => {
@@ -389,6 +453,26 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     triggerHud('volume', `Volume Boost: ${boostPercent}%`);
   };
 
+  // Reset transient episode state & preserve preferred server when storageKey changes
+  useEffect(() => {
+    if (prevStorageKeyForStreamRef.current !== storageKey) {
+      prevStorageKeyForStreamRef.current = storageKey;
+      failoverSeekRef.current = 0;
+      reportedStreamOutcomeRef.current = null;
+      autoSkippedKeysRef.current.clear();
+      setNextEpisodeCountdown(null);
+      setCurrentTime(0);
+      setBufferedTime(0);
+      setLoadError(null);
+      if (playerSettings.rememberLastServer && preferredServerKeyRef.current && allStreams.length > 0) {
+        const rememberedIdx = allStreams.findIndex((s) => s.providerKey === preferredServerKeyRef.current);
+        setSelectedStreamIndex(rememberedIdx >= 0 ? rememberedIdx : 0);
+      } else {
+        setSelectedStreamIndex(0);
+      }
+    }
+  }, [storageKey, allStreams, playerSettings.rememberLastServer]);
+
   // 1. Initialize or switch stream
   useEffect(() => {
     const video = videoRef.current;
@@ -396,6 +480,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
 
     setIsLoading(true);
     setLoadError(null);
+    reportedStreamOutcomeRef.current = null;
 
     // Destroy existing Hls instance if any
     if (hlsRef.current) {
@@ -406,14 +491,14 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     const streamUrl = activeStream.playUrl || activeStream.url;
     const isHls = activeStream.type === 'hls' || streamUrl.includes('.m3u8');
 
-    let initialSeek = video.currentTime > 0 ? video.currentTime : 0;
+    let initialSeek = 0;
     if (failoverSeekRef.current > 0) {
       initialSeek = failoverSeekRef.current;
       failoverSeekRef.current = 0;
     } else if (playerSettings.autoResumePlayback) {
-      if (initialSeek === 0 && initialResumeSeek && initialResumeSeek > 10) {
+      if (initialResumeSeek && initialResumeSeek > 10) {
         initialSeek = initialResumeSeek;
-      } else if (initialSeek === 0 && resumeKey) {
+      } else if (resumeKey) {
         try {
           const saved = localStorage.getItem(resumeKey);
           if (saved) {
@@ -495,11 +580,38 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
           }
         }
         if (hls.audioTracks && hls.audioTracks.length > 0) {
-          const detected = hls.audioTracks.map((t, idx) => ({
-            id: idx,
-            name: t.name || t.lang || `Audio Track ${idx + 1}`
-          }));
-          setAudioTracks([{ id: -1, name: 'Original Audio' }, ...detected]);
+          const normalized = normalizeHlsAudioTracks(
+            hls.audioTracks.map((t, idx) => ({
+              id: idx,
+              lang: t.lang,
+              name: t.name,
+              default: t.default
+            }))
+          );
+          setAudioTracks(normalized);
+
+          const prefCode = preferredAudioCodeRef.current;
+          const matched = prefCode !== 'auto'
+            ? normalized.find((t) => t.code === prefCode)
+            : undefined;
+          if (matched) {
+            hls.audioTrack = matched.id;
+            setSelectedAudioTrackId(matched.id);
+          } else {
+            const fallback = normalized.find((t) => t.isDefault) || normalized[0];
+            if (fallback) {
+              hls.audioTrack = fallback.id;
+              setSelectedAudioTrackId(fallback.id);
+              if (hasExplicitAudioChoiceRef.current && prefCode !== 'auto') {
+                triggerHud('audio', `Audio track "${prefCode.toUpperCase()}" unavailable — using ${fallback.languageName}`);
+              }
+            }
+          }
+        } else {
+          setAudioTracks([
+            { id: 0, code: 'und', languageName: 'Default', displayName: 'Default Audio Track', isDefault: true }
+          ]);
+          setSelectedAudioTrackId(0);
         }
         triggerAutoPlay();
       });
@@ -583,22 +695,38 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     };
   }, [selectedStreamIndex, activeStream?.url, resumeKey]);
 
-  // 2. Playback tracking
+  // 2. Playback tracking (15s interval + pause + hidden + pagehide + ended)
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     let lastReportTime = 0;
+    const flushProgressNow = (forceSync = false) => {
+      if (!onProgressUpdate) return;
+      const t = video.currentTime || 0;
+      const d = video.duration || 0;
+      if (t > 3) {
+        if (resumeKey) {
+          try {
+            localStorage.setItem(resumeKey, t.toString());
+          } catch {}
+        }
+        onProgressUpdate(t, d, forceSync);
+      }
+    };
+
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
       if (resumeKey && video.currentTime > 5) {
-        localStorage.setItem(resumeKey, video.currentTime.toString());
+        try {
+          localStorage.setItem(resumeKey, video.currentTime.toString());
+        } catch {}
       }
       if (video.buffered.length > 0) {
         setBufferedTime(video.buffered.end(video.buffered.length - 1));
       }
       const now = Date.now();
-      if (now - lastReportTime > 6000 && onProgressUpdate && video.currentTime > 3) {
+      if (now - lastReportTime >= 15000 && onProgressUpdate && video.currentTime > 3) {
         lastReportTime = now;
         onProgressUpdate(video.currentTime, video.duration || 0);
       }
@@ -610,22 +738,51 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       setIsPlaying(false);
       setShowControls(true);
       if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-      if (onProgressUpdate && video.currentTime > 3) {
-        onProgressUpdate(video.currentTime, video.duration || 0);
-      }
+      flushProgressNow(true);
     };
     const onWaiting = () => setIsLoading(true);
-    const onPlaying = () => setIsLoading(false);
+    const onPlaying = () => {
+      setIsLoading(false);
+      if (activeStream?.providerKey && reportedStreamOutcomeRef.current !== (activeStream.playUrl || activeStream.url)) {
+        reportedStreamOutcomeRef.current = activeStream.playUrl || activeStream.url;
+        void reportStreamPlaybackOutcome(activeStream.providerKey, true);
+      }
+    };
     const onEnded = () => {
       setIsPlaying(false);
-      if (autoplayNext && hasNextEpisode && onNextEpisode) {
-        onNextEpisode();
+      if (onProgressUpdate && (video.duration || video.currentTime) > 3) {
+        onProgressUpdate(video.duration || video.currentTime, video.duration || 0, true);
+      }
+      const canAutoAdvance =
+        autoplayNext &&
+        hasNextEpisode &&
+        nextEpisodeTarget &&
+        onNextEpisode &&
+        (!nextEpisodeTarget.isSeasonTransition || playerSettings.autoPlayNextSeason);
+
+      if (canAutoAdvance) {
+        const delay = playerSettings.nextEpisodeCountdownSeconds ?? 5;
+        if (delay <= 0) {
+          onNextEpisode!();
+        } else {
+          setNextEpisodeCountdown(delay);
+        }
+      } else {
+        setShowControls(true);
+        if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
       }
     };
     const onError = () => {
       console.warn(`Native video playback error on ${activeStream?.server || 'current'}, initiating auto-failover...`);
-      triggerFailover();
+      triggerFailover('media_element_error');
     };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushProgressNow(true);
+      }
+    };
+    const onPageHide = () => flushProgressNow(true);
 
     video.addEventListener('timeupdate', onTimeUpdate);
     video.addEventListener('durationchange', onDurationChange);
@@ -635,8 +792,12 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
     video.addEventListener('playing', onPlaying);
     video.addEventListener('ended', onEnded);
     video.addEventListener('error', onError);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
 
     return () => {
+      flushProgressNow(true);
       video.removeEventListener('timeupdate', onTimeUpdate);
       video.removeEventListener('durationchange', onDurationChange);
       video.removeEventListener('play', onPlay);
@@ -645,8 +806,78 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       video.removeEventListener('playing', onPlaying);
       video.removeEventListener('ended', onEnded);
       video.removeEventListener('error', onError);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
     };
-  }, [activeStream, resumeKey, autoplayNext, hasNextEpisode, onNextEpisode, onProgressUpdate, triggerFailover]);
+  }, [
+    activeStream,
+    resumeKey,
+    autoplayNext,
+    hasNextEpisode,
+    nextEpisodeTarget,
+    onNextEpisode,
+    onProgressUpdate,
+    triggerFailover,
+    playerSettings.autoPlayNextSeason,
+    playerSettings.nextEpisodeCountdownSeconds
+  ]);
+
+  // Countdown timer for Next Episode overlay
+  useEffect(() => {
+    if (nextEpisodeCountdown === null) return;
+    if (nextEpisodeCountdown <= 0) {
+      setNextEpisodeCountdown(null);
+      onNextEpisode?.();
+      return;
+    }
+    const timer = setTimeout(() => {
+      setNextEpisodeCountdown((c) => (c !== null ? c - 1 : null));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [nextEpisodeCountdown, onNextEpisode]);
+
+  // Active verified skip segment (Intro / Recap / Credits) & guarded auto-skip
+  const activeSkipSegment = useMemo(
+    () => findActiveSkipSegment(skipTimings, currentTime, duration),
+    [skipTimings, currentTime, duration]
+  );
+
+  const handleJumpSkipSegment = useCallback(
+    (endSeconds: number, kindLabel: string, automatic = false) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const clampedTarget = duration > 0 ? Math.min(duration - 0.5, endSeconds) : endSeconds;
+      if (clampedTarget > video.currentTime) {
+        video.currentTime = clampedTarget;
+        setCurrentTime(clampedTarget);
+        triggerHud('seek', automatic ? `Auto-skipped ${kindLabel}` : `Skipped ${kindLabel}`);
+      }
+    },
+    [duration, triggerHud]
+  );
+
+  useEffect(() => {
+    if (!activeSkipSegment) return;
+    const shouldAuto =
+      (activeSkipSegment.kind === 'intro' && playerSettings.autoSkipIntro) ||
+      (activeSkipSegment.kind === 'recap' && playerSettings.skipRecap) ||
+      (activeSkipSegment.kind === 'credits' && playerSettings.skipCredits);
+
+    if (!shouldAuto) return;
+    const segKey = `${storageKey || 'media'}_${activeSkipSegment.kind}`;
+    if (autoSkippedKeysRef.current.has(segKey)) return;
+
+    autoSkippedKeysRef.current.add(segKey);
+    handleJumpSkipSegment(activeSkipSegment.end, activeSkipSegment.kind, true);
+  }, [
+    activeSkipSegment,
+    playerSettings.autoSkipIntro,
+    playerSettings.skipRecap,
+    playerSettings.skipCredits,
+    storageKey,
+    handleJumpSkipSegment
+  ]);
 
   // Auto-hide controls after inactivity (mouse & touch safe)
   const handleMouseMove = useCallback(() => {
@@ -1404,6 +1635,9 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       if (v && v.currentTime > 2) {
         failoverSeekRef.current = v.currentTime;
       }
+      if (playerSettings.rememberLastServer) {
+        preferredServerKeyRef.current = allStreams[idx].providerKey;
+      }
       setSelectedStreamIndex(idx);
       triggerHud('server', `Server: ${allStreams[idx].providerName || allStreams[idx].server}`);
       setActiveModal('none');
@@ -1459,7 +1693,13 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       {customSubtitleText && (
         <div
           className={`absolute inset-x-0 z-20 flex justify-center px-3 sm:px-8 pointer-events-none transition-all duration-200 ${
-            showControls ? 'bottom-16 sm:bottom-28' : 'bottom-4 sm:bottom-12'
+            subPosition === 'top'
+              ? showControls
+                ? 'top-14 sm:top-16'
+                : 'top-4 sm:top-8'
+              : showControls
+              ? 'bottom-16 sm:bottom-28'
+              : 'bottom-4 sm:bottom-12'
           }`}
         >
           <div
@@ -1495,21 +1735,89 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
       )}
 
       {/* Loading Spinner */}
-      {isLoading && (
+      {(isLoading || isFetchingStreams) && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 backdrop-blur-xs pointer-events-none">
-          <PlayerLoadingSpinner subtitle="High speed multi-server streaming with zero buffering." />
+          <PlayerLoadingSpinner
+            subtitle={
+              isFetchingStreams
+                ? 'Resolving best direct streaming server...'
+                : 'High speed multi-server streaming with zero buffering.'
+            }
+          />
+        </div>
+      )}
+
+      {/* Verified Skip Intro / Recap / Credits Action Button */}
+      {activeSkipSegment && !isLoading && !isFetchingStreams && !loadError && nextEpisodeCountdown === null && (
+        <div className={`absolute right-4 sm:right-6 z-30 transition-all duration-200 ${showControls ? 'bottom-20 sm:bottom-28' : 'bottom-6 sm:bottom-8'}`}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleJumpSkipSegment(activeSkipSegment.end, activeSkipSegment.kind, false);
+            }}
+            className="px-4 py-2.5 rounded-xl bg-black/85 hover:bg-[#F5C400] text-white hover:text-black border border-white/25 hover:border-[#F5C400] font-black text-xs sm:text-sm tracking-wide flex items-center gap-2 shadow-2xl backdrop-blur-md transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <SkipForward className="w-4 h-4" />
+            <span>{activeSkipSegment.label}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Next Episode / Next Season Countdown Overlay (Fullscreen Preserved) */}
+      {nextEpisodeCountdown !== null && nextEpisodeTarget && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute inset-0 z-40 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-8"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-[#141418]/95 border border-white/15 p-5 sm:p-6 text-left shadow-2xl">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-[#F5C400]">
+              {nextEpisodeTarget.isSeasonTransition ? 'Next Season' : 'Next Episode'}
+            </div>
+            <h3 className="text-lg sm:text-xl font-black text-white mt-1 truncate">
+              Season {nextEpisodeTarget.season} · Episode {nextEpisodeTarget.episode}
+            </h3>
+            {nextEpisodeTarget.episodeName && (
+              <p className="text-xs sm:text-sm text-zinc-300 mt-0.5 truncate">
+                {nextEpisodeTarget.episodeName}
+              </p>
+            )}
+            <p className="text-xs text-zinc-400 mt-3 font-mono tabular-nums">
+              Starts in {nextEpisodeCountdown} {nextEpisodeCountdown === 1 ? 'second' : 'seconds'}
+            </p>
+            <div className="flex items-center gap-2.5 mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setNextEpisodeCountdown(null);
+                  onNextEpisode?.();
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] text-black font-black text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5 fill-black" />
+                <span>Play Now</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNextEpisodeCountdown(null)}
+                className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
       {/* Error Overlay with Next Server Action */}
-      {loadError && (
+      {loadError && !isFetchingStreams && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-black/90 backdrop-blur-md text-white">
           <AlertTriangle className="w-12 h-12 mb-3 text-[#F5C400] animate-bounce" />
           <h4 className="text-base font-bold text-white mb-1">Direct Stream Source Interrupted</h4>
           <p className="text-xs text-zinc-400 max-w-md mb-4">{loadError}</p>
           <div className="flex items-center gap-3">
             <button
-              onClick={triggerFailover}
+              onClick={() => triggerFailover('user_retry')}
               className="px-4 py-2 rounded-xl bg-[#F5C400] hover:bg-[#e0b400] text-black font-extrabold text-xs transition-colors flex items-center gap-1.5 shadow-lg cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5" />
@@ -1648,7 +1956,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* 2. AUDIO POPOVER */}
+      {/* 2. AUDIO POPOVER (Strictly sourced from stream manifest tracks) */}
       {activeModal === 'audio' && (
         <div className="absolute bottom-12 sm:bottom-16 inset-x-2.5 sm:inset-x-auto sm:right-16 z-50 sm:w-72 max-h-[calc(100%-3.75rem)] overflow-y-auto no-scrollbar bg-[#121215]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-3 text-left animate-in fade-in zoom-in-95 duration-150">
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs font-bold text-zinc-300">
@@ -1660,7 +1968,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                 <ArrowLeft className="w-4 h-4" />
               </button>
               <Languages className="w-4 h-4 text-zinc-400" />
-              <span>AUDIO</span>
+              <span>AUDIO LANGUAGE</span>
             </div>
             <button
               type="button"
@@ -1677,25 +1985,39 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               const isSelected = track.id === selectedAudioTrackId;
               return (
                 <button
-                  key={track.id}
+                  key={`${track.id}-${track.code}`}
                   onClick={() => {
                     setSelectedAudioTrackId(track.id);
-                    if (hlsRef.current && track.id >= 0) {
+                    if (track.code !== 'und') {
+                      preferredAudioCodeRef.current = track.code;
+                      hasExplicitAudioChoiceRef.current = true;
+                    }
+                    if (hlsRef.current && hlsRef.current.audioTracks?.length > 0 && track.id >= 0) {
                       hlsRef.current.audioTrack = track.id;
                     }
-                    triggerHud('audio', `Audio: ${track.name}`);
+                    triggerHud('audio', `Audio: ${track.displayName}`);
                     setActiveModal('none');
                   }}
                   className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
                     isSelected ? 'bg-[#24242a] text-white' : 'hover:bg-white/5 text-zinc-300'
                   }`}
                 >
-                  <span>{track.name}</span>
-                  {isSelected && <Check className="w-4 h-4 text-white" />}
+                  <div className="flex items-center gap-2 truncate">
+                    {track.code !== 'und' && (
+                      <span className="text-[10px] font-mono uppercase text-zinc-400">{track.code}</span>
+                    )}
+                    <span className="truncate">{track.displayName}</span>
+                  </div>
+                  {isSelected && <Check className="w-4 h-4 text-[#F5C400] shrink-0" />}
                 </button>
               );
             })}
           </div>
+          {audioTracks.length <= 1 && (
+            <div className="mt-2 pt-2 border-t border-white/10 text-[10px] text-zinc-400">
+              Only the default audio track was exposed by this stream source.
+            </div>
+          )}
         </div>
       )}
 
@@ -1976,9 +2298,33 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
               />
             </div>
 
+            {/* Subtitle Position */}
+            <div>
+              <div className="text-zinc-300 font-medium mb-2">Position</div>
+              <div className="grid grid-cols-2 gap-2">
+                {(['bottom', 'top'] as const).map((pos) => (
+                  <button
+                    key={pos}
+                    type="button"
+                    onClick={() => setSubPosition(pos)}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold capitalize transition-colors cursor-pointer ${
+                      subPosition === pos
+                        ? 'bg-[#F5C400] text-black'
+                        : 'bg-white/5 text-zinc-300 hover:bg-white/10'
+                    }`}
+                  >
+                    {pos}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Reset Button */}
             <button
-              onClick={resetSubtitleStyle}
+              onClick={() => {
+                resetSubtitleStyle();
+                setSubPosition('bottom');
+              }}
               className="w-full py-2.5 mt-2 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white transition-colors cursor-pointer"
             >
               Reset Style
@@ -2078,7 +2424,7 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                   <span className="font-semibold text-white">Audio</span>
                   <div className="flex items-center gap-1 text-zinc-400">
                     <span className="truncate max-w-[120px]">
-                      {audioTracks.find(t => t.id === selectedAudioTrackId)?.name || 'Original Audio'}
+                      {audioTracks.find(t => t.id === selectedAudioTrackId)?.displayName || 'Default Audio Track'}
                     </span>
                     <ChevronRight className="w-3.5 h-3.5" />
                   </div>
@@ -2211,16 +2557,38 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
                 </button>
 
                 <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoplayNext}
                   onClick={() => {
-                    setAutoplayNext(prev => !prev);
-                    triggerHud('autoplay', `Autoplay: ${!autoplayNext ? 'On' : 'Off'}`);
+                    const nextVal = !autoplayNext;
+                    setAutoplayNext(nextVal);
+                    void setAutoplayNextEpisodePreference(nextVal);
+                    triggerHud('autoplay', `Autoplay Next Episode: ${nextVal ? 'On' : 'Off'}`);
                   }}
                   className="w-full flex items-center justify-between p-2 rounded-xl hover:bg-white/5 text-zinc-200 transition-colors cursor-pointer"
                 >
-                  <span className="font-semibold text-white">Autoplay</span>
-                  <div className="flex items-center gap-1 text-zinc-400">
-                    <span>{autoplayNext ? 'On' : 'Off'}</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
+                  <div className="text-left pr-2">
+                    <div className="font-semibold text-white">Autoplay Next Episode</div>
+                    <div className="text-[10px] text-zinc-400">
+                      {isMovie ? 'Applies to TV series episodes' : 'Play next episode automatically'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`text-[11px] font-bold ${autoplayNext ? 'text-[#F5C400]' : 'text-zinc-400'}`}>
+                      {autoplayNext ? 'On' : 'Off'}
+                    </span>
+                    <span
+                      className={`w-8 h-4.5 rounded-full relative transition-colors ${
+                        autoplayNext ? 'bg-[#F5C400]' : 'bg-white/20'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-transform ${
+                          autoplayNext ? 'translate-x-3.5' : 'translate-x-0'
+                        }`}
+                      />
+                    </span>
                   </div>
                 </button>
               </div>
@@ -2424,31 +2792,30 @@ export const DirectVideoPlayer: React.FC<DirectVideoPlayerProps> = ({
         }`}
       >
         {/* "You're Watching" Metadata (shown on sm+ desktop/tablet; mobile shows compact title at top) */}
-        <div className="hidden sm:flex flex-col gap-1 max-w-md pointer-events-none mb-3">
-          <div className="flex items-center gap-1.5">
-            <span className="w-1 h-3.5 bg-red-600 rounded-full shrink-0" />
-            <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-              You're Watching
-            </span>
+        <div className="hidden sm:flex flex-col gap-1 max-w-lg pointer-events-none mb-3">
+          <div className="text-xs font-semibold tracking-wide text-zinc-400">
+            Now Playing
           </div>
 
           <h2 className="text-xl font-black text-white truncate drop-shadow-md tracking-tight leading-tight">
             {title}
           </h2>
 
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="px-2 py-0.5 rounded bg-white/10 text-[10px] font-semibold text-zinc-300">
-              {isMovie ? 'Movie' : `S${currentSeason} · E${currentEpisode}`}
+          <div className="flex items-center gap-2 text-xs font-medium text-zinc-300 flex-wrap">
+            <span>
+              {isMovie ? 'Movie' : `Season ${currentSeason} · Episode ${currentEpisode}${episodeTitle ? ` — ${episodeTitle}` : ''}`}
             </span>
             {displayGenres.slice(0, 2).map((genre, idx) => (
-              <span key={idx} className="px-2 py-0.5 rounded bg-white/10 text-[10px] font-semibold text-zinc-300">
-                {genre}
-              </span>
+              <React.Fragment key={idx}>
+                <span aria-hidden="true" className="text-zinc-500">·</span>
+                <span>{genre}</span>
+              </React.Fragment>
             ))}
             {releaseYear && (
-              <span className="px-2 py-0.5 rounded bg-white/10 text-[10px] font-semibold text-zinc-300">
-                {releaseYear}
-              </span>
+              <>
+                <span aria-hidden="true" className="text-zinc-500">·</span>
+                <span className="tabular-nums">{releaseYear}</span>
+              </>
             )}
           </div>
         </div>

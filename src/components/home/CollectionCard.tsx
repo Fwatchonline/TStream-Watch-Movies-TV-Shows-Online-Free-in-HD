@@ -21,8 +21,7 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
   const filmCount = parts.length || 1;
 
   // Extract up to 3 posters for the fanned artwork
-  const fallbackPoster = 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=500&auto=format&fit=crop&q=80';
-  const collectionPoster = resolveSafeImageSrc(collection.posterPath) || fallbackPoster;
+  const collectionPoster = resolveSafeImageSrc(collection.posterPath);
   const posterCenter = resolveSafeImageSrc(parts[0]?.posterPath) || collectionPoster;
   const posterLeft = resolveSafeImageSrc(parts[1]?.posterPath || parts[0]?.posterPath) || collectionPoster;
   const posterRight = resolveSafeImageSrc(parts[2]?.posterPath || parts[1]?.posterPath) || collectionPoster;
@@ -39,16 +38,19 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
       return;
     }
 
-    if (!img.dataset.fallbackStage && unwrapImageProxyUrl(currentUrl) !== unwrapImageProxyUrl(collectionPoster)) {
+    if (
+      !img.dataset.fallbackStage &&
+      collectionPoster &&
+      unwrapImageProxyUrl(currentUrl) !== unwrapImageProxyUrl(collectionPoster)
+    ) {
       img.dataset.fallbackStage = 'collection';
       img.dataset.proxyTried = '';
       img.src = collectionPoster;
       return;
     }
-    if (currentUrl !== fallbackPoster) {
-      img.dataset.fallbackStage = 'done';
-      img.src = fallbackPoster;
-    }
+
+    img.dataset.fallbackStage = 'done';
+    img.style.display = 'none';
   };
 
   return (
@@ -78,40 +80,46 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
         <div className="relative z-10 flex items-center justify-center w-full h-full pb-3">
           {/* Left Poster (tilted left) */}
           <div className="absolute w-[85px] sm:w-[95px] aspect-[2/3] rounded-md overflow-hidden shadow-lg border border-white/10 transform -rotate-10 -translate-x-8 sm:-translate-x-9 translate-y-1 group-hover:-translate-x-11 group-hover:-rotate-14 transition-all duration-300 opacity-75 bg-[#18181c]">
-            <img
-              src={posterLeft}
-              alt=""
-              className="w-full h-full object-cover"
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              onError={handlePosterError}
-            />
+            {posterLeft && (
+              <img
+                src={posterLeft}
+                alt=""
+                className="w-full h-full object-cover"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onError={handlePosterError}
+              />
+            )}
             <div className="absolute inset-0 bg-black/25" />
           </div>
 
           {/* Right Poster (tilted right) */}
           <div className="absolute w-[85px] sm:w-[95px] aspect-[2/3] rounded-md overflow-hidden shadow-lg border border-white/10 transform rotate-10 translate-x-8 sm:translate-x-9 translate-y-1 group-hover:translate-x-11 group-hover:rotate-14 transition-all duration-300 opacity-75 bg-[#18181c]">
-            <img
-              src={posterRight}
-              alt=""
-              className="w-full h-full object-cover"
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              onError={handlePosterError}
-            />
+            {posterRight && (
+              <img
+                src={posterRight}
+                alt=""
+                className="w-full h-full object-cover"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onError={handlePosterError}
+              />
+            )}
             <div className="absolute inset-0 bg-black/25" />
           </div>
 
           {/* Center Poster (straight, elevated in front) */}
           <div className="relative z-20 w-[100px] sm:w-[110px] aspect-[2/3] rounded-md overflow-hidden shadow-2xl border border-[#F5C400]/40 group-hover:border-[#F5C400] transform group-hover:scale-105 group-hover:-translate-y-1 transition-all duration-300 bg-[#18181c]">
-            <img
-              src={posterCenter}
-              alt={collection.name}
-              className="w-full h-full object-cover"
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              onError={handlePosterError}
-            />
+            {posterCenter && (
+              <img
+                src={posterCenter}
+                alt={collection.name}
+                className="w-full h-full object-cover"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onError={handlePosterError}
+              />
+            )}
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
           </div>
         </div>

@@ -18,8 +18,11 @@ import { fetchSeasonEpisodesStrict } from '../services/tmdb';
 import { KeyedFetchCoordinator } from '../utils/retryState';
 import { DirectVideoPlayer } from './DirectVideoPlayer';
 import { PlayerLoadingSpinner } from './PlayerLoadingSpinner';
-import { fetchDirectStreams, DirectProviderResult, formatQualityBadge, getQualityPillClasses } from '../services/directStreamClient';
+import { EpisodeNavTarget, resolveAdjacentEpisodes } from '../utils/episodeNavigation';
+import { EpisodeSkipTimings, fetchEpisodeSkipTimings } from '../services/introSkip';
+import { fetchDirectStreams, DirectProviderResult, formatQualityBadge } from '../services/directStreamClient';
 import { useAuth } from '../context/AuthContext';
+import { resolveSafeResumeSeconds } from '../services/watchHistory';
 
 export type PlayerMode = 'direct' | 'web';
 export type WebServer = string;
@@ -107,8 +110,9 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   const [ambientGlow, setAmbientGlow] = useState<boolean>(true);
   const [iframeReloadKey, setIframeReloadKey] = useState<number>(0);
 
-  // Subtitles
+  // Subtitles & Verified Skip Timings (AniSkip / Firestore)
   const [subtitles, setSubtitles] = useState<SubtitleTrack[]>([]);
+  const [skipTimings, setSkipTimings] = useState<EpisodeSkipTimings | null>(null);
 
   // Direct HLS Streams (Default server: Aether / cinejoy loaded first, others in background)
   const [directResults, setDirectResults] = useState<DirectProviderResult[]>([]);
@@ -127,7 +131,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
   }, [defaultDirectProvider, media.id, media.mediaType]);
   const [isScanningAlternative, setIsScanningAlternative] = useState<boolean>(false);
 
-  // TV Episodes cache & retryable loader
+  // TV / Anime Episodes cache & retryable loader
   const [episodesMap, setEpisodesMap] = useState<Record<number, Episode[]>>({});
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   const [episodeLoadError, setEpisodeLoadError] = useState<string | null>(null);
@@ -137,7 +141,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     seasonCoordinatorRef.current = new KeyedFetchCoordinator<Episode[]>();
   }
 
-  const isMovie = media.mediaType === 'movie';
+  const isMovie = media.mediaType === 'movie' || media.mediaFormat === 'MOVIE' || media.mediaFormat === 'ANIME_MOVIE';
+  const isAnime = media.mediaType === 'anime';
   const tvDetail = !isMovie ? (media as any) : null;
   const currentSeasonData =
     tvDetail?.seasons?.find((s: any) => s.seasonNumber === currentSeason) ||
@@ -158,7 +163,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     return () => {
       coord.destroy();
     };
-  }, [media.id, media.tmdbId]);
+  }, [media.id, media.tmdbId, media.anilistId]);
 
   const handleRetrySeasonEpisodes = useCallback(() => {
     const coord = seasonCoordinatorRef.current;
@@ -171,7 +176,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
 
   // Load TV episodes for current season with retry safety and stale-response protection
   useEffect(() => {
-    if (isMovie) return;
+    if (isMovie || isAnime) return;
     const coord = seasonCoordinatorRef.current;
     if (!coord) return;
 
@@ -219,23 +224,11 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [media.id, media.tmdbId, currentSeason, isMovie, currentSeasonData, episodeRetryTick]);
+  }, [media.id, media.tmdbId, currentSeason, isMovie, isAnime, currentSeasonData, episodeRetryTick]);
 
+  // Genuine episode list only — never fabricate assumed 8 or 10 episode placeholders
   const rawEpisodes = episodesMap[currentSeason] || currentSeasonData?.episodes;
-  const episodesList: Episode[] =
-    rawEpisodes && rawEpisodes.length > 0
-      ? rawEpisodes
-      : Array.from({ length: currentSeasonData?.episodeCount || 8 }, (_, i) => ({
-          id: Number(`${media.id}${currentSeason}${i + 1}`),
-          episodeNumber: i + 1,
-          seasonNumber: currentSeason,
-          name: `Episode ${i + 1}`,
-          overview: '',
-          stillPath: null,
-          airDate: '',
-          voteAverage: 0,
-          runtime: undefined
-        }));
+  const episodesList: Episode[] = Array.isArray(rawEpisodes) ? rawEpisodes : [];
 
   const currentEpisodeData = episodesList.find((e: any) => e.episodeNumber === currentEpisode);
 
@@ -262,7 +255,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     }
 
     let isMounted = true;
-    const tmdbIdValue = media.tmdbId || media.id;
+    const tmdbIdValue = media.tmdbId || (!isAnime ? media.id : 0);
     const primaryCluster = activeCluster === 'all' ? (defaultDirectProvider || 'cinejoy') : activeCluster;
 
     async function runProgressiveFetch() {
@@ -274,7 +267,10 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
         // Step 1: Immediately fetch primary server (Aether by default) in single mode
         const primaryResults = await fetchDirectStreams({
           tmdbId: tmdbIdValue,
-          mediaType: media.mediaType,
+          mediaType: isAnime ? 'anime' : isMovie ? 'movie' : 'tv',
+          anilistId: isAnime ? (media.anilistId || media.id) : undefined,
+          malId: media.malId,
+          title: media.title,
           season: isMovie ? undefined : currentSeason,
           episode: isMovie ? undefined : currentEpisode,
           provider: primaryCluster,
@@ -283,7 +279,6 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
         if (!isMounted) return;
 
         if (primaryResults && primaryResults.length > 0) {
-          // Primary succeeded -> show player & begin playback immediately!
           setDirectResults(primaryResults);
           const firstSt = primaryResults[0]?.streams?.[0];
           if (firstSt && onStreamQualityDetected) {
@@ -294,7 +289,10 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
           // Step 2: Load remaining servers in the background and append after primary
           fetchDirectStreams({
             tmdbId: tmdbIdValue,
-            mediaType: media.mediaType,
+            mediaType: isAnime ? 'anime' : isMovie ? 'movie' : 'tv',
+            anilistId: isAnime ? (media.anilistId || media.id) : undefined,
+            malId: media.malId,
+            title: media.title,
             season: isMovie ? undefined : currentSeason,
             episode: isMovie ? undefined : currentEpisode,
             exclude: [primaryCluster]
@@ -320,7 +318,10 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
         // Primary server returned no streams -> fall back to remaining servers now
         const remainingResults = await fetchDirectStreams({
           tmdbId: tmdbIdValue,
-          mediaType: media.mediaType,
+          mediaType: isAnime ? 'anime' : isMovie ? 'movie' : 'tv',
+          anilistId: isAnime ? (media.anilistId || media.id) : undefined,
+          malId: media.malId,
+          title: media.title,
           season: isMovie ? undefined : currentSeason,
           episode: isMovie ? undefined : currentEpisode,
           exclude: [primaryCluster]
@@ -351,15 +352,36 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [directStreamEnabled, defaultDirectProvider, playerMode, media.tmdbId, media.id, media.mediaType, currentSeason, currentEpisode, isMovie, activeCluster, streamReloadTick]);
+  }, [
+    directStreamEnabled,
+    defaultDirectProvider,
+    playerMode,
+    media.tmdbId,
+    media.anilistId,
+    media.malId,
+    media.id,
+    media.mediaType,
+    media.title,
+    currentSeason,
+    currentEpisode,
+    isMovie,
+    isAnime,
+    activeCluster,
+    streamReloadTick
+  ]);
 
   // Load subtitles
   useEffect(() => {
     let isMounted = true;
+    const subTmdbId = media.tmdbId || (!isAnime ? media.id : 0);
+    if (!subTmdbId && !media.imdbId) {
+      setSubtitles([]);
+      return;
+    }
     async function loadSubs() {
       const results = await searchSubtitles({
-        mediaType: media.mediaType,
-        tmdbId: media.tmdbId || media.id,
+        mediaType: isAnime ? 'tv' : media.mediaType,
+        tmdbId: subTmdbId,
         imdbId: media.imdbId || (media as any).external_ids?.imdb_id,
         season: isMovie ? undefined : currentSeason,
         episode: isMovie ? undefined : currentEpisode
@@ -379,38 +401,84 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
     media.mediaType,
     currentSeason,
     currentEpisode,
-    isMovie
+    isMovie,
+    isAnime
   ]);
 
-  // Load saved resume position for registered user
+  // Load verified skip timings (AniSkip + Firestore introTimings)
   useEffect(() => {
-    let isMounted = true;
-    if (!user) {
-      setSavedResumeSeconds(undefined);
+    if (isMovie) {
+      setSkipTimings(null);
       return;
     }
-    getContinueWatchingItem(media.mediaType, media.tmdbId || media.id).then(rec => {
-      if (isMounted && rec) {
-        if (isMovie) {
-          if (rec.progressSeconds > 10) setSavedResumeSeconds(rec.progressSeconds);
-        } else {
-          if (rec.seasonNumber === currentSeason && rec.episodeNumber === currentEpisode && rec.progressSeconds > 10) {
-            setSavedResumeSeconds(rec.progressSeconds);
-          }
-        }
+    let active = true;
+    setSkipTimings(null);
+    fetchEpisodeSkipTimings({
+      mediaType: media.mediaType,
+      providerId: isAnime ? (media.anilistId || media.id) : (media.tmdbId || media.id),
+      tmdbId: media.tmdbId || (!isAnime ? media.id : undefined),
+      anilistId: media.anilistId,
+      malId: media.malId,
+      season: currentSeason,
+      episode: currentEpisode,
+      episodeLengthSeconds: currentEpisodeData?.runtime ? currentEpisodeData.runtime * 60 : undefined
+    }).then((timings) => {
+      if (active) setSkipTimings(timings);
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    isMovie,
+    isAnime,
+    media.mediaType,
+    media.id,
+    media.tmdbId,
+    media.anilistId,
+    media.malId,
+    currentSeason,
+    currentEpisode,
+    currentEpisodeData?.runtime
+  ]);
+
+  // Load saved resume position for both guests and registered users
+  useEffect(() => {
+    let isMounted = true;
+    const primaryId = isAnime ? (media.anilistId || media.id) : (media.tmdbId || media.id);
+    const seasonNum = isMovie ? undefined : currentSeason;
+    const epNum = isMovie ? undefined : currentEpisode;
+    getContinueWatchingItem(media.mediaType, primaryId, seasonNum, epNum).then(rec => {
+      if (!isMounted) return;
+      if (!rec) {
+        setSavedResumeSeconds(undefined);
+        return;
+      }
+      if (isMovie) {
+        const pos = resolveSafeResumeSeconds(rec);
+        setSavedResumeSeconds(pos > 0 ? pos : undefined);
+      } else if (rec.seasonNumber === currentSeason && rec.episodeNumber === currentEpisode) {
+        const pos = resolveSafeResumeSeconds(rec);
+        setSavedResumeSeconds(pos > 0 ? pos : undefined);
+      } else {
+        setSavedResumeSeconds(undefined);
       }
     });
     return () => {
       isMounted = false;
     };
-  }, [user, media.id, media.tmdbId, media.mediaType, currentSeason, currentEpisode, isMovie, getContinueWatchingItem]);
+  }, [user, media.id, media.tmdbId, media.anilistId, media.mediaType, currentSeason, currentEpisode, isMovie, isAnime, getContinueWatchingItem]);
 
-  const handleProgressUpdate = useCallback((progressSeconds: number, durationSeconds: number) => {
-    // Continue watching is strictly for registered users
-    if (!user) return;
-    saveContinueWatching({
-      tmdbId: media.tmdbId || media.id,
+  const handleProgressUpdate = useCallback((progressSeconds: number, durationSeconds: number, forceSync?: boolean) => {
+    const genreNames = Array.isArray(media.genres)
+      ? media.genres.map((g: any) => (typeof g === 'string' ? g : g?.name)).filter(Boolean)
+      : [];
+    const primaryId = isAnime ? (media.anilistId || media.id) : (media.tmdbId || media.id);
+    void saveContinueWatching({
+      tmdbId: primaryId,
       mediaType: media.mediaType,
+      anilistId: media.anilistId,
+      malId: media.malId,
+      mediaFormat: media.mediaFormat,
       title: media.title,
       posterPath: media.posterPath,
       backdropPath: media.backdropPath,
@@ -418,55 +486,70 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
       durationSeconds: Math.floor(durationSeconds),
       seasonNumber: isMovie ? undefined : currentSeason,
       episodeNumber: isMovie ? undefined : currentEpisode,
-      episodeName: currentEpisodeData?.name
+      episodeName: currentEpisodeData?.name,
+      genres: genreNames,
+      serverId: activeCluster,
+      forceSync
     });
-  }, [user, saveContinueWatching, media.tmdbId, media.id, media.mediaType, media.title, media.posterPath, media.backdropPath, isMovie, currentSeason, currentEpisode, currentEpisodeData?.name]);
+  }, [saveContinueWatching, media.tmdbId, media.anilistId, media.malId, media.mediaFormat, media.id, media.mediaType, media.title, media.posterPath, media.backdropPath, media.genres, isMovie, isAnime, currentSeason, currentEpisode, currentEpisodeData?.name, activeCluster]);
 
-  const maxEpisode = currentSeasonData?.episodeCount || episodesList.length || 10;
-  const hasNextEpisode = !isMovie && currentEpisode < maxEpisode;
-  const hasPrevEpisode = !isMovie && currentEpisode > 1;
+  // Cross-season / cross-episode navigator driven strictly by verified episode data
+  const adjacent = resolveAdjacentEpisodes({
+    isMovie,
+    currentSeason,
+    currentEpisode,
+    seasonsList: tvDetail?.seasons,
+    loadedSeasonsMap: episodesMap
+  });
+
+  const navigateToEpisodeTarget = useCallback(
+    (target: EpisodeNavTarget | null) => {
+      if (!target) return;
+      setCurrentSeason(target.season);
+      setCurrentEpisode(target.episode);
+      onEpisodeChange?.(target.season, target.episode);
+    },
+    [onEpisodeChange]
+  );
 
   const handleNextEpisode = useCallback(() => {
-    if (hasNextEpisode) {
-      const next = currentEpisode + 1;
-      setCurrentEpisode(next);
-      onEpisodeChange && onEpisodeChange(currentSeason, next);
-    }
-  }, [hasNextEpisode, currentEpisode, currentSeason, onEpisodeChange]);
+    navigateToEpisodeTarget(adjacent.next);
+  }, [adjacent.next, navigateToEpisodeTarget]);
 
   const handlePrevEpisode = useCallback(() => {
-    if (hasPrevEpisode) {
-      const prev = currentEpisode - 1;
-      setCurrentEpisode(prev);
-      onEpisodeChange && onEpisodeChange(currentSeason, prev);
-    }
-  }, [hasPrevEpisode, currentEpisode, currentSeason, onEpisodeChange]);
+    navigateToEpisodeTarget(adjacent.prev);
+  }, [adjacent.prev, navigateToEpisodeTarget]);
 
   // Generate Web Embed URL (strictly only fmov.my, movietvapi.stream, vidsrc.sh, or custom embed url)
-  const tmdbId = media.tmdbId || media.id;
+  const embedTargetId = media.tmdbId || (!isAnime ? media.id : 0);
   const getWebEmbedUrl = (server: WebServer): string => {
     if (customEmbedUrl) {
       return customEmbedUrl;
     }
     if (server === 'fmov' || server.includes('fmov')) {
       return isMovie
-        ? `https://fmov.my/embed/movie/${tmdbId}?color=F5C400`
-        : `https://fmov.my/embed/series/${tmdbId}/${currentSeason}/${currentEpisode}?color=F5C400`;
+        ? `https://fmov.my/embed/movie/${embedTargetId}?color=F5C400`
+        : `https://fmov.my/embed/series/${embedTargetId}/${currentSeason}/${currentEpisode}?color=F5C400`;
     }
     if (server === 'movietvapi' || server.includes('movietv')) {
       return isMovie
-        ? `https://movietvapi.stream/embed/movie/${tmdbId}`
-        : `https://movietvapi.stream/embed/tv/${tmdbId}/${currentSeason}/${currentEpisode}`;
+        ? `https://movietvapi.stream/embed/movie/${embedTargetId}`
+        : `https://movietvapi.stream/embed/tv/${embedTargetId}/${currentSeason}/${currentEpisode}`;
     }
-    // Default vidsrc.sh
     return isMovie
-      ? `https://vidsrc.sh/embed/movie/${tmdbId}`
-      : `https://vidsrc.sh/embed/tv/${tmdbId}/${currentSeason}/${currentEpisode}`;
+      ? `https://vidsrc.sh/embed/movie/${embedTargetId}`
+      : `https://vidsrc.sh/embed/tv/${embedTargetId}/${currentSeason}/${currentEpisode}`;
   };
+
+  // Preserve DirectVideoPlayer mounted across episode switches to keep active DOM fullscreen alive!
+  const showDirectPlayerStage =
+    playerMode === 'direct' && (directResults.length > 0 || (loadingDirect && !directFailed));
+  const showDirectBusyFallback =
+    playerMode === 'direct' && !loadingDirect && directResults.length === 0;
 
   return (
     <div className="relative w-full">
-      {/* Cinematic Ambient Atmosphere Glow (YouTube / Apple TV Ambient Mode) */}
+      {/* Cinematic Ambient Atmosphere Glow */}
       {ambientGlow && !isLightsDimmed && (
         <div
           className="absolute -inset-3 sm:-inset-6 rounded-3xl opacity-25 sm:opacity-40 blur-2xl sm:blur-3xl pointer-events-none transition-opacity duration-700 z-0 overflow-hidden"
@@ -475,6 +558,7 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
           <img
             src={media.backdropPath || media.posterPath}
             alt=""
+            referrerPolicy="no-referrer"
             className="w-full h-full object-cover filter brightness-75 contrast-125 scale-110"
           />
         </div>
@@ -484,17 +568,13 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
         ref={playerContainerRef}
         className="relative z-10 w-full rounded-xl sm:rounded-2xl overflow-hidden bg-[#0a0a0d] border border-[#3A3A40] shadow-2xl transition-all duration-300 ring-1 ring-white/5"
       >
-        {/* =========================================================================
-            PLAYER STAGE: DIRECT NATIVE HLS OR WEB EMBED (16:9 CINEMATIC)
-           ========================================================================= */}
         <div className="relative w-full aspect-video bg-black flex items-center justify-center overflow-hidden">
           {playerMode === 'web' ? (
-            /* Web Embed Player View with strictly 3 requested providers */
+            /* Third-Party Web Embed Player View */
             <div className="w-full h-full flex flex-col bg-black relative">
-              {/* Top Bar for Web Server Selection */}
               <div className="h-10.5 bg-[#141418] border-b border-[#303036] px-2.5 sm:px-4 flex items-center justify-between gap-2 z-10 shrink-0">
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
-                  <span className="text-[10px] uppercase font-bold text-[#A6A6AC] mr-1 hidden sm:inline">Web Provider:</span>
+                  <span className="text-[10px] uppercase font-bold text-[#A6A6AC] mr-1 hidden sm:inline">Third-Party Embed:</span>
                   <button
                     type="button"
                     onClick={() => setWebServer('fmov')}
@@ -504,11 +584,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${webServer === 'fmov' || webServer.includes('fmov') ? 'bg-black' : 'bg-emerald-400 shadow-[0_0_6px_#34d399]'}`} />
+                    <span className={`w-2 h-2 rounded-full ${webServer === 'fmov' || webServer.includes('fmov') ? 'bg-black' : 'bg-emerald-400'}`} />
                     <span>Solstice</span>
-                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-black border ${webServer === 'fmov' || webServer.includes('fmov') ? 'bg-black/15 border-black/25 text-black' : getQualityPillClasses('4K / 1080p')}`}>
-                      4K / 1080p
-                    </span>
                   </button>
 
                   <button
@@ -520,11 +597,8 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${webServer === 'movietvapi' || webServer.includes('movietv') ? 'bg-black' : 'bg-cyan-400 shadow-[0_0_6px_#22d3ee]'}`} />
+                    <span className={`w-2 h-2 rounded-full ${webServer === 'movietvapi' || webServer.includes('movietv') ? 'bg-black' : 'bg-cyan-400'}`} />
                     <span>Mirage</span>
-                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-black border ${webServer === 'movietvapi' || webServer.includes('movietv') ? 'bg-black/15 border-black/25 text-black' : getQualityPillClasses('1080p')}`}>
-                      1080p
-                    </span>
                   </button>
 
                   <button
@@ -536,14 +610,10 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                         : 'bg-[#212126] text-slate-300 hover:text-white border border-white/5'
                     }`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${webServer === 'vidsrc' || webServer.includes('vidsrc') ? 'bg-black' : 'bg-purple-400 shadow-[0_0_6px_#c084fc]'}`} />
+                    <span className={`w-2 h-2 rounded-full ${webServer === 'vidsrc' || webServer.includes('vidsrc') ? 'bg-black' : 'bg-purple-400'}`} />
                     <span>Vesper</span>
-                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-black border ${webServer === 'vidsrc' || webServer.includes('vidsrc') ? 'bg-black/15 border-black/25 text-black' : getQualityPillClasses('1080p')}`}>
-                      1080p
-                    </span>
                   </button>
 
-                  {/* Reload embed button */}
                   <button
                     type="button"
                     onClick={() => setIframeReloadKey(k => k + 1)}
@@ -577,35 +647,39 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                     >
                       <Zap className="w-3.5 h-3.5" />
                       <span className="sm:hidden">Direct</span>
-                      <span className="hidden sm:inline">Switch to Direct Player</span>
+                      <span className="hidden sm:inline">Switch to First-Party Ad-Free Player</span>
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Iframe Embed with Reload Key */}
               <div className="flex-1 w-full h-full relative">
-                <iframe
-                  key={`${webServer}-${tmdbId}-${currentSeason}-${currentEpisode}-${iframeReloadKey}`}
-                  src={getWebEmbedUrl(webServer)}
-                  className="w-full h-full border-0"
-                  allowFullScreen
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                />
+                {embedTargetId ? (
+                  <iframe
+                    key={`${webServer}-${embedTargetId}-${currentSeason}-${currentEpisode}-${iframeReloadKey}`}
+                    src={getWebEmbedUrl(webServer)}
+                    className="w-full h-full border-0"
+                    allowFullScreen
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center text-zinc-400">
+                    <AlertTriangle className="w-8 h-8 text-[#F5C400] mb-2" />
+                    <p className="text-sm font-bold text-white">External Embed Requires a Mapped TMDB ID</p>
+                    <p className="text-xs mt-1">Switch back to the Direct Native Player or choose an alternative server.</p>
+                  </div>
+                )}
               </div>
             </div>
-          ) : loadingDirect ? (
-            /* Connecting direct stream rotating circular Tstream.online brand spinner */
-            <PlayerLoadingSpinner
-              subtitle="Fast multi-server HLS playback, multilingual subtitles, and zero ads."
-            />
-          ) : directResults.length > 0 ? (
-            /* Native 100% Direct HTML5 Player */
+          ) : showDirectPlayerStage ? (
+            /* Native First-Party HTML5 Player — stays mounted across episode switches to preserve DOM fullscreen! */
             <DirectVideoPlayer
               title={media.title}
+              episodeTitle={currentEpisodeData?.name}
               isMovie={isMovie}
+              isAnime={isAnime}
               genres={Array.isArray(media.genres) ? media.genres.map((g: any) => typeof g === 'string' ? g : g.name) : []}
-              releaseYear={media.releaseDate ? new Date(media.releaseDate).getFullYear() : (media as any).firstAirDate ? new Date((media as any).firstAirDate).getFullYear() : 2026}
+              releaseYear={media.releaseDate ? new Date(media.releaseDate).getFullYear() : (media as any).firstAirDate ? new Date((media as any).firstAirDate).getFullYear() : undefined}
               currentSeason={currentSeason}
               currentEpisode={currentEpisode}
               totalSeasons={tvDetail?.seasons?.length || (media as any).numberOfSeasons || 1}
@@ -614,15 +688,18 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
               onSelectEpisode={(s, e) => {
                 setCurrentSeason(s);
                 setCurrentEpisode(e);
-                if (onEpisodeChange) onEpisodeChange(s, e);
+                onEpisodeChange?.(s, e);
               }}
               providerResults={directResults}
+              isFetchingStreams={loadingDirect}
               availableSubtitles={subtitles}
+              skipTimings={skipTimings}
+              nextEpisodeTarget={adjacent.next}
               onNextEpisode={handleNextEpisode}
               onPrevEpisode={handlePrevEpisode}
-              hasNextEpisode={hasNextEpisode}
-              hasPrevEpisode={hasPrevEpisode}
-              storageKey={`${media.id}_${currentSeason}_${currentEpisode}`}
+              hasNextEpisode={adjacent.hasNext}
+              hasPrevEpisode={adjacent.hasPrev}
+              storageKey={`${media.mediaType}_${media.anilistId || media.tmdbId || media.id}_${currentSeason}_${currentEpisode}`}
               initialResumeSeek={savedResumeSeconds}
               onProgressUpdate={handleProgressUpdate}
               onRefreshStreams={() => loadDirectStreams()}
@@ -634,25 +711,18 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
               onResolvedQualityChange={onStreamQualityDetected}
             />
           ) : (
-            /* Direct HLS Stream Busy State with One-Click Fallback */
+            /* Direct HLS Stream Busy State */
             <div className="flex flex-col items-center justify-start sm:justify-center p-3.5 sm:p-8 text-center max-w-xl bg-gradient-to-b from-[#121215] to-[#0a0a0d] w-full h-full relative overflow-y-auto no-scrollbar">
               <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-2 sm:mb-3 text-[#F5C400] shrink-0">
                 <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6 text-[#F5C400]" />
               </div>
 
               <h3 className="text-xs sm:text-lg font-black text-white mb-1 uppercase tracking-wider">
-                Direct HLS Stream Currently Busy
+                Direct Stream Unavailable Right Now
               </h3>
               <p className="text-[11px] sm:text-xs text-[#A6A6AC] mb-3 sm:mb-5 max-w-md leading-relaxed">
-                No working stream responded on the selected server. Select an alternative direct server cluster below or rescan all servers:
+                No working stream responded on the selected server. Select another server cluster below or sweep all available providers:
               </p>
-
-              {/* Alternative HLS Clusters */}
-              <div className="w-full text-left mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  Alternative HLS Clusters (Direct Native Playback):
-                </span>
-              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full mb-4">
                 {HLS_CLUSTERS.map((cluster) => {
@@ -676,59 +746,53 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
                         </div>
                         <span className="text-[10px] text-slate-400 block mt-0.5 truncate">{cluster.desc}</span>
                       </div>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded border font-black uppercase shrink-0 ${getQualityPillClasses(cluster.badge)}`}>
-                        {cluster.badge}
-                      </span>
                     </button>
                   );
                 })}
               </div>
 
-              {/* Rescan Button */}
               <button
                 onClick={() => loadDirectStreams('all')}
                 disabled={isScanningAlternative}
                 className="px-5 py-2.5 rounded-xl bg-[#2b2b32] hover:bg-[#383842] text-white border border-[#3A3A40] font-bold text-xs transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isScanningAlternative ? 'animate-spin text-[#F5C400]' : ''}`} />
-                <span>{isScanningAlternative ? 'Scanning Clusters...' : 'Sweep All HLS Servers'}</span>
+                <span>{isScanningAlternative ? 'Scanning Servers...' : 'Sweep All Direct Servers'}</span>
               </button>
             </div>
           )}
         </div>
 
-        {/* =========================================================================
-            PLAYER SUB-BAR: MODE & AMBIENT CONTROLS
-           ========================================================================= */}
+        {/* Sub-bar: Transparent distinction between First-Party Player vs Third-Party Embed */}
         <div className="px-3 sm:px-4 py-2 sm:py-2.5 bg-[#121215] border-t border-[#3A3A40]/60 flex items-center justify-between text-[11px] text-[#A6A6AC] flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap min-w-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+            <span className={`w-2 h-2 rounded-full shrink-0 ${playerMode === 'direct' ? 'bg-emerald-400' : 'bg-amber-400'}`} />
             <span className="font-bold text-white truncate">
               {playerMode === 'direct'
                 ? (() => {
                     const activeObj = HLS_CLUSTERS.find(c => c.id === activeCluster) || HLS_CLUSTERS[0];
-                    return `Direct Native Player (${activeObj.name} · ${activeObj.badge})`;
+                    return `First-Party Direct Player (${activeObj.name})`;
                   })()
-                : `Embed Player · ${
+                : `Third-Party Embed Server · ${
                     webServer.includes('fmov')
-                      ? 'Solstice (4K / 1080p)'
+                      ? 'Solstice'
                       : webServer.includes('movietv')
-                      ? 'Mirage (1080p)'
+                      ? 'Mirage'
                       : webServer.includes('vidsrc')
-                      ? 'Vesper (1080p)'
+                      ? 'Vesper'
                       : webServer.replace(/^server_\d+_/, '')
                   }`}
             </span>
             <span className="hidden sm:inline text-[#3A3A40]">|</span>
-            <span className="hidden sm:inline font-mono text-emerald-400 font-bold">
+            <span className={`hidden sm:inline font-mono font-bold ${playerMode === 'direct' ? 'text-emerald-400' : 'text-amber-300'}`}>
               {playerMode === 'direct'
-                ? `${(HLS_CLUSTERS.find(c => c.id === activeCluster)?.name.split(' ')[0] || 'Aether')} First + Background Failover`
-                : 'Embed Mode Active'}
+                ? 'Ad-Free Interface · Auto-Failover Enabled'
+                : 'External Embed (May display third-party ads)'}
             </span>
           </div>
 
           <div className="flex items-center gap-2">
-            {!isMovie && episodeLoadError && (
+            {!isMovie && !isAnime && episodeLoadError && (
               <button
                 type="button"
                 onClick={handleRetrySeasonEpisodes}
@@ -741,7 +805,6 @@ export const StreamingPlayer: React.FC<StreamingPlayerProps> = ({
               </button>
             )}
 
-            {/* Ambient Backlight Toggle */}
             <button
               type="button"
               onClick={() => setAmbientGlow(prev => !prev)}

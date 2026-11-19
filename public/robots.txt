@@ -11,6 +11,9 @@ Allow: /collections
 Allow: /watch/
 Allow: /movie/
 Allow: /tv/
+Allow: /anime
+Allow: /anime/
+Allow: /anime-movie/
 Allow: /person/
 Allow: /genre/
 Allow: /platform/

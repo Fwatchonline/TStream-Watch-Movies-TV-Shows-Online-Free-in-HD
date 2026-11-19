@@ -13,6 +13,7 @@ import {
   getImageMimeType,
   buildMediaMetadata,
   buildCanonicalUrl,
+  buildBreadcrumbSchema,
   resolveRouteSeoPolicy,
   isEpisodeSeoIndexable,
   isGenuineEpisodeName,
@@ -44,6 +45,7 @@ import {
   clearSeoPluginCaches,
   LruTtlCache
 } from '../../../scripts/seoHtmlPlugin';
+import { clearAnimeSeoCaches } from '../../../scripts/animeDiscovery';
 import {
   prerenderAndValidateRoute,
   loadDistTemplateOrFail
@@ -1795,7 +1797,132 @@ async function runTests() {
     'Auth Ep Test 8: Unexpected TMDB HTTP 400 returns 503 when unverified/missing local season and safe thin 200 noindex within local bounds'
   );
 
-  console.log('\n--- ALL SEO, TAGS, GENRES, EPISODES, ARTIFACTS, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
+  // =======================================================================
+  // PHASE 8: ANIME SEO, CANONICALIZATION, BREADCRUMBLIST & SSR BOUNDARIES
+  // =======================================================================
+  clearAnimeSeoCaches();
+
+  // Route parsing checks
+  assert(
+    parseSeoRoute('/anime')?.type === 'anime_hub' &&
+      parseSeoRoute('/anime/trending')?.animeSection === 'trending' &&
+      parseSeoRoute('/anime/genres/slice-of-life')?.animeGenreSlug === 'slice-of-life' &&
+      parseSeoRoute('/anime/attack-on-titan-16498')?.type === 'anime' &&
+      parseSeoRoute('/anime/attack-on-titan-16498')?.id === 16498 &&
+      parseSeoRoute('/anime-movie/spirited-away-199')?.type === 'anime_movie' &&
+      parseSeoRoute('/anime-movie/spirited-away-199')?.id === 199 &&
+      parseSeoRoute('/watch/anime/attack-on-titan-16498/1')?.type === 'watch_anime' &&
+      parseSeoRoute('/watch/anime/attack-on-titan-16498/1')?.episode === 1 &&
+      parseSeoRoute('/watch/anime/attack-on-titan-16498/0')?.type === 'notfound' &&
+      parseSeoRoute('/anime/invalid-slug-no-id')?.type === 'notfound',
+    'Phase 8 Anime 1: parseSeoRoute handles all anime hubs, series, movie, watch episode, and invalid routes'
+  );
+
+  // Client SEO metadata + BreadcrumbList schema parity
+  const aotSample = {
+    id: 16498,
+    anilistId: 16498,
+    mediaType: 'anime',
+    mediaFormat: 'TV',
+    title: 'Attack on Titan',
+    seasonYear: 2013,
+    overview: 'Humanity fights for survival behind giant walls against Titans.',
+    genres: ['Action', 'Drama'],
+    posterPath: 'https://s4.anilist.co/file/aot.jpg',
+    backdropPath: 'https://s4.anilist.co/file/aot-banner.jpg',
+    voteAverage: 8.4,
+    popularity: 850000
+  };
+  const spiritedSample = {
+    id: 199,
+    anilistId: 199,
+    mediaType: 'anime',
+    mediaFormat: 'MOVIE',
+    title: 'Spirited Away',
+    seasonYear: 2001,
+    overview: 'Chihiro enters a mysterious spirit world.',
+    genres: ['Adventure', 'Supernatural'],
+    posterPath: 'https://s4.anilist.co/file/sa.jpg',
+    voteAverage: 8.6
+  };
+  const aotSeriesMeta = buildMediaMetadata(aotSample);
+  const aotWatchMeta = buildMediaMetadata(aotSample, {
+    episode: 1,
+    episodeName: 'To You, in 2000 Years',
+    episodeOverview: 'The Colossal Titan breaches Wall Maria at Shiganshina.',
+    isWatching: true
+  });
+  const spiritedMeta = buildMediaMetadata(spiritedSample);
+  const spiritedWatchMeta = buildMediaMetadata(spiritedSample, { isWatching: true });
+  const bcSchema = buildBreadcrumbSchema([
+    { name: 'Home', url: '/' },
+    { name: 'Anime', url: '/anime' },
+    { name: 'Attack on Titan', url: '/anime/attack-on-titan-16498' }
+  ]);
+  assert(
+    aotSeriesMeta.canonicalUrl === 'https://tstream.online/anime/attack-on-titan-16498' &&
+      aotSeriesMeta.schema['@type'] === 'TVSeries' &&
+      aotWatchMeta.canonicalUrl === 'https://tstream.online/watch/anime/attack-on-titan-16498/1' &&
+      aotWatchMeta.schema['@type'] === 'TVEpisode' &&
+      !aotWatchMeta.schema.aggregateRating &&
+      spiritedMeta.canonicalUrl === 'https://tstream.online/anime-movie/spirited-away-199' &&
+      spiritedMeta.schema['@type'] === 'Movie' &&
+      spiritedWatchMeta.canonicalUrl === 'https://tstream.online/anime-movie/spirited-away-199' &&
+      bcSchema['@type'] === 'BreadcrumbList' &&
+      bcSchema.itemListElement.length === 3,
+    'Phase 8 Anime 2: Anime series/movie/episode metadata & BreadcrumbList schema normalize canonicals without leaking ratings'
+  );
+
+  // SSR Anime rendering: Series, Movie, Verified Episode (indexable), Generic Episode (200 noindex), Out-of-bounds Ep (404), Genre filter (noindex), 404 & 503
+  const [aotSeriesSsr, spiritedSsr, aotEp1VerifiedSsr, aotEp2ThinSsr, aotEp99Ssr, genreFilterSsr] = await Promise.all([
+    renderSeoResult(sampleHtmlWithPreExistingCanonical, '/anime/attack-on-titan-16498'),
+    renderSeoResult(sampleHtmlWithPreExistingCanonical, '/anime-movie/spirited-away-199'),
+    renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/anime/attack-on-titan-16498/1'),
+    renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/anime/attack-on-titan-16498/2'),
+    renderSeoResult(sampleHtmlWithPreExistingCanonical, '/watch/anime/attack-on-titan-16498/999'),
+    renderSeoResult(sampleHtmlWithPreExistingCanonical, '/anime/genres/action?genre=Drama', {
+      preloadedMedia: [aotSample]
+    })
+  ]);
+
+  assert(
+    aotSeriesSsr.status === 200 &&
+      !aotSeriesSsr.isNoindex &&
+      aotSeriesSsr.canonicalUrl === 'https://tstream.online/anime/attack-on-titan-16498' &&
+      aotSeriesSsr.html.includes('id="json-ld-breadcrumb"') &&
+      spiritedSsr.status === 200 &&
+      !spiritedSsr.isNoindex &&
+      spiritedSsr.canonicalUrl === 'https://tstream.online/anime-movie/spirited-away-199' &&
+      /"@type"\s*:\s*"Movie"/.test(spiritedSsr.html) &&
+      aotEp1VerifiedSsr.status === 200 &&
+      !aotEp1VerifiedSsr.isNoindex &&
+      aotEp1VerifiedSsr.canonicalUrl === 'https://tstream.online/watch/anime/attack-on-titan-16498/1' &&
+      aotEp2ThinSsr.status === 200 &&
+      aotEp2ThinSsr.isNoindex &&
+      aotEp99Ssr.status === 404 &&
+      aotEp99Ssr.isNoindex &&
+      genreFilterSsr.status === 200 &&
+      genreFilterSsr.isNoindex &&
+      genreFilterSsr.canonicalUrl === 'https://tstream.online/anime/genres/action',
+    'Phase 8 Anime 3: SSR Anime enforces series/movie canonicals, BreadcrumbList JSON-LD, verified vs thin episode indexability, bounds 404, and filtered genre noindex'
+  );
+
+  // AniList mock 404 vs 503 separation on uncached ID
+  const animeMissingSsr = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/anime/unknown-show-999999999', {
+    fetchImpl: mock404Fetch
+  });
+  const anime503Ssr = await renderSeoResult(sampleHtmlWithPreExistingCanonical, '/anime/busy-show-999999998', {
+    fetchImpl: mock503Fetch
+  });
+  assert(
+    animeMissingSsr.status === 404 &&
+      animeMissingSsr.isNoindex &&
+      anime503Ssr.status === 503 &&
+      anime503Ssr.isNoindex,
+    'Phase 8 Anime 4: AniList SSR separates missing anime (404) from upstream outage (503)'
+  );
+
+  console.log('\n--- ALL SEO, TAGS, GENRES, ANIME, EPISODES, ARTIFACTS, ENV & DISCOVERY TESTS PASSED SUCCESSFULLY ---');
 }
 
 runTests().catch(err => {

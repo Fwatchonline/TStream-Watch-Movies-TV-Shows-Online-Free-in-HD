@@ -174,13 +174,14 @@ async function runTests() {
     'Unmount destroy() prevents state updates after component teardown'
   );
 
-  // 6. Verify StreamingPlayer placeholder episodes never fabricate rating 8.0
+  // 6. Verify StreamingPlayer removes permanent attemptedSeasonsRef lock and fabricated 8.0/synthetic placeholder ratings
   const playerSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/StreamingPlayer.tsx'), 'utf8');
   assert(
     !playerSrc.includes('attemptedSeasonsRef') &&
       !playerSrc.includes('voteAverage: 8.0') &&
-      playerSrc.includes('voteAverage: 0'),
-    'StreamingPlayer removes permanent attemptedSeasonsRef lock and fabricated 8.0 episode ratings'
+      playerSrc.includes('seasonCoordinatorRef') &&
+      playerSrc.includes('handleRetrySeasonEpisodes'),
+    'StreamingPlayer removes permanent attemptedSeasonsRef lock, uses seasonCoordinatorRef, and never fabricates 8.0 episode ratings'
   );
   const platSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/home/PlatformSection.tsx'), 'utf8');
   assert(

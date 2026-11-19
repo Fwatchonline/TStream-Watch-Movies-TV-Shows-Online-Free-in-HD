@@ -472,8 +472,61 @@ async function runTests() {
   fs.writeFileSync(path.join(distDir, 'robots.txt'), 'User-agent: *\nSitemap: https://tstream.online/sitemap.xml\n', 'utf8');
   fs.writeFileSync(path.join(distDir, 'prerender-report.json'), '{}', 'utf8');
 
+  const mockAniListFetch = (async () =>
+    new Response(
+      JSON.stringify({
+        data: {
+          Page: {
+            pageInfo: { currentPage: 1, lastPage: 1, hasNextPage: false },
+            media: [
+              {
+                id: 170001,
+                idMal: 59001,
+                format: 'TV',
+                status: 'RELEASING',
+                isAdult: false,
+                episodes: 12,
+                duration: 24,
+                seasonYear: 2025,
+                averageScore: 87,
+                popularity: 120000,
+                title: { english: 'Dynamic Anime Quest', romaji: 'Dynamic Anime Quest' },
+                description: 'A dynamically discovered AniList series for sitemap and SSR parity.',
+                genres: ['Action', 'Fantasy'],
+                studios: { nodes: [{ id: 1, name: 'Bones', isAnimationStudio: true }] }
+              },
+              {
+                id: 170002,
+                idMal: 59002,
+                format: 'MOVIE',
+                status: 'FINISHED',
+                isAdult: false,
+                episodes: 1,
+                duration: 110,
+                seasonYear: 2025,
+                averageScore: 84,
+                popularity: 95000,
+                title: { english: 'Dynamic Anime Movie', romaji: 'Dynamic Anime Movie' },
+                description: 'A dynamically discovered AniList feature film.',
+                genres: ['Sci-Fi', 'Drama'],
+                studios: { nodes: [{ id: 2, name: 'Madhouse', isAnimationStudio: true }] }
+              },
+              {
+                id: 170999,
+                isAdult: true,
+                format: 'TV',
+                title: { english: 'Adult Anime Rejected' }
+              }
+            ]
+          }
+        }
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )) as typeof fetch;
+
   const liveGen = await generateSitemaps(false, pubDir, distDir, {
     fetchImpl: mockTmdbFetch,
+    animeFetchImpl: mockAniListFetch,
     tmdbApiKey: 'secret-test-tmdb-key-123',
     maxPagesPerFeed: 3,
     maxConcurrency: 3,
@@ -490,13 +543,22 @@ async function runTests() {
       liveGen.moviesXml.includes('https://tstream.online/movie/dynamic-movie-gamma-700104') &&
       liveGen.tvXml.includes('https://tstream.online/tv/breaking-bad-1396') &&
       liveGen.tvXml.includes('https://tstream.online/tv/dynamic-show-alpha-800101') &&
-      Boolean(liveGen.episodesXml?.includes('https://tstream.online/watch/tv/dynamic-show-alpha-800101/1/1')),
-    '3 & 6. Sitemaps include curated 80 collections (Avatar 19995), homepage feeds, canonical slugs, and expanded live movies/TV/episodes'
+      Boolean(liveGen.episodesXml?.includes('https://tstream.online/watch/tv/dynamic-show-alpha-800101/1/1')) &&
+      liveGen.animeCount >= 16 &&
+      Boolean(liveGen.animeXml?.includes('https://tstream.online/anime/attack-on-titan-16498')) &&
+      Boolean(liveGen.animeXml?.includes('https://tstream.online/anime-movie/spirited-away-199')) &&
+      Boolean(liveGen.animeXml?.includes('https://tstream.online/anime/dynamic-anime-quest-170001')) &&
+      Boolean(liveGen.animeXml?.includes('https://tstream.online/anime-movie/dynamic-anime-movie-170002')) &&
+      !liveGen.animeXml?.includes('adult-anime-rejected') &&
+      liveGen.mainXml.includes('https://tstream.online/anime') &&
+      liveGen.mainXml.includes('https://tstream.online/anime/genres/action'),
+    '3 & 6. Sitemaps include curated 80 collections (Avatar 19995), homepage feeds, canonical slugs, expanded live movies/TV/episodes, and anime sitemap-anime.xml'
   );
 
   // 14. Authoritative routeInventory parity
   const inv = await getAuthoritativeRouteInventory({
     fetchImpl: mockTmdbFetch,
+    animeFetchImpl: mockAniListFetch,
     tmdbApiKey: 'secret-test-tmdb-key-123',
     maxPagesPerFeed: 3,
     retryBaseDelayMs: 5,
@@ -506,8 +568,9 @@ async function runTests() {
   assert(
     inv.movies.length === liveGen.moviesCount &&
       inv.tvShows.length === liveGen.tvCount &&
-      inv.episodes.length === liveGen.episodesCount,
-    '14. Authoritative routeInventory counts match generated sitemap URL counts 1:1'
+      inv.episodes.length === liveGen.episodesCount &&
+      inv.anime.length === liveGen.animeCount,
+    '14. Authoritative routeInventory counts (including anime) match generated sitemap URL counts 1:1'
   );
 
   // 11. Automatic Sitemap Splitting / Chunking & cleanup of old chunk files
@@ -712,6 +775,7 @@ async function runTests() {
   // Regenerate healthy baseline cleanly so dist & snapshot match full discovery
   const fullGen = await generateSitemaps(false, pubDir, distDir, {
     fetchImpl: mockTmdbFetch,
+    animeFetchImpl: mockAniListFetch,
     tmdbApiKey: 'secret-test-tmdb-key-123',
     maxPagesPerFeed: 3,
     maxConcurrency: 3,
@@ -740,7 +804,8 @@ async function runTests() {
     inventorySnapshotPath: partialSnapshotPath,
     maxDynamicMovies: 2,
     maxDynamicTv: 1,
-    maxDynamicEpisodes: 1
+    maxDynamicEpisodes: 1,
+    maxDynamicAnime: 1
   });
 
   const redundantDiscoveryCalls = prerenderFetchUrls.filter(u =>
@@ -756,11 +821,16 @@ async function runTests() {
       prerenderReport.authoritativeInventoryCounts.movies === fullGen.moviesCount &&
       prerenderReport.authoritativeInventoryCounts.tvShows === fullGen.tvCount &&
       prerenderReport.authoritativeInventoryCounts.episodes === fullGen.episodesCount &&
+      prerenderReport.authoritativeInventoryCounts.anime === fullGen.animeCount &&
       prerenderReport.prerenderedCounts.dynamicMovies === 2 &&
+      prerenderReport.prerenderedCounts.dynamicAnime === 1 &&
+      prerenderReport.hybridSsrDynamicCounts.anime === 1 &&
       prerenderReport.hybridSsrDynamicCounts.movies > 0 &&
       dynamicMoviesTotal >= 0 &&
+      fs.existsSync(path.join(distDir, 'anime/attack-on-titan-16498/index.html')) &&
+      fs.existsSync(path.join(distDir, 'anime-movie/spirited-away-199/index.html')) &&
       fs.existsSync(path.join(distDir, 'prerender-report.json')),
-    '17b. Prerender consumes shared authoritative inventory snapshot with 0 redundant discovery calls and documents Hybrid SSR counts'
+    '17b. Prerender consumes shared authoritative inventory snapshot with 0 redundant discovery calls and documents Hybrid SSR counts including Anime'
   );
 
   // 18. Real Production-Style Live HTTP Server & XML Parse Verification (prerendered + non-prerendered dynamic routes)
@@ -819,7 +889,10 @@ async function runTests() {
       { path: '/movie/avatar-19995', expectedCan: 'https://tstream.online/movie/avatar-19995', expectedType: 'Movie' },
       { path: '/movie/dynamic-movie-gamma-700104', expectedCan: 'https://tstream.online/movie/dynamic-movie-gamma-700104', expectedType: 'Movie' },
       { path: '/tv/dynamic-show-beta-800102', expectedCan: 'https://tstream.online/tv/dynamic-show-beta-800102', expectedType: 'TVSeries' },
-      { path: '/watch/tv/dynamic-show-alpha-800101/1/1', expectedCan: 'https://tstream.online/watch/tv/dynamic-show-alpha-800101/1/1', expectedType: 'TVEpisode' }
+      { path: '/watch/tv/dynamic-show-alpha-800101/1/1', expectedCan: 'https://tstream.online/watch/tv/dynamic-show-alpha-800101/1/1', expectedType: 'TVEpisode' },
+      { path: '/anime/attack-on-titan-16498', expectedCan: 'https://tstream.online/anime/attack-on-titan-16498', expectedType: 'TVSeries' },
+      { path: '/anime-movie/spirited-away-199', expectedCan: 'https://tstream.online/anime-movie/spirited-away-199', expectedType: 'Movie' },
+      { path: '/anime', expectedCan: 'https://tstream.online/anime', expectedType: 'CollectionPage' }
     ];
 
     // Assert gamma movie is NOT prerendered on disk (because maxDynamicMovies=2 excluded later pages), proving real Hybrid SSR!

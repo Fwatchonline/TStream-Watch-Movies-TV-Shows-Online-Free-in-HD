@@ -171,6 +171,7 @@ async function run() {
   let moviesSitemapUrls: string[] = [];
   let tvSitemapUrls: string[] = [];
   let episodesSitemapUrls: string[] = [];
+  let animeSitemapUrls: string[] = [];
   try {
     const robotsRes = await fetch(`${baseUrl}/robots.txt`);
     const robotsTxt = await robotsRes.text();
@@ -179,7 +180,8 @@ async function run() {
       robotsRes.status === 200 &&
         robotsTxt.includes('Sitemap: https://tstream.online/sitemap.xml') &&
         robotsTxt.includes('Allow: /genre/') &&
-        robotsTxt.includes('Allow: /tags/'),
+        robotsTxt.includes('Allow: /tags/') &&
+        robotsTxt.includes('Allow: /anime'),
       `HTTP ${robotsRes.status}, bytes=${robotsTxt.length}`
     );
 
@@ -188,7 +190,7 @@ async function run() {
     const idxLocs = Array.from(idxXml.matchAll(/<loc>([^<]+)<\/loc>/g)).map(m => m[1]);
     record(
       'Sitemap /sitemap.xml',
-      idxRes.status === 200 && idxXml.includes('<sitemapindex') && idxLocs.length >= 3,
+      idxRes.status === 200 && idxXml.includes('<sitemapindex') && idxLocs.length >= 4,
       `HTTP ${idxRes.status}, children=${idxLocs.length}`
     );
 
@@ -197,6 +199,7 @@ async function run() {
         '/sitemap-main.xml',
         '/sitemap-movies.xml',
         '/sitemap-tv.xml',
+        '/sitemap-anime.xml',
         ...idxLocs.map(u => {
           try {
             return new URL(u).pathname;
@@ -238,6 +241,7 @@ async function run() {
       if (childPath.startsWith('/sitemap-movies')) moviesSitemapUrls.push(...locs);
       if (childPath.startsWith('/sitemap-tv')) tvSitemapUrls.push(...locs);
       if (childPath.startsWith('/sitemap-episodes')) episodesSitemapUrls.push(...locs);
+      if (childPath.startsWith('/sitemap-anime')) animeSitemapUrls.push(...locs);
 
       const ok =
         r.status === 200 &&
@@ -261,11 +265,11 @@ async function run() {
     }
 
     const totalContentUrls =
-      mainSitemapUrls.length + moviesSitemapUrls.length + tvSitemapUrls.length + episodesSitemapUrls.length;
+      mainSitemapUrls.length + moviesSitemapUrls.length + tvSitemapUrls.length + episodesSitemapUrls.length + animeSitemapUrls.length;
     record(
       'Combined sitemap entries populated without cross-file duplicates',
       totalContentUrls > 20 && crossSitemapDuplicateCount === 0,
-      `total=${totalContentUrls} (main=${mainSitemapUrls.length}, movies=${moviesSitemapUrls.length}, tv=${tvSitemapUrls.length}, episodes=${episodesSitemapUrls.length}), crossDupes=${crossSitemapDuplicateCount}`
+      `total=${totalContentUrls} (main=${mainSitemapUrls.length}, movies=${moviesSitemapUrls.length}, tv=${tvSitemapUrls.length}, episodes=${episodesSitemapUrls.length}, anime=${animeSitemapUrls.length}), crossDupes=${crossSitemapDuplicateCount}`
     );
 
     if (checkDist) {
@@ -278,13 +282,14 @@ async function run() {
           hasAuthoritative &&
           moviesSitemapUrls.length >= Number(counts.movies || 0) &&
           tvSitemapUrls.length >= Number(counts.tvShows || 0) &&
-          episodesSitemapUrls.length >= Number(counts.episodes || 0);
+          episodesSitemapUrls.length >= Number(counts.episodes || 0) &&
+          animeSitemapUrls.length >= Number(counts.anime || 0);
         record(
           'Prerender & Sitemap authoritative inventory consistency',
           countsCompatible,
           `source=${report?.inventorySource || 'legacy'}, snapshot=${Boolean(report?.usedBuildSnapshot)}, ` +
-            `inv=(m:${counts?.movies}, tv:${counts?.tvShows}, ep:${counts?.episodes}), ` +
-            `sitemap=(m:${moviesSitemapUrls.length}, tv:${tvSitemapUrls.length}, ep:${episodesSitemapUrls.length})`
+            `inv=(m:${counts?.movies}, tv:${counts?.tvShows}, ep:${counts?.episodes}, anime:${counts?.anime}), ` +
+            `sitemap=(m:${moviesSitemapUrls.length}, tv:${tvSitemapUrls.length}, ep:${episodesSitemapUrls.length}, anime:${animeSitemapUrls.length})`
         );
       } catch (err: any) {
         record('Prerender & Sitemap authoritative inventory consistency', false, err.message);
@@ -342,7 +347,14 @@ async function run() {
     { path: '/movie/spider-man-homecoming-315635', expectedCanonical: 'https://tstream.online/movie/spider-man-homecoming-315635', expectedJsonLdType: 'Movie' },
     { path: '/watch/movie/spider-man-homecoming-315635', expectedCanonical: 'https://tstream.online/movie/spider-man-homecoming-315635', expectedJsonLdType: 'Movie' },
     { path: '/tv/breaking-bad-1396', expectedCanonical: 'https://tstream.online/tv/breaking-bad-1396', expectedJsonLdType: 'TVSeries' },
-    { path: '/watch/tv/breaking-bad-1396/1/1', expectedCanonical: 'https://tstream.online/watch/tv/breaking-bad-1396/1/1', expectedJsonLdType: 'TVEpisode' }
+    { path: '/watch/tv/breaking-bad-1396/1/1', expectedCanonical: 'https://tstream.online/watch/tv/breaking-bad-1396/1/1', expectedJsonLdType: 'TVEpisode' },
+    { path: '/anime', expectedCanonical: 'https://tstream.online/anime', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'anime/index.html' },
+    { path: '/anime/trending', expectedCanonical: 'https://tstream.online/anime/trending', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'anime/trending/index.html' },
+    { path: '/anime/movies', expectedCanonical: 'https://tstream.online/anime/movies', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'anime/movies/index.html' },
+    { path: '/anime/genres', expectedCanonical: 'https://tstream.online/anime/genres', expectedJsonLdType: 'CollectionPage', distHtmlRel: 'anime/genres/index.html' },
+    { path: '/anime/genres/action', expectedCanonical: 'https://tstream.online/anime/genres/action', expectedJsonLdType: 'CollectionPage', requireCards: true, distHtmlRel: 'anime/genres/action/index.html' },
+    { path: '/anime/attack-on-titan-16498', expectedCanonical: 'https://tstream.online/anime/attack-on-titan-16498', expectedJsonLdType: 'TVSeries', distHtmlRel: 'anime/attack-on-titan-16498/index.html' },
+    { path: '/anime-movie/spirited-away-199', expectedCanonical: 'https://tstream.online/anime-movie/spirited-away-199', expectedJsonLdType: 'Movie', distHtmlRel: 'anime-movie/spirited-away-199/index.html' }
   ];
 
   let moviesP1Cards: string[] = [];
@@ -539,6 +551,8 @@ async function run() {
     '/watch/tv/breaking-bad-1396/99/99',
     '/watch/tv/breaking-bad-1396/2/99',
     '/watch/tv/breaking-bad-1396/1/999',
+    '/anime/999999999-nonexistent-anime',
+    '/watch/anime/attack-on-titan-16498/999',
     '/platform/nonexistent-platform-xyz',
     '/nonexistent-page-xyz',
     '/assets/nonexistent-chunk-xyz.js'
@@ -582,7 +596,8 @@ async function run() {
         const dynPaths = [
           ...(Array.isArray(dyn.movies) ? dyn.movies : []),
           ...(Array.isArray(dyn.tvShows) ? dyn.tvShows : []),
-          ...(Array.isArray(dyn.episodes) ? dyn.episodes : [])
+          ...(Array.isArray(dyn.episodes) ? dyn.episodes : []),
+          ...(Array.isArray(dyn.anime) ? dyn.anime : [])
         ];
         reportSampleFullUrls = dynPaths
           .filter((p: any): p is string => typeof p === 'string' && p.startsWith('/'))
@@ -601,6 +616,8 @@ async function run() {
     ...moviesSitemapUrls.slice(-15),
     ...tvSitemapUrls.slice(0, 15),
     ...tvSitemapUrls.slice(-10),
+    ...animeSitemapUrls.slice(0, 15),
+    ...animeSitemapUrls.slice(-10),
     ...reportSampleFullUrls
   ];
   const uniqueSample = Array.from(new Set(samplePool));

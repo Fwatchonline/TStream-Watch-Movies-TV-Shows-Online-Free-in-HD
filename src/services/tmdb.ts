@@ -113,12 +113,12 @@ export function normalizeTMDBItem(raw: any, category?: string): MediaItem {
     overview: raw.overview || 'No overview available.',
     posterPath: raw.poster_path
       ? `https://image.tmdb.org/t/p/w500${raw.poster_path}`
-      : 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=500&auto=format&fit=crop&q=80',
+      : '',
     backdropPath: raw.backdrop_path
       ? `https://image.tmdb.org/t/p/original${raw.backdrop_path}`
       : raw.poster_path
       ? `https://image.tmdb.org/t/p/original${raw.poster_path}`
-      : 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=1280&auto=format&fit=crop&q=80',
+      : '',
     releaseDate: raw.release_date || raw.first_air_date || '2026',
     voteAverage: Number((raw.vote_average || 0).toFixed(1)),
     voteCount: raw.vote_count || 0,
@@ -256,7 +256,8 @@ export async function fetchCatalog(
       const platform = getPlatformConfigById(platformId);
       if (platform) {
         const sortBy = extraFilters.sortBy || 'popularity.desc';
-        const targetType = extraFilters.mediaType || 'all';
+        const targetType: 'all' | 'movie' | 'tv' =
+          extraFilters.mediaType === 'movie' || extraFilters.mediaType === 'tv' ? extraFilters.mediaType : 'all';
         const watchRegion = resolveRegion();
         const plan = buildPlatformDiscoverPlan(platform, {
           page: safePage,
@@ -265,7 +266,8 @@ export async function fetchCatalog(
           watchRegion,
           genreId: extraFilters.genreId,
           year: extraFilters.year,
-          minRating: extraFilters.minRating
+          minRating: extraFilters.minRating,
+          language: extraFilters.language
         });
 
         const movPromise = plan.moviePathAndQuery
@@ -346,7 +348,7 @@ export async function fetchCatalog(
       if (targetType === 'all' || targetType === 'movie') {
         for (let p = 1; p <= 4; p++) {
           discPromises.push(
-            fetch(`${TMDB_BASE_URL}/discover/movie?sort_by=popularity.desc&page=${p}&include_adult=false`)
+            fetchFn(`${TMDB_BASE_URL}/discover/movie?sort_by=popularity.desc&page=${p}&include_adult=false`)
               .then(r => r.ok ? r.json() : { results: [] })
               .catch(() => ({ results: [] }))
           );
@@ -355,7 +357,7 @@ export async function fetchCatalog(
       if (targetType === 'all' || targetType === 'tv') {
         for (let p = 1; p <= 4; p++) {
           discPromises.push(
-            fetch(`${TMDB_BASE_URL}/discover/tv?sort_by=popularity.desc&page=${p}&include_adult=false`)
+            fetchFn(`${TMDB_BASE_URL}/discover/tv?sort_by=popularity.desc&page=${p}&include_adult=false`)
               .then(r => r.ok ? r.json() : { results: [] })
               .catch(() => ({ results: [] }))
           );
@@ -363,7 +365,7 @@ export async function fetchCatalog(
       }
 
       const searchPromises = searchQueries.slice(0, 14).map(q =>
-        fetch(`${TMDB_BASE_URL}/search/multi?query=${encodeURIComponent(q)}&page=1&include_adult=false`)
+        fetchFn(`${TMDB_BASE_URL}/search/multi?query=${encodeURIComponent(q)}&page=1&include_adult=false`)
           .then(r => r.ok ? r.json() : { results: [] })
           .catch(() => ({ results: [] }))
       );
@@ -483,7 +485,7 @@ export async function fetchCatalog(
       const q = encodeURIComponent(extraFilters.query.trim());
       const searchType = extraFilters.mediaType === 'movie' ? 'movie' : extraFilters.mediaType === 'tv' ? 'tv' : 'multi';
       const url = `${TMDB_BASE_URL}/search/${searchType}?query=${q}&page=${safePage}&include_adult=false`;
-      const res = await fetch(url);
+      const res = await fetchFn(url);
       if (res.ok) {
         const data = await res.json();
         let results: MediaItem[] = (data.results || [])
@@ -514,7 +516,8 @@ export async function fetchCatalog(
     }
 
     // 4. Discovery / Filter Mode (Movies, TV Shows, Trending, Top Rated Balanced, Genres, Ratings, Years)
-    let targetType: 'all' | 'movie' | 'tv' = extraFilters.mediaType || 'all';
+    let targetType: 'all' | 'movie' | 'tv' =
+      extraFilters.mediaType === 'movie' || extraFilters.mediaType === 'tv' ? extraFilters.mediaType : 'all';
     if (!extraFilters.mediaType || extraFilters.mediaType === 'all') {
       if (category === 'movies' || category === 'popular-movies' || category === 'top-movies' || category === 'upcoming') {
         targetType = 'movie';
@@ -530,6 +533,7 @@ export async function fetchCatalog(
       !extraFilters.year &&
       !extraFilters.minRating &&
       !extraFilters.country &&
+      !extraFilters.language &&
       (!extraFilters.sortBy || extraFilters.sortBy === 'vote_average.desc');
 
     if (isDefaultTopRatedMixed) {
@@ -594,13 +598,16 @@ export async function fetchCatalog(
     const yearQueryMovie = extraFilters.year ? `&primary_release_year=${extraFilters.year}` : '';
     const yearQueryTv = extraFilters.year ? `&first_air_date_year=${extraFilters.year}` : '';
     const countryQuery = extraFilters.country ? `&with_origin_country=${extraFilters.country}` : '';
+    const languageQuery = extraFilters.language && /^[a-z]{2}$/i.test(extraFilters.language.trim())
+      ? `&with_original_language=${extraFilters.language.trim().toLowerCase()}`
+      : '';
 
     if (targetType === 'movie') {
       if (extraFilters.genreId && !movieGenreId) {
         return { page: safePage, totalPages: 1, totalResults: 0, results: [] };
       }
-      const movUrl = `${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryMovie}${minRatingQuery}${yearQueryMovie}${countryQuery}`;
-      const res = await fetch(movUrl);
+      const movUrl = `${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryMovie}${minRatingQuery}${yearQueryMovie}${countryQuery}${languageQuery}`;
+      const res = await fetchFn(movUrl);
       if (res.ok) {
         const data = await res.json();
         const results = (data.results || [])
@@ -617,8 +624,8 @@ export async function fetchCatalog(
       if (extraFilters.genreId && !tvGenreId) {
         return { page: safePage, totalPages: 1, totalResults: 0, results: [] };
       }
-      const tvUrl = `${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryTv}${minRatingQuery}${yearQueryTv}${countryQuery}`;
-      const res = await fetch(tvUrl);
+      const tvUrl = `${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryTv}${minRatingQuery}${yearQueryTv}${countryQuery}${languageQuery}`;
+      const res = await fetchFn(tvUrl);
       if (res.ok) {
         const data = await res.json();
         const results = (data.results || [])
@@ -635,10 +642,10 @@ export async function fetchCatalog(
       // 'all' Content: Fetch discover movie & discover tv in parallel
       const movPromise = extraFilters.genreId && !movieGenreId
         ? Promise.resolve(null)
-        : fetch(`${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryMovie}${minRatingQuery}${yearQueryMovie}${countryQuery}`).catch(() => null);
+        : fetchFn(`${TMDB_BASE_URL}/discover/movie?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryMovie}${minRatingQuery}${yearQueryMovie}${countryQuery}${languageQuery}`).catch(() => null);
       const tvPromise = extraFilters.genreId && !tvGenreId
         ? Promise.resolve(null)
-        : fetch(`${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryTv}${minRatingQuery}${yearQueryTv}${countryQuery}`).catch(() => null);
+        : fetchFn(`${TMDB_BASE_URL}/discover/tv?sort_by=${sortBy}&page=${safePage}&include_adult=false${genreQueryTv}${minRatingQuery}${yearQueryTv}${countryQuery}${languageQuery}`).catch(() => null);
 
       const [movRes, tvRes] = await Promise.all([movPromise, tvPromise]);
 
@@ -1122,7 +1129,7 @@ function normalizeTMDBDetail(raw: any, type: MediaType): MediaDetail {
                 ? `https://image.tmdb.org/t/p/w500${found.poster_path}`
                 : (raw.poster_path ? `https://image.tmdb.org/t/p/w500${raw.poster_path}` : null),
               airDate: found.air_date || '',
-              episodeCount: found.episode_count || 10,
+              episodeCount: typeof found.episode_count === 'number' ? found.episode_count : 0,
               episodes: Array.isArray(found.episodes) ? found.episodes : undefined
             });
           } else {
@@ -1133,7 +1140,7 @@ function normalizeTMDBDetail(raw: any, type: MediaType): MediaDetail {
               overview: `Season ${sNum} of ${raw.name || raw.title || 'the series'}.`,
               posterPath: raw.poster_path ? `https://image.tmdb.org/t/p/w500${raw.poster_path}` : null,
               airDate: '',
-              episodeCount: 10,
+              episodeCount: 0,
               episodes: undefined
             });
           }
@@ -1182,7 +1189,7 @@ function createDefaultTVDetail(item: MediaItem): TVDetail {
       overview: `Season ${sNum} of ${item.title}.`,
       posterPath: item.posterPath,
       airDate: item.releaseDate,
-      episodeCount: Math.round((item.numberOfEpisodes || 24) / totalSeasons) || 8,
+      episodeCount: item.numberOfEpisodes ? Math.max(1, Math.round(item.numberOfEpisodes / totalSeasons)) : 0,
       episodes: [
         {
           id: (item.id || 1000) * 1000 + sNum * 10 + 1,

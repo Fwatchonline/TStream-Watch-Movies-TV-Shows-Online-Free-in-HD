@@ -119,7 +119,7 @@ export const HomeSidebar: React.FC<HomeSidebarProps> = ({
             <Search className="w-4 h-4 text-[#8E8E93] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
-              placeholder="Search movies, TV shows..."
+              placeholder="Search movies, TV shows, anime..."
               value={searchMobileQuery}
               onChange={(e) => setSearchMobileQuery(e.target.value)}
               className="w-full h-9 pl-9 pr-3 rounded-xl bg-[#141418] border border-[#3A3A40] text-xs text-white placeholder:text-[#8E8E93] focus:outline-none focus:border-[#F5C400]"
@@ -332,6 +332,51 @@ export const HomeSidebar: React.FC<HomeSidebarProps> = ({
                   { label: 'Top Rated TV Shows', action: () => onNavigate('tv-shows', { sortBy: 'vote_average.desc', minRating: 7.5 }) },
                   { label: 'Currently Airing', action: () => onNavigate('tv-shows', { sortBy: 'primary_release_date.desc' }) },
                   { label: 'Latest TV Shows', action: () => onNavigate('tv-shows', { sortBy: 'primary_release_date.desc' }) }
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    onClick={() => {
+                      item.action();
+                      onClose();
+                    }}
+                    className="w-full text-left px-3 py-1.5 rounded-lg text-slate-300 hover:text-black hover:bg-[#F5C400] transition-colors cursor-pointer"
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Accordion 2b: Anime Hub */}
+          <div className="border border-[#3A3A40]/70 rounded-xl overflow-hidden bg-[#222228]">
+            <button
+              type="button"
+              onClick={() => toggleSection('anime')}
+              className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-bold text-white transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5">
+                <Sparkles className="w-4 h-4 text-[#F5C400]" />
+                <span>Anime Hub</span>
+              </div>
+              {openSection === 'anime' ? (
+                <ChevronDown className="w-4 h-4 text-[#F5C400]" />
+              ) : (
+                <ChevronRight className="w-4 h-4 text-[#8E8E93]" />
+              )}
+            </button>
+
+            {openSection === 'anime' && (
+              <div className="p-2 space-y-1 bg-[#1a1a20] border-t border-white/5 text-xs">
+                {[
+                  { label: 'Discover Anime', action: () => onNavigate('anime', { section: 'discover' }) },
+                  { label: 'Trending Anime', action: () => onNavigate('anime', { section: 'trending' }) },
+                  { label: 'Popular Anime', action: () => onNavigate('anime', { section: 'popular' }) },
+                  { label: 'Seasonal Anime', action: () => onNavigate('anime', { section: 'seasonal' }) },
+                  { label: 'Upcoming Anime', action: () => onNavigate('anime', { section: 'upcoming' }) },
+                  { label: 'Anime Movies', action: () => onNavigate('anime', { section: 'movies' }) },
+                  { label: 'Anime Genres', action: () => onNavigate('anime', { section: 'genres' }) }
                 ].map((item) => (
                   <button
                     key={item.label}

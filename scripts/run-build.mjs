@@ -151,6 +151,7 @@ export function verifyDistArtifacts(rootDir = process.cwd()) {
     'sitemap-main.xml',
     'sitemap-movies.xml',
     'sitemap-tv.xml',
+    'sitemap-anime.xml',
     'prerender-report.json'
   ]);
 

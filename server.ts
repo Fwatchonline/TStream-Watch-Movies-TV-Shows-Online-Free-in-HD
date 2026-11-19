@@ -195,13 +195,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 3. Hono API routes (/api/proxy*, /api/stream/*, /api/subtitle-proxy*, /api/tmdb*)
+  // 3. Hono API routes (/api/proxy*, /api/stream/*, /api/subtitle-proxy*, /api/tmdb*, /api/aniskip*, /api/anilist*, /api/anime*, /api/catalog/live*, /api/image-proxy*)
   if (
     pathname.startsWith('/api/proxy') ||
     pathname.startsWith('/api/stream/') ||
     pathname.startsWith('/api/subtitle-proxy') ||
     pathname === '/api/tmdb' ||
-    pathname.startsWith('/api/tmdb/')
+    pathname.startsWith('/api/tmdb/') ||
+    pathname.startsWith('/api/aniskip') ||
+    pathname.startsWith('/api/anilist') ||
+    pathname.startsWith('/api/anime') ||
+    pathname.startsWith('/api/catalog/live') ||
+    pathname.startsWith('/api/image-proxy')
   ) {
     // Strip/overwrite internal verified socket IP header so client spoofing cannot bypass rate limits
     req.headers['x-tstream-verified-ip'] = req.socket?.remoteAddress || '';

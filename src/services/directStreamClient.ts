@@ -35,9 +35,8 @@ export function formatQualityBadge(rawQuality?: string, streamType?: string): st
   if (lower.includes('720')) return '720p';
   if (lower.includes('480')) return '480p';
   if (lower.includes('360')) return '360p';
-  if (lower === 'auto' || lower === 'hls') return '1080p';
-  if (streamType === 'mp4') return '1080p';
-  return '1080p';
+  if (lower === 'auto' || lower === 'hls' || streamType === 'hls') return 'Auto';
+  return 'Unknown';
 }
 
 export function stripQualityFromName(name: string): string {
@@ -134,9 +133,31 @@ export function cleanServerDisplay(name: string): string {
   return s;
 }
 
+export async function reportStreamPlaybackOutcome(
+  provider: string,
+  succeeded: boolean,
+  reason?: string,
+  responseTimeMs?: number
+): Promise<void> {
+  if (!provider) return;
+  try {
+    await fetch('/api/stream/health/outcome', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, succeeded, reason, responseTimeMs })
+    });
+  } catch {
+    // non-fatal telemetry update
+  }
+}
+
 export async function fetchDirectStreams(params: {
   tmdbId: number;
-  mediaType: 'movie' | 'tv';
+  mediaType: 'movie' | 'tv' | 'anime';
+  anilistId?: number;
+  malId?: number;
+  title?: string;
+  audioType?: 'sub' | 'dub';
   season?: number;
   episode?: number;
   provider?: string;
@@ -149,11 +170,18 @@ export async function fetchDirectStreams(params: {
   if (params.provider && params.provider !== 'all') query.set('provider', params.provider);
   if (params.single && params.provider && params.provider !== 'all') query.set('single', '1');
   if (params.exclude && params.exclude.length > 0) query.set('exclude', params.exclude.join(','));
+  if (params.mediaType === 'anime') {
+    if (params.tmdbId > 0) query.set('tmdbId', params.tmdbId.toString());
+    if (params.malId) query.set('malId', params.malId.toString());
+    if (params.title) query.set('title', params.title);
+    if (params.audioType) query.set('audio', params.audioType);
+  }
   const queryStr = query.toString() ? `?${query.toString()}` : '';
+  const targetRouteId = params.mediaType === 'anime' ? (params.anilistId || params.tmdbId) : params.tmdbId;
 
   // 1. Primary Orchestrated Multi-Server Route (/api/stream/:type/:id)
   try {
-    const orchestratorRes = await fetch(`/api/stream/${params.mediaType}/${params.tmdbId}${queryStr}`, {
+    const orchestratorRes = await fetch(`/api/stream/${params.mediaType}/${targetRouteId}${queryStr}`, {
       headers: { 'Accept': 'application/json' },
       signal: AbortSignal.timeout(18000)
     }).catch(() => null);
@@ -168,7 +196,7 @@ export async function fetchDirectStreams(params: {
             ? s.sources
             : [{ name: s.label, url: s.url, quality: s.quality, type: s.type }]
           ).map((sourceItem: any) => ({
-            quality: sourceItem.quality || s.quality || (sourceItem.type === 'hls' ? '1080p Auto' : '1080p'),
+            quality: sourceItem.quality || s.quality || (sourceItem.type === 'hls' ? 'Auto' : 'Unknown'),
             type: (sourceItem.type || s.type || 'hls') as 'hls' | 'mp4',
             url: sourceItem.url,
             playUrl: sourceItem.url,
@@ -185,40 +213,42 @@ export async function fetchDirectStreams(params: {
     console.warn('Orchestrator route error, attempting fallback:', err);
   }
 
-  // 2. Secondary Direct Resolver Fallback
-  try {
-    const fallbackQuery = new URLSearchParams({
-      tmdbId: params.tmdbId.toString(),
-      type: params.mediaType
-    });
-    if (params.season != null) fallbackQuery.set('season', params.season.toString());
-    if (params.episode != null) fallbackQuery.set('episode', params.episode.toString());
-    if (params.provider) fallbackQuery.set('provider', params.provider);
+  // 2. Secondary Direct Resolver Fallback (for TMDB-indexed movies/tv)
+  if (params.tmdbId > 0 && (params.mediaType === 'movie' || params.mediaType === 'tv')) {
+    try {
+      const fallbackQuery = new URLSearchParams({
+        tmdbId: params.tmdbId.toString(),
+        type: params.mediaType
+      });
+      if (params.season != null) fallbackQuery.set('season', params.season.toString());
+      if (params.episode != null) fallbackQuery.set('episode', params.episode.toString());
+      if (params.provider) fallbackQuery.set('provider', params.provider);
 
-    const res = await fetch(`/api/stream-resolve?${fallbackQuery.toString()}`, {
-      headers: { 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(20000)
-    });
+      const res = await fetch(`/api/stream-resolve?${fallbackQuery.toString()}`, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(20000)
+      });
 
-    if (res.ok) {
-      const data: ResolveResponse = await res.json();
-      if (data.success && Array.isArray(data.results)) {
-        return data.results
-          .filter(r => !r.provider?.toLowerCase().includes('castle') && !r.providerName?.toLowerCase().includes('castle'))
-          .map(r => ({
-            ...r,
-            providerName: cleanServerDisplay(r.providerName),
-            streams: (r.streams || [])
-              .filter(st => !st.server?.toLowerCase().includes('castle') && !st.url?.toLowerCase().includes('castle'))
-              .map(st => ({
-                ...st,
-                server: cleanServerDisplay(st.server)
-              }))
-          }));
+      if (res.ok) {
+        const data: ResolveResponse = await res.json();
+        if (data.success && Array.isArray(data.results)) {
+          return data.results
+            .filter(r => !r.provider?.toLowerCase().includes('castle') && !r.providerName?.toLowerCase().includes('castle'))
+            .map(r => ({
+              ...r,
+              providerName: cleanServerDisplay(r.providerName),
+              streams: (r.streams || [])
+                .filter(st => !st.server?.toLowerCase().includes('castle') && !st.url?.toLowerCase().includes('castle'))
+                .map(st => ({
+                  ...st,
+                  server: cleanServerDisplay(st.server)
+                }))
+            }));
+        }
       }
+    } catch (err) {
+      console.warn('Failed to fetch direct streams via fallback API:', err);
     }
-  } catch (err) {
-    console.warn('Failed to fetch direct streams via fallback API:', err);
   }
 
   return [];

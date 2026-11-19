@@ -159,7 +159,7 @@ export async function enrichSourcesWithRealQuality(
         if (s.type === 'hls' || String(s.url).toLowerCase().includes('.m3u8') || String(s.url).toLowerCase().includes('playlist')) {
             indicesToProbe.push(i);
         } else if (!s.quality) {
-            s.quality = s.type === 'mp4' ? '1080p' : 'HD';
+            s.quality = s.type === 'mp4' ? 'Unknown' : 'Auto';
         }
     }
 
@@ -179,13 +179,13 @@ export async function enrichSourcesWithRealQuality(
             }
         }
 
-        // Normalize remaining unprobed sources cleanly
+        // Normalize remaining unprobed sources honestly without fabricating '1080p'
         for (const s of cloned) {
             const concrete = normalizeConcreteQuality(s.quality);
             if (concrete) {
                 s.quality = concrete;
             } else if (!s.quality || s.quality.toLowerCase().includes('auto')) {
-                s.quality = sharedDetected || '1080p';
+                s.quality = sharedDetected || (s.type === 'hls' ? 'Auto' : 'Unknown');
             }
         }
     }

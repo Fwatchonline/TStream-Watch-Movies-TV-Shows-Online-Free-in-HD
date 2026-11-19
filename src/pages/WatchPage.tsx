@@ -18,8 +18,9 @@ import {
   BellRing
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { MediaDetail, MediaItem, TVDetail, Episode } from '../types/media';
+import { MediaDetail, MediaItem, MediaType, TVDetail, AnimeDetail, Episode } from '../types/media';
 import { getMediaDetail, fetchSeasonEpisodes } from '../services/tmdb';
+import { getAnimeDetailById } from '../services/animeCatalog';
 import { isInWatchlist, toggleWatchlist } from '../services/storage';
 import { StreamingPlayer, PlayerMode, WebServer } from '../components/StreamingPlayer';
 import { QualityBadge } from '../components/QualityBadge';
@@ -45,7 +46,7 @@ import { updateMediaSEO, updateSEO } from '../utils/seo';
 
 interface WatchPageProps {
   mediaId: number;
-  mediaType: 'movie' | 'tv';
+  mediaType: MediaType;
   season?: number;
   episode?: number;
   onBackToDetails: (media?: MediaItem) => void;
@@ -133,18 +134,20 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       setLoading(true);
       setLiveDirectQualityBadge(null);
       window.scrollTo({ top: 0, behavior: 'instant' as any });
-      const data = await getMediaDetail(mediaId, mediaType);
+      const data = mediaType === 'anime'
+        ? await getAnimeDetailById(mediaId)
+        : await getMediaDetail(mediaId, mediaType);
       if (isMounted) {
         setDetail(data);
         if (data) {
-          const initSeasonObj =
-            data.mediaType === 'tv'
-              ? (data as TVDetail).seasons?.find(s => s.seasonNumber === currentSeason)
-              : undefined;
+          const isEpisodic = data.mediaType === 'tv' || (data.mediaType === 'anime' && data.mediaFormat !== 'MOVIE');
+          const initSeasonObj = isEpisodic
+            ? (data as TVDetail | AnimeDetail).seasons?.find(s => s.seasonNumber === currentSeason) || (data as TVDetail | AnimeDetail).seasons?.[0]
+            : undefined;
           const initSeasonEps = initSeasonObj?.episodes || [];
           const initEp = initSeasonEps.find(e => e.episodeNumber === currentEpisode);
           updateMediaSEO(data, {
-            seriesId: data.id,
+            seriesId: data.anilistId || data.id,
             episodeId: initEp?.id,
             season: currentSeason,
             episode: currentEpisode,
@@ -159,11 +162,16 @@ export const WatchPage: React.FC<WatchPageProps> = ({
             isVerifiedEpisode: Boolean(initEp && Number.isInteger(initEp.id) && initEp.id > 0),
             isWatching: true
           });
-          setInWatchlist(isInWatchlist(data.id));
-          const slug = createMediaSlug(data.title || (data as any).name, data.id);
+          setInWatchlist(isInWatchlist(data.anilistId || data.id));
+          const slug = createMediaSlug(data.title || (data as any).name, data.anilistId || data.id);
           if (data.mediaType === 'movie') {
             const expectedUrl = `/watch/movie/${slug}`;
             if (window.location.pathname !== expectedUrl) {
+              window.history.replaceState({}, '', expectedUrl);
+            }
+          } else if (data.mediaType === 'anime') {
+            const expectedUrl = data.mediaFormat === 'MOVIE' ? `/watch/anime/${slug}` : `/watch/anime/${slug}/${episode}`;
+            if (!window.location.pathname.includes(slug)) {
               window.history.replaceState({}, '', expectedUrl);
             }
           } else {
@@ -174,17 +182,19 @@ export const WatchPage: React.FC<WatchPageProps> = ({
           }
 
           // Initial player mode & server sync based on Admin's Movie/TV default settings
+          const embedTargetId = data.mediaType === 'anime' ? (data.tmdbId || 0) : data.id;
           const chosenDefault = pickEffectiveDefaultServer(
             data.mediaType,
             servers,
             directStreamEnabled,
             defaultServerPrefs
           );
-          if (chosenDefault.type === 'embed' || !directStreamEnabled) {
-            const template = data.mediaType === 'movie' ? chosenDefault.movieUrlTemplate : chosenDefault.tvUrlTemplate;
-            const url = template
+          if ((chosenDefault.type === 'embed' || !directStreamEnabled) && (data.mediaType !== 'anime' || embedTargetId > 0)) {
+            const isSingleFeature = data.mediaType === 'movie' || data.mediaFormat === 'MOVIE';
+            const template = isSingleFeature ? chosenDefault.movieUrlTemplate : chosenDefault.tvUrlTemplate;
+            const url = template && embedTargetId > 0
               ? resolveEmbedUrl(template, {
-                  id: data.id,
+                  id: embedTargetId,
                   season: currentSeason,
                   episode: currentEpisode
                 })
@@ -201,7 +211,7 @@ export const WatchPage: React.FC<WatchPageProps> = ({
         } else {
           updateSEO({
             title: '404 — Title Not Found',
-            description: 'The requested movie or episode could not be found on T Stream.',
+            description: 'The requested movie, anime, or episode could not be found on T Stream.',
             noindex: true,
             url: '/404'
           });
@@ -217,12 +227,12 @@ export const WatchPage: React.FC<WatchPageProps> = ({
 
   // Update SEO when TV season/episode changes or episodes load
   useEffect(() => {
-    if (detail && detail.mediaType === 'tv') {
-      const seasonObj = (detail as TVDetail).seasons?.find(s => s.seasonNumber === currentSeason);
+    if (detail && (detail.mediaType === 'tv' || (detail.mediaType === 'anime' && detail.mediaFormat !== 'MOVIE'))) {
+      const seasonObj = (detail as TVDetail | AnimeDetail).seasons?.find(s => s.seasonNumber === currentSeason);
       const seasonEps = episodesMap[currentSeason] || seasonObj?.episodes || [];
       const activeEp = seasonEps.find(e => e.episodeNumber === currentEpisode);
       updateMediaSEO(detail, {
-        seriesId: detail.id,
+        seriesId: detail.anilistId || detail.id,
         episodeId: activeEp?.id,
         season: currentSeason,
         episode: currentEpisode,
@@ -240,11 +250,11 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     }
   }, [currentSeason, currentEpisode, detail, episodesMap]);
 
-  // Load TV episodes for the season if series
+  // Load TV or Anime episodes for the season if series
   useEffect(() => {
-    if (!detail || detail.mediaType === 'movie') return;
+    if (!detail || detail.mediaType === 'movie' || detail.mediaFormat === 'MOVIE') return;
     let isMounted = true;
-    const tv = detail as TVDetail;
+    const tv = detail as TVDetail | AnimeDetail;
     const currentSeasonObj = tv.seasons?.find(s => s.seasonNumber === currentSeason);
 
     if (currentSeasonObj?.episodes && currentSeasonObj.episodes.length > 0) {
@@ -252,6 +262,7 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       return;
     }
 
+    if (detail.mediaType === 'anime') return;
     if (episodesMap[currentSeason]) return;
 
     setLoadingEpisodes(true);
@@ -373,8 +384,12 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     setCurrentSeason(s);
     setCurrentEpisode(e);
     if (detail) {
-      const slug = createMediaSlug(detail.title || (detail as any).name, detail.id);
-      window.history.replaceState({}, '', `/watch/tv/${slug}/${s}/${e}`);
+      const slug = createMediaSlug(detail.title || (detail as any).name, detail.anilistId || detail.id);
+      if (detail.mediaType === 'anime') {
+        window.history.replaceState({}, '', `/watch/anime/${slug}/${e}`);
+      } else {
+        window.history.replaceState({}, '', `/watch/tv/${slug}/${s}/${e}`);
+      }
     }
   };
 
@@ -470,18 +485,27 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     );
   }
 
-  const isMovie = detail.mediaType === 'movie';
-  const tvDetail = !isMovie ? (detail as TVDetail) : null;
-  const currentSeasonData = tvDetail?.seasons?.find(s => s.seasonNumber === currentSeason) || tvDetail?.seasons?.[0];
+  const isMovie = detail.mediaType === 'movie' || detail.mediaFormat === 'MOVIE';
+  const isAnime = detail.mediaType === 'anime';
+  const seriesDetail = !isMovie ? (detail as TVDetail | AnimeDetail) : null;
+  const currentSeasonData = seriesDetail?.seasons?.find(s => s.seasonNumber === currentSeason) || seriesDetail?.seasons?.[0];
+  const currentSeasonEpisodes = episodesMap[currentSeason] || currentSeasonData?.episodes || [];
+  const activeEpisodeObj = currentSeasonEpisodes.find(e => e.episodeNumber === currentEpisode);
+  const verifiedEpisodeCount =
+    currentSeasonEpisodes.length > 0
+      ? currentSeasonEpisodes.length
+      : currentSeasonData?.episodeCount && currentSeasonData.episodeCount > 0
+      ? currentSeasonData.episodeCount
+      : detail.numberOfEpisodes || 0;
 
-  const releaseYear = detail.releaseDate ? new Date(detail.releaseDate).getFullYear() : '2026';
+  const releaseYear = detail.releaseDate ? String(new Date(detail.releaseDate).getFullYear() || detail.releaseDate.slice(0, 4)) : '';
   const runtimeFormatted = detail.runtime
     ? `${Math.floor(detail.runtime / 60)}h ${detail.runtime % 60}m`
-    : '2h 15m';
+    : 'Feature Film';
 
   const genresDisplay = detail.genres && detail.genres.length > 0
     ? detail.genres.slice(0, 3).map(g => g.name).join(' · ')
-    : 'Action · Adventure · Sci-Fi';
+    : (isAnime ? 'Anime' : 'Cinema');
 
   // Recommendations: prioritize high-rating items with backdrops (3 landscape cards)
   const recommendations = (detail.recommendations && detail.recommendations.length > 0)
@@ -523,14 +547,14 @@ export const WatchPage: React.FC<WatchPageProps> = ({
             onClick={() => onBackToDetails(detail)}
             className="hover:text-white transition-colors cursor-pointer"
           >
-            {isMovie ? 'Movie Details' : 'Series Details'}
+            {isAnime ? 'Anime Details' : isMovie ? 'Movie Details' : 'Series Details'}
           </button>
           <span className="text-[#55555c]">/</span>
           <button
             onClick={() => onBackToDetails(detail)}
             className="hover:text-white transition-colors cursor-pointer"
           >
-            {isMovie ? 'Movies' : 'TV Shows'}
+            {isAnime ? 'Anime' : isMovie ? 'Movies' : 'TV Shows'}
           </button>
           <span className="text-[#55555c]">/</span>
           <span className="text-slate-300 font-semibold truncate max-w-xs sm:max-w-md">
@@ -538,14 +562,14 @@ export const WatchPage: React.FC<WatchPageProps> = ({
           </span>
         </div>
 
-        {/* 2. Movie Information Header (Directly above the player) */}
+        {/* 2. Media Information Header (Directly above the player) */}
         <div className="flex items-start gap-4 mb-5">
-          {/* Movie Poster Thumbnail */}
           <div className="w-14 sm:w-16 h-20 sm:h-24 rounded-xl overflow-hidden bg-[#16161a] border border-[#3A3A40] shadow-lg shrink-0">
             {detail.posterPath ? (
               <img
                 src={detail.posterPath}
                 alt={detail.title}
+                referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
                 loading="eager"
               />
@@ -556,38 +580,64 @@ export const WatchPage: React.FC<WatchPageProps> = ({
             )}
           </div>
 
-          {/* Title & Metadata Line & Badges */}
           <div className="flex-1 min-w-0">
             <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight leading-tight truncate">
               {detail.title}
               {!isMovie && (
-                <span className="text-[#F5C400] font-bold text-lg sm:text-xl ml-2">
-                  (Season {currentSeason}, Ep. {currentEpisode})
+                <span className="text-[#F5C400] font-bold text-lg sm:text-xl ml-2 tabular-nums">
+                  {isAnime ? `(Episode ${currentEpisode})` : `(Season ${currentSeason} — Episode ${currentEpisode})`}
                 </span>
               )}
             </h1>
 
+            {!isMovie && (
+              <div className="mt-1 space-y-0.5">
+                <p className="text-xs sm:text-sm font-bold text-white">
+                  {activeEpisodeObj?.name && !/^Episode\s+\d+$/i.test(activeEpisodeObj.name)
+                    ? `Episode Name: ${activeEpisodeObj.name}`
+                    : `Episode ${currentEpisode}`}
+                </p>
+                {(activeEpisodeObj?.overview || activeEpisodeObj?.airDate || (activeEpisodeObj?.voteAverage && activeEpisodeObj.voteAverage > 0)) && (
+                  <p className="text-xs text-[#A6A6AC] line-clamp-2">
+                    {[
+                      activeEpisodeObj?.airDate ? `Aired ${activeEpisodeObj.airDate}` : null,
+                      activeEpisodeObj?.voteAverage && activeEpisodeObj.voteAverage > 0 ? `★ ${activeEpisodeObj.voteAverage.toFixed(1)}` : null,
+                      activeEpisodeObj?.overview || null
+                    ].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Metadata Line: Year · Runtime · Genres */}
-            <div className="flex items-center gap-2 text-xs text-[#A6A6AC] mt-1.5 flex-wrap font-medium">
-              <span>{releaseYear}</span>
-              <span className="text-[#55555c]">·</span>
-              <span>{isMovie ? runtimeFormatted : `${currentSeasonData?.episodeCount || 8} Episodes`}</span>
+            <div className="flex items-center gap-2 text-xs text-[#A6A6AC] mt-1.5 flex-wrap font-medium tabular-nums">
+              {releaseYear && (
+                <>
+                  <span>{releaseYear}</span>
+                  <span className="text-[#55555c]">·</span>
+                </>
+              )}
+              <span>
+                {isMovie
+                  ? runtimeFormatted
+                  : verifiedEpisodeCount > 0
+                  ? `${verifiedEpisodeCount} Episodes`
+                  : 'Ongoing Series'}
+              </span>
               <span className="text-[#55555c]">·</span>
               <span className="text-slate-300">{genresDisplay}</span>
             </div>
 
-            {/* Badges: Star Rating, HD, CC */}
             <div className="flex items-center gap-2 mt-2.5">
-              {/* Star Rating Badge */}
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#1f1f25] border border-[#3A3A40] text-xs font-bold text-[#F5C400]">
-                <Star className="w-3.5 h-3.5 fill-[#F5C400] text-[#F5C400]" />
-                <span className="text-white font-extrabold">{detail.voteAverage.toFixed(1)}</span>
-              </div>
+              {detail.voteAverage > 0 && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#1f1f25] border border-[#3A3A40] text-xs font-bold text-[#F5C400]">
+                  <Star className="w-3.5 h-3.5 fill-[#F5C400] text-[#F5C400]" />
+                  <span className="text-white font-extrabold tabular-nums">{detail.voteAverage.toFixed(1)}</span>
+                </div>
+              )}
 
-              {/* Real Quality Badge */}
               <QualityBadge item={detail} variant="full" />
 
-              {/* Closed Captions Badge */}
               <div className="px-2 py-0.5 rounded-md bg-[#1f1f25] border border-[#3A3A40] text-[11px] font-extrabold text-white uppercase tracking-wider">
                 CC
               </div>
@@ -695,62 +745,81 @@ export const WatchPage: React.FC<WatchPageProps> = ({
           </button>
         </div>
 
-        {/* TV Series Episode & Season Navigation (if TV Series) */}
-        {!isMovie && tvDetail && tvDetail.seasons && (
+        {/* TV / Anime Episode & Season Navigation */}
+        {!isMovie && seriesDetail && (currentSeasonEpisodes.length > 0 || verifiedEpisodeCount > 0) && (
           <div className="mt-4 p-4 rounded-xl bg-[#16161a] border border-[#303036]">
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <Tv className="w-4 h-4 text-[#F5C400]" />
                 <span className="text-xs font-extrabold uppercase text-white tracking-wider">
-                  Select Season &amp; Episode:
+                  {isAnime ? 'Select Episode:' : 'Select Season & Episode:'}
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-                {tvDetail.seasons.filter(s => s.seasonNumber > 0).map(s => (
-                  <button
-                    key={s.id}
-                    onClick={() => {
-                      setCurrentSeason(s.seasonNumber);
-                      setCurrentEpisode(1);
-                    }}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                      s.seasonNumber === currentSeason
-                        ? 'bg-[#F5C400] text-black font-black'
-                        : 'bg-[#232328] text-slate-300 hover:text-white border border-white/5'
-                    }`}
-                  >
-                    S{s.seasonNumber}
-                  </button>
-                ))}
-              </div>
+              {!isAnime && seriesDetail.seasons && (
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                  {seriesDetail.seasons.filter(s => s.seasonNumber > 0).map(s => (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        setCurrentSeason(s.seasonNumber);
+                        setCurrentEpisode(1);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        s.seasonNumber === currentSeason
+                          ? 'bg-[#F5C400] text-black font-black'
+                          : 'bg-[#232328] text-slate-300 hover:text-white border border-white/5'
+                      }`}
+                    >
+                      S{s.seasonNumber}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Episode Pills */}
-            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-12 gap-1.5 max-h-44 overflow-y-auto no-scrollbar pt-1">
-              {Array.from({ length: currentSeasonData?.episodeCount || 8 }, (_, i) => i + 1).map(epNum => (
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-1.5 max-h-52 overflow-y-auto no-scrollbar pt-1">
+              {(currentSeasonEpisodes.length > 0
+                ? currentSeasonEpisodes
+                : Array.from({ length: verifiedEpisodeCount }, (_, i) => ({
+                    id: i + 1,
+                    episodeNumber: i + 1,
+                    seasonNumber: currentSeason,
+                    name: `Episode ${i + 1}`,
+                    overview: '',
+                    stillPath: null,
+                    airDate: '',
+                    voteAverage: 0
+                  }))
+              ).map(epItem => (
                 <button
-                  key={epNum}
-                  onClick={() => setCurrentEpisode(epNum)}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-bold text-center transition-all cursor-pointer ${
-                    epNum === currentEpisode
+                  key={epItem.episodeNumber}
+                  onClick={() => handleEpisodeChange(currentSeason, epItem.episodeNumber)}
+                  title={epItem.name}
+                  className={`py-1.5 px-2.5 rounded-lg text-xs font-bold text-left truncate transition-all cursor-pointer tabular-nums ${
+                    epItem.episodeNumber === currentEpisode
                       ? 'bg-[#F5C400] text-black font-black ring-1 ring-[#F5C400]'
                       : 'bg-[#232328] hover:bg-[#2e2e36] text-slate-300'
                   }`}
                 >
-                  Ep. {epNum}
+                  E{epItem.episodeNumber}
+                  {epItem.name && !/^Episode\s+\d+$/i.test(epItem.name) ? ` · ${epItem.name}` : ''}
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {/* 5. Movie Details & Recommendations (Clean 2-Column Layout matching mockup) */}
+        {/* 5. Media Details & Recommendations */}
         <div className="mt-8 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Left Column: Synopsis & Action Buttons (lg:col-span-6) */}
           <div className="lg:col-span-6 flex flex-col justify-between">
-            <p className="text-sm sm:text-base text-slate-300 leading-relaxed font-normal">
-              {detail.overview || 'Peter Parker faces a new and dangerous threat in New York, forcing him to confront his past while protecting the people he loves most.'}
-            </p>
+            {detail.overview ? (
+              <p className="text-sm sm:text-base text-slate-300 leading-relaxed font-normal">
+                {detail.overview}
+              </p>
+            ) : (
+              <p className="text-sm text-[#8E8E93]">No synopsis available for this title.</p>
+            )}
 
             {/* Action buttons: + My List, Share */}
             <div className="flex items-center gap-3 mt-6">

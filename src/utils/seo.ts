@@ -77,6 +77,13 @@ const PAGINATED_INDEXABLE_PREFIXES = [
   '/tv-shows',
   '/trending',
   '/top-rated',
+  '/anime',
+  '/anime/trending',
+  '/anime/popular',
+  '/anime/seasonal',
+  '/anime/upcoming',
+  '/anime/movies',
+  '/anime/genres/',
   '/tags/',
   '/genre/',
   '/platform/'
@@ -117,7 +124,9 @@ export function generateMediaKeywords(
   options: { season?: number; episode?: number; episodeName?: string; isWatching?: boolean } = {}
 ): string {
   if (!media) return DEFAULT_KEYWORDS;
-  const isMovie = media.mediaType === 'movie';
+  const isAnime = media.mediaType === 'anime';
+  const formatUpper = String(media.mediaFormat || media.format || '').toUpperCase();
+  const isMovie = media.mediaType === 'movie' || (isAnime && formatUpper === 'MOVIE');
   const rawTitle = (media.title || media.name || '').trim();
   if (!rawTitle) return DEFAULT_KEYWORDS;
 
@@ -125,7 +134,7 @@ export function generateMediaKeywords(
     ? new Date(media.releaseDate).getFullYear()
     : media.firstAirDate
     ? new Date(media.firstAirDate).getFullYear()
-    : '';
+    : media.seasonYear || '';
 
   const rawGenres: string[] = (media.genres || [])
     .map((g: any) => (typeof g === 'string' ? g : g?.name || ''))
@@ -139,7 +148,10 @@ export function generateMediaKeywords(
     keywords.push(`${rawTitle} (${year})`);
   }
 
-  if (isMovie) {
+  if (isAnime) {
+    keywords.push(isMovie ? `${rawTitle} anime movie` : `${rawTitle} anime`);
+    keywords.push(`${rawTitle} sub and dub`);
+  } else if (isMovie) {
     keywords.push(`${rawTitle} movie`);
   } else {
     keywords.push(`${rawTitle} TV series`);
@@ -148,14 +160,16 @@ export function generateMediaKeywords(
   if (year && !isNaN(Number(year))) {
     keywords.push(`${rawTitle} (${year}) watch online`);
   }
-  keywords.push(`watch ${rawTitle} online`);
+  keywords.push(isAnime ? `watch ${rawTitle} anime online` : `watch ${rawTitle} online`);
 
   for (const g of rawGenres) {
     keywords.push(g);
   }
 
   for (const g of rawGenres) {
-    if (isMovie) {
+    if (isAnime) {
+      keywords.push(`${g} anime`);
+    } else if (isMovie) {
       keywords.push(`${g} movie`);
     } else {
       keywords.push(`${g} TV series`);
@@ -164,12 +178,19 @@ export function generateMediaKeywords(
 
   keywords.push('T Stream');
 
-  if (!isMovie && options.season) {
-    keywords.push(`${rawTitle} season ${options.season}`);
-    if (options.episode) {
-      keywords.push(`${rawTitle} season ${options.season} episode ${options.episode}`);
+  if (!isMovie) {
+    if (isAnime && options.episode) {
+      keywords.push(`${rawTitle} episode ${options.episode}`);
       if (options.episodeName && !/^episode\s+\d+$/i.test(options.episodeName.trim())) {
         keywords.push(`${rawTitle} ${options.episodeName.trim()}`);
+      }
+    } else if (options.season) {
+      keywords.push(`${rawTitle} season ${options.season}`);
+      if (options.episode) {
+        keywords.push(`${rawTitle} season ${options.season} episode ${options.episode}`);
+        if (options.episodeName && !/^episode\s+\d+$/i.test(options.episodeName.trim())) {
+          keywords.push(`${rawTitle} ${options.episodeName.trim()}`);
+        }
       }
     }
   }
@@ -291,6 +312,22 @@ export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy 
       }
     }
 
+    // Canonicalize anime genre slug paths (/anime/genres/:slug -> lowercase kebab)
+    let isAnimeGenreAlias = false;
+    if (rawPath.startsWith('/anime/genres/')) {
+      const rest = rawPath.slice('/anime/genres/'.length);
+      if (rest && !rest.includes('/')) {
+        const cleanSlug = tagToSlug(rest);
+        if (cleanSlug) {
+          const targetPath = `/anime/genres/${cleanSlug}`;
+          if (rawPath !== targetPath) {
+            isAnimeGenreAlias = true;
+          }
+          rawPath = targetPath;
+        }
+      }
+    }
+
     // Watch movie canonical points to /movie/:slug
     if (rawPath.startsWith('/watch/movie/')) {
       const rest = rawPath.slice('/watch/movie/'.length);
@@ -318,7 +355,7 @@ export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy 
       };
     }
 
-    if (isPlatformAlias || isLegacyTagAlias || isGenreAlias) {
+    if (isPlatformAlias || isLegacyTagAlias || isGenreAlias || isAnimeGenreAlias) {
       return {
         canonicalUrl: `${PRIMARY_ORIGIN}${rawPath}`,
         noindex: true,
@@ -326,6 +363,8 @@ export function resolveRouteSeoPolicy(pathOrUrl?: string): QueryCanonicalPolicy 
           ? 'platform_alias'
           : isLegacyTagAlias
           ? 'tag_alias'
+          : isAnimeGenreAlias
+          ? 'anime_genre_alias'
           : 'genre_alias',
         page: 1
       };
@@ -538,6 +577,21 @@ export function validateVerifiedEpisodeRecord(params: {
   });
 }
 
+export function buildBreadcrumbSchema(
+  items: Array<{ name: string; url: string }>
+): Record<string, any> {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    'itemListElement': items.map((item, idx) => ({
+      '@type': 'ListItem',
+      'position': idx + 1,
+      'name': item.name,
+      'item': item.url.startsWith('http') ? item.url : `${PRIMARY_ORIGIN}${item.url}`
+    }))
+  };
+}
+
 /**
  * Pure generator for Media SEO metadata shared between client & server.
  * Guarantees 100% identical titles, descriptions, keywords, canonical URLs, and structured data.
@@ -555,21 +609,37 @@ export function buildMediaMetadata(
     isWatching?: boolean;
   } = {}
 ): MediaMetadataResult {
-  const isMovie = media?.mediaType === 'movie';
+  const isAnime = media?.mediaType === 'anime';
+  const formatUpper = String(media?.mediaFormat || media?.format || '').toUpperCase();
+  const isAnimeMovie = isAnime && formatUpper === 'MOVIE';
+  const isMovie = media?.mediaType === 'movie' || isAnimeMovie;
+
   const rawTitle = (media?.title || media?.name || 'Untitled').trim();
   const year = media?.releaseDate
     ? new Date(media.releaseDate).getFullYear()
     : media?.firstAirDate
     ? new Date(media.firstAirDate).getFullYear()
-    : '';
+    : media?.seasonYear || '';
   const yearStr = year && !isNaN(Number(year)) ? ` (${year})` : '';
 
-  const isDistinctEpisode = !isMovie && Boolean(options.isWatching && options.season && options.episode);
+  const isDistinctEpisode =
+    !isMovie &&
+    Boolean(
+      options.isWatching &&
+        (isAnime ? options.episode && options.episode >= 1 : options.season && options.episode)
+    );
 
   let title = '';
   if (options.isWatching) {
-    if (isMovie) {
+    if (isAnimeMovie) {
+      title = `Watch ${rawTitle}${yearStr} Full Anime Movie Free Online in HD — T Stream`;
+    } else if (isMovie) {
       title = `Watch ${rawTitle}${yearStr} Full Movie Free Online in HD — T Stream`;
+    } else if (isAnime) {
+      const epSuffix = isGenuineEpisodeName(options.episodeName)
+        ? ` "${options.episodeName!.trim()}"`
+        : '';
+      title = `Watch ${rawTitle} Episode ${options.episode || 1}${epSuffix} Free HD Anime — T Stream`;
     } else {
       const epSuffix = isGenuineEpisodeName(options.episodeName)
         ? ` "${options.episodeName!.trim()}"`
@@ -577,7 +647,11 @@ export function buildMediaMetadata(
       title = `Watch ${rawTitle} Season ${options.season || 1} Episode ${options.episode || 1}${epSuffix} Free HD — T Stream`;
     }
   } else {
-    if (isMovie) {
+    if (isAnimeMovie) {
+      title = `${rawTitle}${yearStr} — Watch Free HD Anime Movie — T Stream`;
+    } else if (isAnime) {
+      title = `${rawTitle}${yearStr} — Watch Anime Sub & Dub Free HD — T Stream`;
+    } else if (isMovie) {
       title = `${rawTitle}${yearStr} — Watch Free HD Movie — T Stream`;
     } else {
       title = `${rawTitle}${yearStr} — Watch Free HD TV Show — T Stream`;
@@ -585,7 +659,7 @@ export function buildMediaMetadata(
   }
 
   const trimmedEpOverview = (options.episodeOverview || '').trim();
-  const trimmedShowOverview = (media?.overview || '').trim();
+  const trimmedShowOverview = (media?.overview || media?.description || '').trim();
   const hasUniqueEpisodeOverview = Boolean(
     trimmedEpOverview &&
       (!trimmedShowOverview || trimmedEpOverview.toLowerCase() !== trimmedShowOverview.toLowerCase())
@@ -595,11 +669,15 @@ export function buildMediaMetadata(
   if (isDistinctEpisode) {
     if (hasUniqueEpisodeOverview) {
       description = truncateAtWord(trimmedEpOverview, 160);
+    } else if (isAnime) {
+      description = `Watch ${rawTitle} Episode ${options.episode} online in HD with Japanese audio, dubs, and multi-language subtitles on T Stream.`;
     } else {
       description = `Watch ${rawTitle} Season ${options.season} Episode ${options.episode} online in HD with subtitles on T Stream.`;
     }
   } else if (trimmedShowOverview) {
     description = truncateAtWord(trimmedShowOverview, 160);
+  } else if (isAnime) {
+    description = `Stream ${rawTitle}${yearStr} anime online in Full HD on T Stream with Japanese original audio, English dub, and fast multi-server playback.`;
   } else {
     description = `Stream ${rawTitle}${yearStr} in Full HD 1080p and 4K on T Stream with multi-language subtitles and fast streaming servers.`;
   }
@@ -610,36 +688,56 @@ export function buildMediaMetadata(
   // - Movie detail & Movie watch: https://tstream.online/movie/{slug}
   // - TV series detail: https://tstream.online/tv/{slug}
   // - TV episode playback: https://tstream.online/watch/tv/{slug}/{season}/{episode}
-  const slug = createMediaSlug(rawTitle, media?.id || media?.tmdbId || 0);
-  const canonicalUrl = isMovie
+  // - Anime series detail: https://tstream.online/anime/{slug}
+  // - Anime movie detail & watch: https://tstream.online/anime-movie/{slug}
+  // - Anime episode playback: https://tstream.online/watch/anime/{slug}/{episode}
+  const canonicalId = isAnime
+    ? media?.anilistId || media?.id || 0
+    : media?.id || media?.tmdbId || 0;
+  const slug = createMediaSlug(rawTitle, canonicalId);
+  const canonicalUrl = isAnime
+    ? isAnimeMovie
+      ? `${PRIMARY_ORIGIN}/anime-movie/${slug}`
+      : isDistinctEpisode
+      ? `${PRIMARY_ORIGIN}/watch/anime/${slug}/${options.episode}`
+      : `${PRIMARY_ORIGIN}/anime/${slug}`
+    : isMovie
     ? `${PRIMARY_ORIGIN}/movie/${slug}`
     : isDistinctEpisode
     ? `${PRIMARY_ORIGIN}/watch/tv/${slug}/${options.season}/${options.episode}`
     : `${PRIMARY_ORIGIN}/tv/${slug}`;
 
-  const rawImage = media?.backdropPath || media?.posterPath || DEFAULT_IMAGE;
+  const rawImage =
+    media?.backdropPath ||
+    media?.bannerImage ||
+    media?.posterPath ||
+    media?.coverImage ||
+    DEFAULT_IMAGE;
   const image = rawImage.startsWith('http') ? rawImage : `${PRIMARY_ORIGIN}${rawImage}`;
   const isDefaultOgImage = image === DEFAULT_IMAGE || image.endsWith('/og-image.png');
   const mimeType = getImageMimeType(image);
 
   // Schema.org JSON-LD (Strictly authentic data - NEVER inherit series ratings onto TVEpisode!)
-  const effectiveVoteAverage = isDistinctEpisode ? Number(options.episodeVoteAverage || 0) : Number(media?.voteAverage || 0);
-  const effectiveVoteCount = isDistinctEpisode ? Number(options.episodeVoteCount || 0) : Number(media?.voteCount || 0);
-  const hasGenuineRating = Boolean(
-    effectiveVoteAverage > 0 && effectiveVoteCount > 0
-  );
+  const effectiveVoteAverage = isDistinctEpisode
+    ? Number(options.episodeVoteAverage || 0)
+    : Number(media?.voteAverage || 0);
+  const effectiveVoteCount = isDistinctEpisode
+    ? Number(options.episodeVoteCount || 0)
+    : Number(media?.voteCount || (isAnime && media?.averageScore && media?.popularity ? Math.max(10, Math.round(media.popularity / 25)) : 0));
+  const hasGenuineRating = Boolean(effectiveVoteAverage > 0 && effectiveVoteCount > 0);
 
   const schemaType = isMovie ? 'Movie' : isDistinctEpisode ? 'TVEpisode' : 'TVSeries';
   const datePublished = isDistinctEpisode
     ? options.episodeAirDate || undefined
-    : year && !isNaN(Number(year))
-    ? String(year)
-    : undefined;
+    : media?.startDate || (year && !isNaN(Number(year)) ? String(year) : undefined);
 
   const schema: Record<string, any> = {
     '@context': 'https://schema.org',
     '@type': schemaType,
-    'name': isDistinctEpisode && isGenuineEpisodeName(options.episodeName) ? `${rawTitle} - ${options.episodeName!.trim()}` : rawTitle,
+    'name':
+      isDistinctEpisode && isGenuineEpisodeName(options.episodeName)
+        ? `${rawTitle} - ${options.episodeName!.trim()}`
+        : rawTitle,
     'description': description,
     'url': canonicalUrl,
     'image': image,
@@ -668,12 +766,12 @@ export function buildMediaMetadata(
     schema['episodeNumber'] = options.episode;
     schema['partOfSeason'] = {
       '@type': 'TVSeason',
-      'seasonNumber': options.season
+      'seasonNumber': isAnime ? 1 : options.season
     };
     schema['partOfSeries'] = {
       '@type': 'TVSeries',
       'name': rawTitle,
-      'url': `${PRIMARY_ORIGIN}/tv/${slug}`
+      'url': isAnime ? `${PRIMARY_ORIGIN}/anime/${slug}` : `${PRIMARY_ORIGIN}/tv/${slug}`
     };
   }
 
@@ -863,21 +961,29 @@ export function updateMediaSEO(
 ) {
   if (!media) return;
   const metadata = buildMediaMetadata(media, options);
-  const isDistinctEpisode = media?.mediaType !== 'movie' && Boolean(options.isWatching && options.season && options.episode);
+  const isAnime = media?.mediaType === 'anime';
+  const formatUpper = String(media?.mediaFormat || media?.format || '').toUpperCase();
+  const isMovieLike = media?.mediaType === 'movie' || (isAnime && formatUpper === 'MOVIE');
+  const isDistinctEpisode =
+    !isMovieLike &&
+    Boolean(
+      options.isWatching &&
+        (isAnime ? options.episode && options.episode >= 1 : options.season && options.episode)
+    );
   const effectiveNoindex =
     options.noindex !== undefined
       ? options.noindex
       : isDistinctEpisode && (options.episodeOverview !== undefined || options.isVerifiedEpisode !== undefined)
       ? !isEpisodeSeoIndexable({
-          seriesId: options.seriesId ?? media.id,
+          seriesId: options.seriesId ?? (isAnime ? media.anilistId || media.id : media.id),
           episodeId: options.episodeId,
-          seasonNumber: options.season,
+          seasonNumber: options.season ?? (isAnime ? 1 : undefined),
           episodeNumber: options.episode,
           seasonEpisodeCount: options.seasonEpisodeCount,
           numberOfSeasons: options.numberOfSeasons ?? media.numberOfSeasons,
           episodeName: options.episodeName,
           episodeOverview: options.episodeOverview,
-          seriesOverview: media.overview,
+          seriesOverview: media.overview || media.description,
           seasonOverview: options.seasonOverview,
           isVerifiedEpisode: options.isVerifiedEpisode
         })

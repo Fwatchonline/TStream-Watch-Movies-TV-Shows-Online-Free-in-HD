@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { X, Flag, AlertTriangle, Check, Loader2 } from 'lucide-react';
 import { submitPlaybackReport } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
+import { MediaType } from '../types/media';
 
 interface ReportIssueModalProps {
   isOpen: boolean;
   onClose: () => void;
   mediaId: number;
-  mediaType: 'movie' | 'tv';
+  mediaType: MediaType;
   mediaTitle: string;
   currentServer?: string;
 }

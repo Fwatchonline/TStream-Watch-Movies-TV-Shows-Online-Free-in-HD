@@ -12,7 +12,8 @@ import {
   Bookmark,
   TrendingUp,
   Video,
-  Sparkles
+  Sparkles,
+  Flame
 } from 'lucide-react';
 import { MediaItem } from '../types/media';
 import { useAuth } from '../context/AuthContext';
@@ -339,7 +340,72 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             )}
           </NavDropdown>
 
-          {/* 4. Random Direct Picker */}
+          {/* 4. Anime Hub Dropdown */}
+          <NavDropdown
+            label="Anime"
+            icon={Sparkles}
+            isActive={currentView === 'anime' || currentView === 'anime-details'}
+            widthClass="w-68"
+            onLabelClick={() => onNavigate('anime', { section: 'discover' })}
+          >
+            {(close) => (
+              <div className="space-y-1 text-xs">
+                <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[#8E8E93] border-b border-white/5 flex items-center justify-between">
+                  <span>Anime Hub</span>
+                  <span className="text-[#F5C400]">AniList Catalog</span>
+                </div>
+
+                {[
+                  { label: 'Discover Anime', icon: Sparkles, section: 'discover' },
+                  { label: 'Trending Anime', icon: TrendingUp, section: 'trending' },
+                  { label: 'Popular Anime', icon: Flame, section: 'popular' },
+                  { label: 'Seasonal Anime', icon: Calendar, section: 'seasonal' },
+                  { label: 'Upcoming Anime', icon: Clock, section: 'upcoming' },
+                  { label: 'Anime Movies', icon: Film, section: 'movies' },
+                  { label: 'Anime Genres', icon: PlaySquare, section: 'genres' }
+                ].map((entry) => {
+                  const Icon = entry.icon;
+                  return (
+                    <button
+                      key={entry.section}
+                      type="button"
+                      onClick={() => {
+                        close();
+                        onNavigate('anime', { section: entry.section });
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-200 hover:text-black hover:bg-[#F5C400] transition-colors cursor-pointer text-left font-medium group"
+                    >
+                      <Icon className="w-4 h-4 text-[#F5C400] group-hover:text-black shrink-0" />
+                      <span>{entry.label}</span>
+                    </button>
+                  );
+                })}
+
+                <div className="pt-1 border-t border-white/5">
+                  <span className="block px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-[#8E8E93]">
+                    Top Anime Genres
+                  </span>
+                  <div className="grid grid-cols-3 gap-1 px-2 pb-1 text-[10px]">
+                    {['Action', 'Fantasy', 'Sci-Fi', 'Romance', 'Horror', 'Comedy'].map((g) => (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => {
+                          close();
+                          onNavigate('anime', { section: 'genres', genre: g });
+                        }}
+                        className="py-1 px-1 rounded-md text-center bg-[#282830] hover:bg-[#F5C400] hover:text-black text-slate-300 font-medium truncate transition-colors cursor-pointer"
+                      >
+                        {g}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </NavDropdown>
+
+          {/* 5. Random Direct Picker */}
           <button
             type="button"
             onClick={onSurpriseMe}
@@ -351,7 +417,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             title="Pick a random surprise title"
           >
             <Shuffle className="w-3.5 h-3.5 text-[#F5C400]" />
-            <span>Random</span>
+            <span className="hidden lg:inline">Random</span>
           </button>
         </nav>
 

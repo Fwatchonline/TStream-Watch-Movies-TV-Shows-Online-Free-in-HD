@@ -26,7 +26,15 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   // If user is currently watching video in theater or full immersion mode, don't obstruct controls
   const isWatching = currentView === 'watch';
 
-  const navItems = [
+  const navItems: Array<{
+    id: string;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: string;
+    badgeCount?: number;
+    action: () => void;
+    isActive: boolean;
+  }> = [
     {
       id: 'home',
       label: 'Home',
@@ -49,12 +57,11 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       isActive: currentView === 'tv-shows'
     },
     {
-      id: 'new-episodes',
-      label: 'New',
+      id: 'anime',
+      label: 'Anime',
       icon: Sparkles,
-      badge: 'NEW',
-      action: () => onNavigate('new-episodes'),
-      isActive: currentView === 'new-episodes'
+      action: () => onNavigate('anime', { section: 'discover' }),
+      isActive: currentView === 'anime' || currentView === 'anime-details'
     },
     {
       id: 'library',

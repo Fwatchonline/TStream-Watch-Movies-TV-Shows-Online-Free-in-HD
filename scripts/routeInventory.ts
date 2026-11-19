@@ -34,6 +34,12 @@ import {
   type TmdbDiscoveryOptions,
   type TmdbDiscoveryStats
 } from './tmdbDiscovery.ts';
+import {
+  discoverAnimeCatalog,
+  buildAnimeRouteInfo,
+  getAnimeHubRoutes,
+  CURATED_ANIME_CATALOG
+} from './animeDiscovery.ts';
 
 export interface MovieInventoryEntry {
   id: number;
@@ -104,10 +110,23 @@ export interface AzInventoryEntry {
   canonicalUrl: string;
 }
 
+export interface AnimeInventoryEntry {
+  id: number;
+  title: string;
+  slug: string;
+  format: string;
+  detailPath: string;
+  canonicalUrl: string;
+  media: any;
+  source?: 'curated' | 'anilist';
+}
+
 export interface AuthoritativeInventoryResult {
   movies: MovieInventoryEntry[];
   tvShows: TvInventoryEntry[];
   episodes: EpisodeInventoryEntry[];
+  anime: AnimeInventoryEntry[];
+  animeHubs: ReturnType<typeof getAnimeHubRoutes>;
   tags: TagInventoryEntry[];
   genres: GenreInventoryEntry[];
   platforms: PlatformInventoryEntry[];
@@ -410,8 +429,12 @@ export function getHubInventory(): Array<{
  * - `generate-sitemaps.ts` (full curated + paginated TMDB movies, TV shows, verified episodes, main hubs)
  * - `prerender.ts` & `verify-production.ts`
  */
+export interface RouteInventoryOptions extends TmdbDiscoveryOptions {
+  animeFetchImpl?: typeof fetch;
+}
+
 export async function getAuthoritativeRouteInventory(
-  options: TmdbDiscoveryOptions = {}
+  options: RouteInventoryOptions = {}
 ): Promise<AuthoritativeInventoryResult> {
   const fetchImpl = options.fetchImpl || fetch;
   const tmdbApiKey = options.tmdbApiKey !== undefined
@@ -422,7 +445,7 @@ export async function getAuthoritativeRouteInventory(
   const curatedTv = getTvInventory();
   const curatedEpisodes = getVerifiedEpisodeInventory();
 
-  const [genres, platforms, discovery] = await Promise.all([
+  const [genres, platforms, discovery, animeDiscovery] = await Promise.all([
     getGenreInventory(fetchImpl, tmdbApiKey),
     getPlatformInventory(fetchImpl, tmdbApiKey),
     discoverTmdbCatalog({
@@ -433,8 +456,34 @@ export async function getAuthoritativeRouteInventory(
         ...(options.seedTvShowIds || []),
         ...curatedTv.map(t => t.id)
       ]
-    })
+    }),
+    discoverAnimeCatalog({
+      fetchImpl: options.animeFetchImpl || (options.maxRetries === 0 ? undefined : fetchImpl),
+      maxPagesPerFeed: options.maxRetries === 0 ? 1 : undefined,
+      requestTimeoutMs: options.requestTimeoutMs
+    }).catch(() => ({
+      items: CURATED_ANIME_CATALOG,
+      attemptedRequests: 0,
+      successfulRequests: 0,
+      failedFeeds: [],
+      hadPartialOutage: false,
+      hadTotalLiveOutage: false,
+      errors: []
+    }))
   ]);
+
+  const curatedAnimeIds = new Set(CURATED_ANIME_CATALOG.map(a => a.anilistId));
+  const animeMap = new Map<number, AnimeInventoryEntry>();
+  for (const animeItem of animeDiscovery.items) {
+    if (!Number.isInteger(animeItem.anilistId) || animeItem.anilistId <= 0 || animeItem.isAdult) continue;
+    const info = buildAnimeRouteInfo(animeItem);
+    if (!info.title || animeMap.has(info.id)) continue;
+    animeMap.set(info.id, {
+      ...info,
+      media: animeItem,
+      source: curatedAnimeIds.has(info.id) ? 'curated' : 'anilist'
+    });
+  }
 
   // Merge movies strictly by unique TMDB movie ID (never mixing TV IDs)
   const movieMap = new Map<number, MovieInventoryEntry>();
@@ -482,10 +531,13 @@ export async function getAuthoritativeRouteInventory(
     }
   }
 
+  const finalAnime = Array.from(animeMap.values());
   return {
     movies: Array.from(movieMap.values()),
     tvShows: Array.from(tvMap.values()),
     episodes: Array.from(episodeMap.values()),
+    anime: finalAnime,
+    animeHubs: getAnimeHubRoutes(finalAnime.map(a => a.media)),
     tags: getTagInventory(),
     genres,
     platforms,

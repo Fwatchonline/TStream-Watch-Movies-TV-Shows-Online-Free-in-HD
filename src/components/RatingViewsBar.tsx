@@ -1,11 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { Star, Eye, Flag } from 'lucide-react';
 import { doc, onSnapshot } from 'firebase/firestore';
-import { db, recordMovieView, getMovieStats, submitMovieRating, MovieStats } from '../services/firebase';
+import {
+  db,
+  recordMovieView,
+  submitMovieRating,
+  MovieStats,
+  isFirestoreQuotaExceeded,
+  markFirestoreQuotaExceeded,
+  isQuotaExceededError
+} from '../services/firebase';
+import { MediaType } from '../types/media';
 
 interface RatingViewsBarProps {
   mediaId: number;
-  mediaType: 'movie' | 'tv';
+  mediaType: MediaType;
   mediaTitle: string;
   onOpenReport?: () => void;
   className?: string;
@@ -47,36 +56,41 @@ export const RatingViewsBar: React.FC<RatingViewsBarProps> = ({
 
     // 3. Real-time Firestore listener for live view count & rating updates
     let unsubscribeSnapshot = () => {};
-    try {
-      const statRef = doc(db, 'movieStats', docKey);
-      unsubscribeSnapshot = onSnapshot(
-        statRef,
-        (snap) => {
-          if (!isMounted) return;
-          if (snap.exists()) {
-            const d = snap.data();
-            const rSum = d?.ratingSum || 38;
-            const rCount = d?.ratingCount || 8;
-            setStats({
-              id: docKey,
-              mediaId: String(mediaId),
-              mediaType,
-              mediaTitle: d?.mediaTitle || mediaTitle,
-              title: d?.title || mediaTitle,
-              views: Number(d?.views) || 168,
-              ratingSum: rSum,
-              ratingCount: rCount,
-              ratingAverage: rCount > 0 ? Number((rSum / rCount).toFixed(1)) : 4.8,
-              lastViewedAt: d?.lastViewedAt
-            } as MovieStats);
+    if (!isFirestoreQuotaExceeded()) {
+      try {
+        const statRef = doc(db, 'movieStats', docKey);
+        unsubscribeSnapshot = onSnapshot(
+          statRef,
+          (snap) => {
+            if (!isMounted) return;
+            if (snap.exists()) {
+              const d = snap.data();
+              const rSum = d?.ratingSum || 38;
+              const rCount = d?.ratingCount || 8;
+              setStats({
+                id: docKey,
+                mediaId: String(mediaId),
+                mediaType,
+                mediaTitle: d?.mediaTitle || mediaTitle,
+                title: d?.title || mediaTitle,
+                views: Number(d?.views) || 168,
+                ratingSum: rSum,
+                ratingCount: rCount,
+                ratingAverage: rCount > 0 ? Number((rSum / rCount).toFixed(1)) : 4.8,
+                lastViewedAt: d?.lastViewedAt
+              } as MovieStats);
+            }
+          },
+          (err) => {
+            if (isQuotaExceededError(err)) {
+              markFirestoreQuotaExceeded();
+            }
+            console.warn('Real-time movieStats listener error, using initial stats:', err);
           }
-        },
-        (err) => {
-          console.warn('Real-time movieStats listener error, using initial stats:', err);
-        }
-      );
-    } catch (err) {
-      console.warn('Could not establish onSnapshot for movieStats:', err);
+        );
+      } catch (err) {
+        console.warn('Could not establish onSnapshot for movieStats:', err);
+      }
     }
 
     return () => {
@@ -112,7 +126,7 @@ export const RatingViewsBar: React.FC<RatingViewsBarProps> = ({
       {/* 1. Rating Stars: "Rate this movie:" ☆ ☆ ☆ ☆ ☆ */}
       <div className="flex items-center gap-2">
         <span className="text-[#8E8E93] font-medium hover:text-slate-200 transition-colors">
-          Rate this {mediaType === 'tv' ? 'show' : 'movie'}:
+          Rate this {mediaType === 'tv' ? 'show' : mediaType === 'anime' ? 'anime' : 'movie'}:
         </span>
         <div className="flex items-center gap-1">
           {[1, 2, 3, 4, 5].map((starIndex) => {

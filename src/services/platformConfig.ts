@@ -6,7 +6,10 @@ export const SUPPORTED_WATCH_REGIONS = [
   { code: 'CA', label: 'Canada' },
   { code: 'DE', label: 'Germany' },
   { code: 'FR', label: 'France' },
+  { code: 'IT', label: 'Italy' },
+  { code: 'ES', label: 'Spain' },
   { code: 'AU', label: 'Australia' },
+  { code: 'BA', label: 'Bosnia & Herzegovina' },
   { code: 'HR', label: 'Croatia' },
   { code: 'RS', label: 'Serbia' }
 ] as const;

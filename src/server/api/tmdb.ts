@@ -57,7 +57,8 @@ const ALLOWED_QUERY_KEYS = new Set([
   'air_date.lte',
   'include_adult',
   'append_to_response',
-  'language'
+  'language',
+  'with_original_language'
 ]);
 
 export function isAllowedTmdbPath(tmdbPath: string): boolean {

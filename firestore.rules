@@ -1,86 +1,713 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Global default deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Core Auth, RBAC, and Validation Helpers
+    // =========================================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
     }
 
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isBootstrapAdminEmail() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.email is string &&
+        (
+          request.auth.token.email.lower() == 'snapmire@gmail.com' ||
+          request.auth.token.email.lower() == 'miroslav87@gmail.com'
+        );
+    }
+
     function isAdmin() {
       return isSignedIn() && (
-        request.auth.token.email.lower() == 'snapmire@gmail.com' ||
-        request.auth.token.email.lower() == 'miroslav87@gmail.com'
+        isBootstrapAdminEmail() ||
+        request.auth.token.admin == true ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
 
     function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
+      return id is string &&
+        id.size() > 0 &&
+        id.size() <= 128 &&
+        id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // User private data (Profile, Watchlist, Continue Watching, Player Settings)
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidMediaType(val) {
+      return val is string && val in ['movie', 'tv', 'anime'];
+    }
+
+    // =========================================================================
+    // Entity Validation Blueprints
+    // =========================================================================
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['userId', 'email']) &&
+        data.keys().hasOnly([
+          'userId',
+          'email',
+          'displayName',
+          'photoURL',
+          'createdAt',
+          'updatedAt',
+          'playerSettings'
+        ]) &&
+        isValidId(data.userId) &&
+        data.email is string && data.email.size() <= 254 &&
+        (!('displayName' in data) || isValidString(data.displayName, 0, 120)) &&
+        (!('photoURL' in data) || isValidString(data.photoURL, 0, 1024)) &&
+        (!('createdAt' in data) || isValidString(data.createdAt, 1, 64)) &&
+        (!('updatedAt' in data) || isValidString(data.updatedAt, 1, 64)) &&
+        (!('playerSettings' in data) || (
+          data.playerSettings is map &&
+          data.playerSettings.keys().size() <= 30
+        ));
+    }
+
+    function isValidWatchlistItem(data) {
+      return data.keys().hasAll(['userId', 'mediaType', 'title']) &&
+        data.keys().hasOnly([
+          'userId',
+          'mediaKey',
+          'tmdbId',
+          'anilistId',
+          'malId',
+          'mediaType',
+          'title',
+          'posterPath',
+          'backdropPath',
+          'voteAverage',
+          'releaseDate',
+          'addedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        isValidMediaType(data.mediaType) &&
+        isValidString(data.title, 1, 300) &&
+        (!('mediaKey' in data) || isValidId(data.mediaKey)) &&
+        (!('tmdbId' in data) || isValidString(data.tmdbId, 1, 64)) &&
+        (!('anilistId' in data) || (data.anilistId is number && data.anilistId >= 0)) &&
+        (!('malId' in data) || (data.malId is number && data.malId >= 0)) &&
+        (!('posterPath' in data) || isValidString(data.posterPath, 0, 1024)) &&
+        (!('backdropPath' in data) || isValidString(data.backdropPath, 0, 1024)) &&
+        (!('voteAverage' in data) || (data.voteAverage is number && data.voteAverage >= 0 && data.voteAverage <= 10)) &&
+        (!('releaseDate' in data) || isValidString(data.releaseDate, 0, 64)) &&
+        (!('addedAt' in data) || isValidString(data.addedAt, 1, 64));
+    }
+
+    function isValidContinueWatching(data) {
+      return data.keys().hasAll([
+          'userId',
+          'mediaType',
+          'title',
+          'progressSeconds',
+          'durationSeconds',
+          'percentage',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId',
+          'mediaKey',
+          'tmdbId',
+          'anilistId',
+          'malId',
+          'mediaType',
+          'title',
+          'posterPath',
+          'backdropPath',
+          'progressSeconds',
+          'durationSeconds',
+          'percentage',
+          'seasonNumber',
+          'episodeNumber',
+          'episodeName',
+          'completed',
+          'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        isValidMediaType(data.mediaType) &&
+        isValidString(data.title, 1, 300) &&
+        data.progressSeconds is number && data.progressSeconds >= 0 &&
+        data.durationSeconds is number && data.durationSeconds >= 0 &&
+        data.percentage is number && data.percentage >= 0 && data.percentage <= 100 &&
+        isValidString(data.updatedAt, 1, 64) &&
+        (!('mediaKey' in data) || isValidId(data.mediaKey)) &&
+        (!('tmdbId' in data) || isValidString(data.tmdbId, 1, 64)) &&
+        (!('anilistId' in data) || (data.anilistId is number && data.anilistId >= 0)) &&
+        (!('malId' in data) || (data.malId is number && data.malId >= 0)) &&
+        (!('posterPath' in data) || isValidString(data.posterPath, 0, 1024)) &&
+        (!('backdropPath' in data) || isValidString(data.backdropPath, 0, 1024)) &&
+        (!('seasonNumber' in data) || (data.seasonNumber is number && data.seasonNumber >= 0 && data.seasonNumber <= 500)) &&
+        (!('episodeNumber' in data) || (data.episodeNumber is number && data.episodeNumber >= 1 && data.episodeNumber <= 10000)) &&
+        (!('episodeName' in data) || isValidString(data.episodeName, 0, 300)) &&
+        (!('completed' in data) || data.completed is bool);
+    }
+
+    function isValidWatchHistoryItem(data) {
+      return data.keys().hasAll([
+          'userId',
+          'mediaKey',
+          'mediaType',
+          'title',
+          'progressSeconds',
+          'durationSeconds',
+          'percentage',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId',
+          'mediaKey',
+          'seriesKey',
+          'mediaType',
+          'tmdbId',
+          'anilistId',
+          'malId',
+          'mediaFormat',
+          'title',
+          'posterPath',
+          'backdropPath',
+          'seasonNumber',
+          'episodeNumber',
+          'episodeName',
+          'progressSeconds',
+          'durationSeconds',
+          'percentage',
+          'completed',
+          'completedAt',
+          'lastWatchedAt',
+          'updatedAt',
+          'device',
+          'serverId',
+          'audioLang',
+          'genres'
+        ]) &&
+        isValidId(data.userId) &&
+        isValidId(data.mediaKey) &&
+        isValidMediaType(data.mediaType) &&
+        isValidString(data.title, 1, 300) &&
+        data.progressSeconds is number && data.progressSeconds >= 0 &&
+        data.durationSeconds is number && data.durationSeconds >= 0 &&
+        data.percentage is number && data.percentage >= 0 && data.percentage <= 100 &&
+        isValidString(data.updatedAt, 1, 64) &&
+        (!('seriesKey' in data) || isValidId(data.seriesKey)) &&
+        (!('tmdbId' in data) || isValidString(data.tmdbId, 1, 64)) &&
+        (!('anilistId' in data) || (data.anilistId is number && data.anilistId >= 0)) &&
+        (!('malId' in data) || (data.malId is number && data.malId >= 0)) &&
+        (!('mediaFormat' in data) || isValidString(data.mediaFormat, 0, 64)) &&
+        (!('posterPath' in data) || isValidString(data.posterPath, 0, 1024)) &&
+        (!('backdropPath' in data) || isValidString(data.backdropPath, 0, 1024)) &&
+        (!('seasonNumber' in data) || (data.seasonNumber is number && data.seasonNumber >= 0 && data.seasonNumber <= 500)) &&
+        (!('episodeNumber' in data) || (data.episodeNumber is number && data.episodeNumber >= 1 && data.episodeNumber <= 10000)) &&
+        (!('episodeName' in data) || isValidString(data.episodeName, 0, 300)) &&
+        (!('completed' in data) || data.completed is bool) &&
+        (!('completedAt' in data) || isValidString(data.completedAt, 0, 64)) &&
+        (!('lastWatchedAt' in data) || isValidString(data.lastWatchedAt, 1, 64)) &&
+        (!('device' in data) || isValidString(data.device, 0, 64)) &&
+        (!('serverId' in data) || isValidString(data.serverId, 0, 128)) &&
+        (!('audioLang' in data) || isValidString(data.audioLang, 0, 32)) &&
+        (!('genres' in data) || (data.genres is list && data.genres.size() <= 20));
+    }
+
+    function isValidCompletedItem(data) {
+      return data.keys().hasAll([
+          'userId',
+          'mediaKey',
+          'mediaType',
+          'title',
+          'completedAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId',
+          'mediaKey',
+          'mediaType',
+          'tmdbId',
+          'anilistId',
+          'malId',
+          'title',
+          'posterPath',
+          'seasonNumber',
+          'episodeNumber',
+          'completedAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        isValidId(data.mediaKey) &&
+        isValidMediaType(data.mediaType) &&
+        isValidString(data.title, 1, 300) &&
+        isValidString(data.completedAt, 1, 64) &&
+        isValidString(data.updatedAt, 1, 64) &&
+        (!('tmdbId' in data) || isValidString(data.tmdbId, 1, 64)) &&
+        (!('anilistId' in data) || (data.anilistId is number && data.anilistId >= 0)) &&
+        (!('malId' in data) || (data.malId is number && data.malId >= 0)) &&
+        (!('posterPath' in data) || isValidString(data.posterPath, 0, 1024)) &&
+        (!('seasonNumber' in data) || (data.seasonNumber is number && data.seasonNumber >= 0 && data.seasonNumber <= 500)) &&
+        (!('episodeNumber' in data) || (data.episodeNumber is number && data.episodeNumber >= 1 && data.episodeNumber <= 10000));
+    }
+
+    function isValidPreferenceDoc(data) {
+      return data.keys().hasAll(['userId', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'prefId', 'data', 'updatedAt']) &&
+        isValidId(data.userId) &&
+        isValidString(data.updatedAt, 1, 64) &&
+        (!('prefId' in data) || isValidId(data.prefId)) &&
+        (!('data' in data) || (data.data is map && data.data.keys().size() <= 50));
+    }
+
+    function isValidFollowedShow(data) {
+      return data.keys().hasAll(['userId', 'showId', 'title', 'followedAt']) &&
+        data.keys().hasOnly([
+          'userId',
+          'showId',
+          'title',
+          'posterPath',
+          'backdropPath',
+          'voteAverage',
+          'lastAiredSeason',
+          'lastAiredEpisode',
+          'followedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        isValidString(data.showId, 1, 64) &&
+        isValidString(data.title, 1, 300) &&
+        isValidString(data.followedAt, 1, 64) &&
+        (!('posterPath' in data) || isValidString(data.posterPath, 0, 1024)) &&
+        (!('backdropPath' in data) || isValidString(data.backdropPath, 0, 1024)) &&
+        (!('voteAverage' in data) || (data.voteAverage is number && data.voteAverage >= 0 && data.voteAverage <= 10)) &&
+        (!('lastAiredSeason' in data) || (data.lastAiredSeason is number && data.lastAiredSeason >= 0)) &&
+        (!('lastAiredEpisode' in data) || (data.lastAiredEpisode is number && data.lastAiredEpisode >= 0));
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll([
+          'id',
+          'userId',
+          'showId',
+          'showTitle',
+          'seasonNumber',
+          'episodeNumber',
+          'read',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'userId',
+          'showId',
+          'showTitle',
+          'posterPath',
+          'seasonNumber',
+          'episodeNumber',
+          'episodeName',
+          'airDate',
+          'read',
+          'createdAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.userId) &&
+        isValidString(data.showId, 1, 64) &&
+        isValidString(data.showTitle, 1, 300) &&
+        data.seasonNumber is number && data.seasonNumber >= 0 &&
+        data.episodeNumber is number && data.episodeNumber >= 1 &&
+        data.read is bool &&
+        isValidString(data.createdAt, 1, 64) &&
+        (!('posterPath' in data) || isValidString(data.posterPath, 0, 1024)) &&
+        (!('episodeName' in data) || isValidString(data.episodeName, 0, 300)) &&
+        (!('airDate' in data) || isValidString(data.airDate, 0, 64));
+    }
+
+    function isValidReportItem(data) {
+      return data.keys().hasAll([
+          'id',
+          'mediaId',
+          'mediaType',
+          'mediaTitle',
+          'server',
+          'reason',
+          'reportedAt',
+          'status'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'mediaId',
+          'mediaType',
+          'mediaTitle',
+          'posterPath',
+          'season',
+          'episode',
+          'server',
+          'reason',
+          'details',
+          'notes',
+          'reportedAt',
+          'status',
+          'userEmail',
+          'userId'
+        ]) &&
+        isValidId(data.id) &&
+        isValidString(data.mediaId, 1, 64) &&
+        isValidMediaType(data.mediaType) &&
+        isValidString(data.mediaTitle, 1, 300) &&
+        isValidString(data.server, 1, 120) &&
+        isValidString(data.reason, 1, 200) &&
+        isValidString(data.reportedAt, 1, 64) &&
+        data.status in ['open', 'investigating', 'resolved'] &&
+        (!('posterPath' in data) || isValidString(data.posterPath, 0, 1024)) &&
+        (!('season' in data) || (data.season is number && data.season >= 0 && data.season <= 500)) &&
+        (!('episode' in data) || (data.episode is number && data.episode >= 1 && data.episode <= 10000)) &&
+        (!('details' in data) || isValidString(data.details, 0, 1000)) &&
+        (!('notes' in data) || isValidString(data.notes, 0, 1000)) &&
+        (!('userEmail' in data) || isValidString(data.userEmail, 0, 254)) &&
+        (!('userId' in data) || isValidString(data.userId, 1, 128));
+    }
+
+    function isValidMovieStats(data) {
+      return data.keys().hasAll(['mediaId', 'views']) &&
+        data.keys().hasOnly([
+          'id',
+          'mediaId',
+          'mediaType',
+          'mediaTitle',
+          'title',
+          'views',
+          'ratingSum',
+          'ratingCount',
+          'ratingAverage',
+          'userRating',
+          'lastViewedAt',
+          'lastRatedAt'
+        ]) &&
+        isValidString(data.mediaId, 1, 64) &&
+        data.views is number && data.views >= 0 &&
+        (!('id' in data) || isValidId(data.id)) &&
+        (!('mediaType' in data) || isValidMediaType(data.mediaType)) &&
+        (!('mediaTitle' in data) || isValidString(data.mediaTitle, 0, 300)) &&
+        (!('title' in data) || isValidString(data.title, 0, 300)) &&
+        (!('ratingSum' in data) || (data.ratingSum is number && data.ratingSum >= 0)) &&
+        (!('ratingCount' in data) || (data.ratingCount is number && data.ratingCount >= 0)) &&
+        (!('ratingAverage' in data) || (data.ratingAverage is number && data.ratingAverage >= 0 && data.ratingAverage <= 5)) &&
+        (!('userRating' in data) || (data.userRating is number && data.userRating >= 1 && data.userRating <= 5)) &&
+        (!('lastViewedAt' in data) || isValidString(data.lastViewedAt, 0, 64)) &&
+        (!('lastRatedAt' in data) || isValidString(data.lastRatedAt, 0, 64));
+    }
+
+    function isValidIntroTiming(data) {
+      return data.keys().hasAll(['id', 'mediaKey', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'id',
+          'mediaKey',
+          'introStart',
+          'introEnd',
+          'recapStart',
+          'recapEnd',
+          'creditsStart',
+          'source',
+          'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.mediaKey) &&
+        isValidString(data.updatedAt, 1, 64) &&
+        (!('introStart' in data) || (data.introStart is number && data.introStart >= 0)) &&
+        (!('introEnd' in data) || (data.introEnd is number && data.introEnd >= 0)) &&
+        (!('recapStart' in data) || (data.recapStart is number && data.recapStart >= 0)) &&
+        (!('recapEnd' in data) || (data.recapEnd is number && data.recapEnd >= 0)) &&
+        (!('creditsStart' in data) || (data.creditsStart is number && data.creditsStart >= 0)) &&
+        (!('source' in data) || isValidString(data.source, 1, 64));
+    }
+
+    function isValidFeaturedContent(data) {
+      return data.keys().hasAll(['id', 'mediaType', 'title', 'enabled']) &&
+        data.keys().hasOnly([
+          'id',
+          'mediaKey',
+          'mediaType',
+          'title',
+          'order',
+          'enabled',
+          'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidMediaType(data.mediaType) &&
+        isValidString(data.title, 1, 300) &&
+        data.enabled is bool &&
+        (!('mediaKey' in data) || isValidId(data.mediaKey)) &&
+        (!('order' in data) || (data.order is number && data.order >= 0 && data.order <= 1000)) &&
+        (!('updatedAt' in data) || isValidString(data.updatedAt, 1, 64));
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'role']) &&
+        data.keys().hasOnly(['uid', 'email', 'role', 'createdAt']) &&
+        isValidId(data.uid) &&
+        data.role == 'admin' &&
+        (!('email' in data) || isValidString(data.email, 0, 254)) &&
+        (!('createdAt' in data) || isValidString(data.createdAt, 1, 64));
+    }
+
+    function isValidSystemSettings(data) {
+      return data.keys().hasOnly([
+          'servers',
+          'directStreamEnabled',
+          'defaultServerPrefs',
+          'providerOverrides',
+          'updatedAt'
+        ]) &&
+        (!('servers' in data) || (data.servers is list && data.servers.size() <= 50)) &&
+        (!('directStreamEnabled' in data) || data.directStreamEnabled is bool) &&
+        (!('defaultServerPrefs' in data) || (data.defaultServerPrefs is map && data.defaultServerPrefs.keys().size() <= 10)) &&
+        (!('providerOverrides' in data) || (data.providerOverrides is map && data.providerOverrides.keys().size() <= 50)) &&
+        (!('updatedAt' in data) || isValidString(data.updatedAt, 1, 64));
+    }
+
+    // =========================================================================
+    // Collections & Match Blocks
+    // =========================================================================
+
+    // Startup connection test check only
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, write: if false;
+    }
+
+    // Explicit Admin RBAC Registry
+    match /admins/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow list, delete: if isAdmin();
+      allow create, update: if isAdmin() &&
+        isValidId(uid) &&
+        isValidAdminRecord(incoming()) &&
+        incoming().uid == uid;
+    }
+
+    // User Profiles & Private Subcollections (PII Isolated)
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
-      allow create: if isOwner(userId)
-                    && isValidId(userId)
-                    && request.resource.data.userId == request.auth.uid;
-      allow update: if isOwner(userId)
-                    && request.resource.data.userId == request.auth.uid;
-      allow delete: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().userId == request.auth.uid;
+      allow update: if isValidUserProfile(incoming()) &&
+        incoming().userId == existing().userId &&
+        (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'email',
+              'displayName',
+              'photoURL',
+              'updatedAt',
+              'playerSettings',
+              'createdAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin();
 
       match /watchlist/{itemId} {
-        allow read, write: if isOwner(userId);
+        allow get, list: if (isOwner(userId) || isAdmin()) &&
+          (resource == null || resource.data.userId == userId || isAdmin());
+        allow create: if isOwner(userId) &&
+          isValidId(itemId) &&
+          isValidWatchlistItem(incoming()) &&
+          incoming().userId == request.auth.uid;
+        allow update: if isOwner(userId) &&
+          isValidId(itemId) &&
+          isValidWatchlistItem(incoming()) &&
+          incoming().userId == existing().userId;
+        allow delete: if isOwner(userId) || isAdmin();
       }
 
       match /continueWatching/{itemId} {
-        allow read, write: if isOwner(userId);
+        allow get, list: if (isOwner(userId) || isAdmin()) &&
+          (resource == null || resource.data.userId == userId || isAdmin());
+        allow create: if isOwner(userId) &&
+          isValidId(itemId) &&
+          isValidContinueWatching(incoming()) &&
+          incoming().userId == request.auth.uid;
+        allow update: if isOwner(userId) &&
+          isValidId(itemId) &&
+          isValidContinueWatching(incoming()) &&
+          incoming().userId == existing().userId;
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /history/{mediaKey} {
+        allow get, list: if (isOwner(userId) || isAdmin()) &&
+          (resource == null || resource.data.userId == userId || isAdmin());
+        allow create: if isOwner(userId) &&
+          isValidId(mediaKey) &&
+          isValidWatchHistoryItem(incoming()) &&
+          incoming().userId == request.auth.uid &&
+          incoming().mediaKey == mediaKey;
+        allow update: if isOwner(userId) &&
+          isValidId(mediaKey) &&
+          isValidWatchHistoryItem(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().mediaKey == existing().mediaKey;
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /completed/{mediaKey} {
+        allow get, list: if (isOwner(userId) || isAdmin()) &&
+          (resource == null || resource.data.userId == userId || isAdmin());
+        allow create: if isOwner(userId) &&
+          isValidId(mediaKey) &&
+          isValidCompletedItem(incoming()) &&
+          incoming().userId == request.auth.uid &&
+          incoming().mediaKey == mediaKey;
+        allow update: if isOwner(userId) &&
+          isValidId(mediaKey) &&
+          isValidCompletedItem(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().mediaKey == existing().mediaKey;
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      match /preferences/{prefId} {
+        allow get, list: if (isOwner(userId) || isAdmin()) &&
+          (resource == null || resource.data.userId == userId || isAdmin());
+        allow create, update: if isOwner(userId) &&
+          isValidId(prefId) &&
+          isValidPreferenceDoc(incoming()) &&
+          incoming().userId == request.auth.uid;
+        allow delete: if isOwner(userId) || isAdmin();
       }
 
       match /followedShows/{showId} {
-        allow read, write: if isOwner(userId);
+        allow get, list: if (isOwner(userId) || isAdmin()) &&
+          (resource == null || resource.data.userId == userId || isAdmin());
+        allow create, update: if isOwner(userId) &&
+          isValidId(showId) &&
+          isValidFollowedShow(incoming()) &&
+          incoming().userId == request.auth.uid;
+        allow delete: if isOwner(userId) || isAdmin();
       }
 
       match /notifications/{notificationId} {
-        allow read, write: if isOwner(userId);
+        allow get, list: if (isOwner(userId) || isAdmin()) &&
+          (resource == null || resource.data.userId == userId || isAdmin());
+        allow create: if isOwner(userId) &&
+          isValidId(notificationId) &&
+          isValidNotification(incoming()) &&
+          incoming().userId == request.auth.uid;
+        allow update: if isOwner(userId) &&
+          isValidId(notificationId) &&
+          isValidNotification(incoming()) &&
+          incoming().userId == existing().userId &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+        allow delete: if isOwner(userId) || isAdmin();
       }
     }
 
-    // Video & Playback Reports (Visible in Admin Panel)
+    // Video & Playback Reports (Guests & Members can create open tickets; Only Admin reads/manages)
     match /reports/{reportId} {
-      allow create: if true;
-      allow read, update, delete: if true;
+      allow create: if isValidId(reportId) &&
+        isValidReportItem(incoming()) &&
+        incoming().id == reportId &&
+        incoming().status == 'open' &&
+        (
+          (!isSignedIn() && (!('userId' in incoming()) || incoming().userId == 'guest')) ||
+          (isSignedIn() && incoming().userId == request.auth.uid)
+        );
+      allow get, list, update, delete: if isAdmin();
     }
 
-    // Real View Counts and User Ratings for Movies and TV Shows
+    // Public Media Stats (Ratings incremented safely +1; Only Admin can delete or reset)
     match /movieStats/{mediaKey} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if isSignedIn();
+      allow get, list: if true;
+      allow create: if isValidId(mediaKey) &&
+        isValidMovieStats(incoming()) &&
+        incoming().views >= 0 && incoming().views <= 500 &&
+        (!('ratingCount' in incoming()) || (incoming().ratingCount >= 0 && incoming().ratingCount <= 20)) &&
+        (!('ratingSum' in incoming()) || (incoming().ratingSum >= 0 && incoming().ratingSum <= 100));
+      allow update: if isValidId(mediaKey) &&
+        isValidMovieStats(incoming()) &&
+        (
+          isAdmin() ||
+          (
+            incoming().mediaId == existing().mediaId &&
+            (!('mediaType' in existing()) || incoming().mediaType == existing().mediaType) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'ratingSum',
+              'ratingCount',
+              'ratingAverage',
+              'userRating',
+              'lastViewedAt',
+              'lastRatedAt',
+              'mediaTitle',
+              'title',
+              'id'
+            ]) &&
+            incoming().ratingCount == existing().get('ratingCount', 0) + 1 &&
+            incoming().ratingSum >= existing().get('ratingSum', 0) + 1 &&
+            incoming().ratingSum <= existing().get('ratingSum', 0) + 5
+          )
+        );
+      allow delete: if isAdmin();
     }
 
-    // Global System Settings & Custom Embed Servers
+    // Global System Settings & Server Configuration (Public read, Admin-only write)
     match /systemSettings/{settingId} {
-      allow read: if true;
-      allow write: if true;
+      allow get, list: if true;
+      allow create, update: if isAdmin() && isValidId(settingId) && isValidSystemSettings(incoming());
+      allow delete: if isAdmin() && isValidId(settingId);
     }
 
-    // Site Analytics, Visits & Metrics
+    // Intro / Recap / Credits Timings (Public read, Admin-only write)
+    match /introTimings/{timingKey} {
+      allow get, list: if true;
+      allow create, update: if isAdmin() &&
+        isValidId(timingKey) &&
+        isValidIntroTiming(incoming()) &&
+        incoming().id == timingKey;
+      allow delete: if isAdmin();
+    }
+
+    // Curated Featured Content & Anime Spotlights (Public read, Admin-only write)
+    match /featuredContent/{itemId} {
+      allow get, list: if true;
+      allow create, update: if isAdmin() &&
+        isValidId(itemId) &&
+        isValidFeaturedContent(incoming()) &&
+        incoming().id == itemId;
+      allow delete: if isAdmin();
+    }
+
+    // Site Analytics (Admin-only read & write to prevent public telemetry tampering)
     match /analytics_visits/{visitId} {
-      allow create: if true;
-      allow read, delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
     match /analytics_daily/{dateId} {
-      allow read: if true;
-      allow write: if true;
+      allow read, write: if isAdmin();
     }
 
     match /analytics_summary/{summaryId} {
-      allow read: if true;
-      allow write: if true;
+      allow read, write: if isAdmin();
     }
   }
 }

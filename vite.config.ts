@@ -21,12 +21,17 @@ function streamApiPlugin(): Plugin {
       return;
     }
 
-    // Route Hono streaming proxy, orchestrator, subtitle proxy, and TMDB API proxy
+    // Route Hono streaming proxy, orchestrator, subtitle proxy, aniskip, anime, catalog, image proxy, and TMDB API proxy
     if (
       url.startsWith('/api/proxy') ||
       url.startsWith('/api/stream/') ||
       url.startsWith('/api/subtitle-proxy') ||
-      url.startsWith('/api/tmdb')
+      url.startsWith('/api/tmdb') ||
+      url.startsWith('/api/aniskip') ||
+      url.startsWith('/api/anilist') ||
+      url.startsWith('/api/anime') ||
+      url.startsWith('/api/catalog/live') ||
+      url.startsWith('/api/image-proxy')
     ) {
       req.headers['x-tstream-verified-ip'] = req.socket?.remoteAddress || '';
       return honoListener(req, res);

@@ -23,9 +23,12 @@ import {
   providers as providerRegistry,
   getActiveProviders,
   recordProviderLatency,
+  recordProviderPlaybackOutcome,
+  getProviderHealthRecords,
   clearProviderLatencies,
   getProviderLatencyMs
 } from '../../server/providers';
+import { getMediaQuality, detectStreamQualityFromDimensions } from '../quality';
 import { decryptVidRockStreamUrl } from '../../server/providers/vidrock';
 import { CinejoyProvider } from '../../server/providers/cinejoy';
 import { CineSrcProvider, solveCinesrcStage1, solveCinesrcStage2 } from '../../server/providers/cinesrc';
@@ -160,7 +163,7 @@ async function runTests() {
   assert(headMethodRes.status === 200 && (await headMethodRes.text()) === '', 'TMDB proxy supports HEAD with empty body');
 
   // 4. Streaming & Hono API regression checks
-  const badStreamType = await serverApp.request('/api/stream/anime/123');
+  const badStreamType = await serverApp.request('/api/stream/invalid_type/123');
   assert(badStreamType.status === 400, '/api/stream rejects invalid media type with 400');
 
   const badStreamId = await serverApp.request('/api/stream/movie/abc');
@@ -833,10 +836,222 @@ async function runTests() {
       formatQualityBadge('4K / 1080p', 'hls') === '4K / 1080p' &&
       formatQualityBadge('720p', 'mp4') === '720p' &&
       formatQualityBadge('1080p Auto', 'hls') === '1080p' &&
+      formatQualityBadge('auto', 'hls') === 'Auto' &&
+      formatQualityBadge('', 'mp4') === 'Unknown' &&
       stripQualityFromName('Vertex · 1080p') === 'Vertex' &&
       stripQualityFromName('Aether (1080p)') === 'Aether',
-    'formatQualityBadge and stripQualityFromName format clean server resolution pills'
+    'formatQualityBadge and stripQualityFromName format honest server resolution pills without fabricating 1080p'
   );
+
+  // 8M-2. Honest Quality Detection & Provider Health Outcomes + Anime StreamRequest
+  const unverifiedRecent = getMediaQuality({
+    id: 999111,
+    mediaType: 'movie',
+    title: 'Blockbuster Test',
+    releaseDate: '2026-01-01',
+    popularity: 9500,
+    voteAverage: 8.9,
+    voteCount: 5000
+  });
+  const unverifiedOld = getMediaQuality({
+    id: 999222,
+    mediaType: 'movie',
+    title: 'Brand New Cam Test',
+    releaseDate: new Date().toISOString().slice(0, 10),
+    popularity: 1
+  });
+  const verified4k = detectStreamQualityFromDimensions(3840, 2160, 'movie_999111');
+  const cachedAfterMeasure = getMediaQuality({ id: 999111, mediaType: 'movie' });
+  assert(
+    !unverifiedRecent.verified &&
+      unverifiedRecent.tag === 'Unknown' &&
+      !unverifiedOld.isCam &&
+      unverifiedOld.tag === 'Unknown' &&
+      verified4k.verified &&
+      verified4k.tag === '4K' &&
+      cachedAfterMeasure.verified &&
+      cachedAfterMeasure.tag === '4K',
+    'quality.ts never fabricates 4K/CAM from popularity or release date and caches only real measured dimensions'
+  );
+
+  const healthInitRes = await serverApp.request('/api/stream/health');
+  const healthInitJson = await healthInitRes.json() as any;
+  assert(
+    healthInitRes.status === 200 &&
+      healthInitJson.success &&
+      Array.isArray(healthInitJson.providers) &&
+      healthInitJson.providers.length === 12,
+    'GET /api/stream/health returns real health records for all 12 providers'
+  );
+
+  const outcomeFailRes = await serverApp.request('/api/stream/health/outcome', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: 'vidapi', succeeded: false, reason: 'Playback network error' })
+  });
+  const afterFailHealth = getProviderHealthRecords().find((r) => r.key === 'vidapi');
+  const healthyCinejoy = getProviderHealthRecords().find((r) => r.key === 'cinejoy');
+  assert(
+    outcomeFailRes.status === 200 &&
+      Boolean(afterFailHealth && afterFailHealth.playbackFailures >= 1) &&
+      Boolean(healthyCinejoy && afterFailHealth && afterFailHealth.healthScore < healthyCinejoy.healthScore),
+    'POST /api/stream/health/outcome lowers provider health score on genuine playback failures'
+  );
+  recordProviderPlaybackOutcome('vidapi', true);
+  clearProviderLatencies();
+
+  let capturedAnimeReq: any = null;
+  const animeStreamRoute = createStreamRoute({
+    getProviders: () => [
+      {
+        key: 'anime_adapter',
+        label: 'Aether',
+        priority: 1,
+        enabled: true,
+        supportedTypes: ['anime'],
+        async getStream() {
+          return { success: false, source: 'anime_adapter' };
+        },
+        async resolveStream(req) {
+          capturedAnimeReq = req;
+          return {
+            success: true,
+            source: 'anime_adapter',
+            url: '/api/proxy?url=https%3A%2F%2Fcdn.example%2Fep1.m3u8',
+            type: 'hls',
+            sources: [{ name: 'Aether', url: '/api/proxy?url=https%3A%2F%2Fcdn.example%2Fep1.m3u8', quality: '1080p', type: 'hls' }]
+          };
+        }
+      }
+    ]
+  });
+  const animeStreamRes = await animeStreamRoute.request('/anime/16498?episode=3&tmdbId=1429&malId=16498&audio=dub');
+  const animeStreamJson = await animeStreamRes.json() as any;
+  assert(
+    animeStreamRes.status === 200 &&
+      animeStreamJson.success &&
+      capturedAnimeReq?.mediaType === 'anime' &&
+      capturedAnimeReq?.anilistId === 16498 &&
+      capturedAnimeReq?.tmdbId === '1429' &&
+      capturedAnimeReq?.malId === 16498 &&
+      capturedAnimeReq?.episode === 3 &&
+      capturedAnimeReq?.audioType === 'dub',
+    '/api/stream/anime/:id forwards isolated AniList/MAL/TMDB IDs and audioType via StreamRequest'
+  );
+
+  // 8N. Autoplay Next Episode preference toggle & storage synchronization
+  const prevLocalStorage = (globalThis as any).localStorage;
+  const prevWindow = (globalThis as any).window;
+  const prevCustomEvent = (globalThis as any).CustomEvent;
+  const memStore = new Map<string, string>();
+  const dispatchedEvents: Array<{ type: string; detail: any }> = [];
+
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => memStore.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      memStore.set(k, v);
+    },
+    removeItem: (k: string) => {
+      memStore.delete(k);
+    }
+  };
+  (globalThis as any).window = {
+    dispatchEvent: (ev: any) => {
+      dispatchedEvents.push({ type: ev.type, detail: ev.detail });
+      return true;
+    }
+  };
+  (globalThis as any).CustomEvent = class {
+    type: string;
+    detail: any;
+    constructor(type: string, opts?: { detail?: any }) {
+      this.type = type;
+      this.detail = opts?.detail;
+    }
+  };
+
+  try {
+    const {
+      getEffectiveAutoplayNextEpisode,
+      setAutoplayNextEpisodePreference,
+      getUserPlayerSettings
+    } = await import('../playerSettings');
+    const { getUserSettings } = await import('../storage');
+
+    assert(
+      getEffectiveAutoplayNextEpisode() === true && getUserSettings().autoplayNext === true,
+      'Autoplay Next Episode defaults to true before user changes'
+    );
+
+    const offResult = await setAutoplayNextEpisodePreference(false);
+    assert(
+      offResult === false &&
+        getEffectiveAutoplayNextEpisode() === false &&
+        getUserPlayerSettings().autoplayNextEpisode === false &&
+        getUserSettings().autoplayNext === false &&
+        dispatchedEvents.some((e) => e.type === 'tstream_player_settings_changed') &&
+        dispatchedEvents.some((e) => e.type === 'tstream:storage_update'),
+      'setAutoplayNextEpisodePreference(false) persists false and notifies player/storage listeners'
+    );
+
+    const onResult = await setAutoplayNextEpisodePreference(true);
+    assert(
+      onResult === true &&
+        getEffectiveAutoplayNextEpisode() === true &&
+        getUserPlayerSettings().autoplayNextEpisode === true &&
+        getUserSettings().autoplayNext === true,
+      'setAutoplayNextEpisodePreference(true) re-enables autoplay cleanly across player and library settings'
+    );
+
+    // 8O. Firestore quota detection & zero-write analytics visit tracking
+    const { isQuotaExceededError, isFirestoreQuotaExceeded } = await import('../firebase');
+    const { recordSiteVisit } = await import('../analytics');
+
+    assert(
+      isQuotaExceededError({ code: 'resource-exhausted', message: 'Quota limit exceeded.' }) &&
+        isQuotaExceededError(new Error('Free daily write units per project quota exceeded')) &&
+        !isQuotaExceededError(new Error('Permission denied')),
+      'isQuotaExceededError detects Firestore resource-exhausted and quota errors accurately'
+    );
+
+    const prevSessionStorage = (globalThis as any).sessionStorage;
+    const prevDocument = (globalThis as any).document;
+    const prevNavigator = (globalThis as any).navigator;
+    const sessionMem = new Map<string, string>();
+    (globalThis as any).sessionStorage = {
+      getItem: (k: string) => sessionMem.get(k) ?? null,
+      setItem: (k: string, v: string) => sessionMem.set(k, v)
+    };
+    (globalThis as any).document = { referrer: '' };
+    if (!prevNavigator) {
+      (globalThis as any).navigator = { userAgent: 'Mozilla/5.0 Chrome/120.0' };
+    }
+    try {
+      await recordSiteVisit('/movies', null);
+      const localVisitsRaw = memStore.get('tstream_local_visits_v1');
+      const localVisits = localVisitsRaw ? JSON.parse(localVisitsRaw) : [];
+      assert(
+        Array.isArray(localVisits) &&
+          localVisits.length === 1 &&
+          localVisits[0].path === '/movies' &&
+          !isFirestoreQuotaExceeded(),
+        'recordSiteVisit records visit locally without triggering Firestore write quota errors'
+      );
+    } finally {
+      if (prevSessionStorage === undefined) delete (globalThis as any).sessionStorage;
+      else (globalThis as any).sessionStorage = prevSessionStorage;
+      if (prevDocument === undefined) delete (globalThis as any).document;
+      else (globalThis as any).document = prevDocument;
+      if (prevNavigator === undefined) delete (globalThis as any).navigator;
+    }
+  } finally {
+    if (prevLocalStorage === undefined) delete (globalThis as any).localStorage;
+    else (globalThis as any).localStorage = prevLocalStorage;
+    if (prevWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = prevWindow;
+    if (prevCustomEvent === undefined) delete (globalThis as any).CustomEvent;
+    else (globalThis as any).CustomEvent = prevCustomEvent;
+  }
 
   console.log('\n--- ALL SERVER, SECURITY & STREAMING REGRESSION TESTS PASSED ---');
 }

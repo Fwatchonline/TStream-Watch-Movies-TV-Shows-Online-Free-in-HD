@@ -9,11 +9,9 @@ import {
   signOut,
   onAuthStateChanged,
   syncUserProfile,
-  getUserProfile,
   addToWatchlist,
   removeFromWatchlist,
   subscribeToWatchlist,
-  saveUserContinueWatching,
   removeUserContinueWatching,
   getUserContinueWatchingItem,
   subscribeToUserContinueWatching,
@@ -24,6 +22,7 @@ import {
   markNotificationAsRead,
   markAllNotificationsAsRead,
   subscribeToEpisodeNotifications,
+  isFirestoreQuotaExceeded,
   UserProfile,
   WatchlistItem,
   ContinueWatchingRecord,
@@ -31,20 +30,67 @@ import {
   EpisodeNotification,
   User
 } from '../services/firebase';
-import { MediaItem } from '../types/media';
+import {
+  MediaItem,
+  MediaType,
+  WatchHistoryRecord,
+  CompletedMediaRecord
+} from '../types/media';
 import { fetchTvLastEpisode } from '../services/newEpisodes';
 import {
   loadUserPlayerSettingsFromFirestore,
   clearSessionPlayerSettings
 } from '../services/playerSettings';
+import {
+  getContinueWatching as getGuestContinueWatching,
+  removeContinueWatching as removeGuestContinueWatching,
+  getGuestWatchHistory,
+  getGuestCompletedMedia,
+  getGuestWatchProgressItem,
+  getWatchlist as getGuestWatchlist,
+  toggleWatchlist as toggleGuestWatchlist
+} from '../services/storage';
+import {
+  recordWatchProgress,
+  mergeGuestDataToAccount,
+  subscribeToUserWatchHistory,
+  subscribeToUserCompleted,
+  removeUserHistoryItem,
+  clearUserWatchHistory,
+  removeUserCompletedItem,
+  clearUserCompleted
+} from '../services/watchHistory';
+import { buildMediaKey, buildSeriesKey } from '../utils/mediaKey';
 
 type AuthModalMode = 'login' | 'register' | 'profile' | 'watchlist';
+
+export interface SaveContinueWatchingInput {
+  tmdbId: string | number;
+  mediaType: MediaType;
+  anilistId?: number;
+  malId?: number;
+  mediaFormat?: string;
+  title: string;
+  posterPath?: string;
+  backdropPath?: string;
+  progressSeconds: number;
+  durationSeconds: number;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  episodeName?: string;
+  genres?: string[];
+  serverId?: string;
+  audioLang?: string;
+  forceSync?: boolean;
+}
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   watchlist: WatchlistItem[];
   continueWatching: ContinueWatchingRecord[];
+  watchHistory: WatchHistoryRecord[];
+  completedMedia: CompletedMediaRecord[];
   followedShows: FollowedShowItem[];
   notifications: EpisodeNotification[];
   unreadNotificationsCount: number;
@@ -58,21 +104,19 @@ interface AuthContextType {
   registerWithEmail: (email: string, pass: string, displayName: string) => Promise<void>;
   logout: () => Promise<void>;
   toggleWatchlist: (item: Partial<MediaItem> & { id: number; title?: string }) => Promise<boolean>;
-  isInWatchlist: (tmdbId: number | string) => boolean;
-  saveContinueWatching: (item: {
-    tmdbId: string | number;
-    mediaType: 'movie' | 'tv';
-    title: string;
-    posterPath?: string;
-    backdropPath?: string;
-    progressSeconds: number;
-    durationSeconds: number;
-    seasonNumber?: number;
-    episodeNumber?: number;
-    episodeName?: string;
-  }) => Promise<void>;
-  removeContinueWatching: (mediaType: 'movie' | 'tv', tmdbId: string | number) => Promise<void>;
-  getContinueWatchingItem: (mediaType: 'movie' | 'tv', tmdbId: string | number) => Promise<ContinueWatchingRecord | null>;
+  isInWatchlist: (tmdbId: number | string, mediaType?: MediaType) => boolean;
+  saveContinueWatching: (item: SaveContinueWatchingInput) => Promise<void>;
+  removeContinueWatching: (mediaType: MediaType, tmdbId: string | number) => Promise<void>;
+  getContinueWatchingItem: (
+    mediaType: MediaType,
+    tmdbId: string | number,
+    seasonNumber?: number,
+    episodeNumber?: number
+  ) => Promise<ContinueWatchingRecord | null>;
+  removeHistoryItem: (mediaKey: string) => Promise<void>;
+  clearWatchHistory: () => Promise<void>;
+  removeCompletedItem: (mediaKey: string) => Promise<void>;
+  clearCompletedMedia: () => Promise<void>;
   toggleFollowShow: (show: Partial<MediaItem> & { id: number; title?: string }) => Promise<boolean>;
   isFollowingShow: (showId: number | string) => boolean;
   markNotificationRead: (notifId: string) => Promise<void>;
@@ -82,11 +126,64 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function mapGuestContinueToRecords(): ContinueWatchingRecord[] {
+  return getGuestContinueWatching().map((item) => ({
+    userId: 'guest',
+    tmdbId: String(item.mediaType === 'anime' ? (item.anilistId || item.id) : (item.tmdbId || item.id)),
+    mediaKey: item.mediaKey || buildMediaKey({
+      mediaType: item.mediaType,
+      tmdbId: item.tmdbId ?? (item.mediaType !== 'anime' ? item.id : undefined),
+      anilistId: item.anilistId ?? (item.mediaType === 'anime' ? item.id : undefined),
+      id: item.id,
+      seasonNumber: item.seasonNumber,
+      episodeNumber: item.episodeNumber
+    }),
+    anilistId: item.anilistId ?? (item.mediaType === 'anime' ? item.id : undefined),
+    malId: item.malId,
+    mediaType: item.mediaType,
+    title: item.title,
+    posterPath: item.posterPath,
+    backdropPath: item.backdropPath,
+    progressSeconds: item.progressSeconds,
+    durationSeconds: item.durationSeconds,
+    percentage: item.percentage ?? 1,
+    seasonNumber: item.seasonNumber,
+    episodeNumber: item.episodeNumber,
+    episodeName: item.episodeName,
+    completed: item.completed,
+    updatedAt: item.lastWatched
+  }));
+}
+
+function mapGuestWatchlistToRecords(): WatchlistItem[] {
+  return getGuestWatchlist().map((w) => ({
+    userId: 'guest',
+    tmdbId: String(w.mediaType === 'anime' ? (w.anilistId || w.id) : (w.tmdbId || w.id)),
+    mediaKey: w.mediaKey || buildSeriesKey({
+      mediaType: w.mediaType,
+      tmdbId: w.tmdbId ?? (w.mediaType !== 'anime' ? w.id : undefined),
+      anilistId: w.anilistId ?? (w.mediaType === 'anime' ? w.id : undefined),
+      id: w.id
+    }),
+    anilistId: w.anilistId ?? (w.mediaType === 'anime' ? w.id : undefined),
+    malId: w.malId,
+    mediaType: w.mediaType,
+    title: w.title,
+    posterPath: w.posterPath,
+    backdropPath: w.backdropPath,
+    voteAverage: w.voteAverage,
+    releaseDate: w.releaseDate,
+    addedAt: w.addedAt
+  }));
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-  const [continueWatching, setContinueWatching] = useState<ContinueWatchingRecord[]>([]);
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>(() => mapGuestWatchlistToRecords());
+  const [continueWatching, setContinueWatching] = useState<ContinueWatchingRecord[]>(() => mapGuestContinueToRecords());
+  const [watchHistory, setWatchHistory] = useState<WatchHistoryRecord[]>(() => getGuestWatchHistory());
+  const [completedMedia, setCompletedMedia] = useState<CompletedMediaRecord[]>(() => getGuestCompletedMedia());
   const [followedShows, setFollowedShows] = useState<FollowedShowItem[]>([]);
   const [notifications, setNotifications] = useState<EpisodeNotification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,6 +192,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
   const checkingShowsRef = useRef(false);
+  const mergedUidRef = useRef<string | null>(null);
   const notificationsRef = useRef<EpisodeNotification[]>([]);
   notificationsRef.current = notifications;
   const watchlistRef = useRef<WatchlistItem[]>([]);
@@ -119,18 +217,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           const prof = await syncUserProfile(currentUser);
           setProfile(prof);
+          if (mergedUidRef.current !== currentUser.uid) {
+            mergedUidRef.current = currentUser.uid;
+            await mergeGuestDataToAccount(currentUser.uid);
+          }
           // Load registered user player and server settings directly from Firestore database
           await loadUserPlayerSettingsFromFirestore(currentUser.uid);
         } catch (err) {
-          console.warn('Failed to sync profile or player settings:', err);
+          console.warn('Failed to sync profile, merge guest history, or load settings:', err);
         }
       } else {
+        mergedUidRef.current = null;
         setProfile(null);
-        setWatchlist([]);
-        setContinueWatching([]);
         setFollowedShows([]);
         setNotifications([]);
         clearSessionPlayerSettings();
+        setWatchlist(mapGuestWatchlistToRecords());
+        setContinueWatching(mapGuestContinueToRecords());
+        setWatchHistory(getGuestWatchHistory());
+        setCompletedMedia(getGuestCompletedMedia());
       }
       setLoading(false);
     });
@@ -138,12 +243,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribeAuth();
   }, []);
 
+  // Guest Local Storage Synchronizer (keeps Continue Watching, History, Completed, Watchlist reactive without login)
+  useEffect(() => {
+    if (user) return;
+    const syncGuest = () => {
+      setWatchlist(mapGuestWatchlistToRecords());
+      setContinueWatching(mapGuestContinueToRecords());
+      setWatchHistory(getGuestWatchHistory());
+      setCompletedMedia(getGuestCompletedMedia());
+    };
+    syncGuest();
+    window.addEventListener('tstream:storage_update', syncGuest);
+    return () => window.removeEventListener('tstream:storage_update', syncGuest);
+  }, [user]);
+
   // Watchlist Listener when user is authenticated
   useEffect(() => {
-    if (!user) {
-      setWatchlist([]);
-      return;
-    }
+    if (!user) return;
 
     const unsubscribeWatchlist = subscribeToWatchlist(user.uid, (items) => {
       setWatchlist(items);
@@ -152,18 +268,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribeWatchlist();
   }, [user]);
 
-  // Continue Watching Listener (exclusively for registered users)
+  // Continue Watching Listener (authenticated users; guests handled via localStorage listener above)
   useEffect(() => {
-    if (!user) {
-      setContinueWatching([]);
-      return;
-    }
+    if (!user) return;
 
     const unsubscribeContinue = subscribeToUserContinueWatching(user.uid, (items) => {
       setContinueWatching(items);
     });
 
     return () => unsubscribeContinue();
+  }, [user]);
+
+  // Watch History & Completed Listeners (authenticated users)
+  useEffect(() => {
+    if (!user) return;
+
+    const unsubHistory = subscribeToUserWatchHistory(user.uid, (items) => {
+      setWatchHistory(items);
+    });
+    const unsubCompleted = subscribeToUserCompleted(user.uid, (items) => {
+      setCompletedMedia(items);
+    });
+
+    return () => {
+      unsubHistory();
+      unsubCompleted();
+    };
   }, [user]);
 
   // Followed Shows Realtime Listener
@@ -212,11 +342,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    */
   const checkFollowedShowsForNewEpisodes = useCallback(async () => {
     const currentFollowed = followedShowsRef.current;
-    if (!user || checkingShowsRef.current || currentFollowed.length === 0) return;
+    if (!user || checkingShowsRef.current || currentFollowed.length === 0 || isFirestoreQuotaExceeded()) return;
     checkingShowsRef.current = true;
+
+    let cachedNotifIds = new Set<string>();
+    try {
+      const raw = localStorage.getItem(`tstream_notifs_${user.uid}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as EpisodeNotification[];
+        parsed.forEach((n) => cachedNotifIds.add(n.id));
+      }
+    } catch {}
 
     try {
       for (const show of currentFollowed) {
+        if (isFirestoreQuotaExceeded()) break;
         const tvId = parseInt(show.showId, 10);
         if (isNaN(tvId)) continue;
 
@@ -226,8 +366,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const ep = info.lastEpisode;
         const notifId = `notif_${tvId}_s${ep.seasonNumber}_e${ep.episodeNumber}`;
 
-        // Check if notification already exists
-        const alreadyExists = notificationsRef.current.some(n => n.id === notifId);
+        // Check if notification already exists in state or local cache
+        const alreadyExists =
+          cachedNotifIds.has(notifId) ||
+          notificationsRef.current.some(n => n.id === notifId);
         if (!alreadyExists) {
           const newNotif: EpisodeNotification = {
             id: notifId,
@@ -319,92 +461,245 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await markAllNotificationsAsRead(user.uid);
   }, [user]);
 
-  // Watchlist Actions
-  const isInWatchlist = useCallback((tmdbId: number | string): boolean => {
+  // Watchlist Actions (Guest + Cloud, Movie/TV/Anime)
+  const isInWatchlist = useCallback((tmdbId: number | string, mediaType?: MediaType): boolean => {
     const idStr = String(tmdbId);
-    return watchlist.some((item) => item.tmdbId === idStr);
+    return watchlist.some((item) => {
+      if (mediaType && item.mediaType !== mediaType) return false;
+      return (
+        item.tmdbId === idStr ||
+        item.mediaKey === idStr ||
+        (item.anilistId !== undefined && String(item.anilistId) === idStr)
+      );
+    });
   }, [watchlist]);
 
   const toggleWatchlist = useCallback(async (item: Partial<MediaItem> & { id: number; title?: string }): Promise<boolean> => {
+    const resolvedType: MediaType = item.mediaType === 'anime' ? 'anime' : item.mediaType === 'tv' ? 'tv' : 'movie';
+    const seriesKey = buildSeriesKey({
+      mediaType: resolvedType,
+      tmdbId: item.tmdbId ?? (resolvedType !== 'anime' ? item.id : undefined),
+      anilistId: item.anilistId ?? (resolvedType === 'anime' ? item.id : undefined),
+      id: item.id
+    });
+
     if (!user) {
-      openAuthModal('login');
-      return false;
+      const added = toggleGuestWatchlist({
+        id: item.id,
+        mediaType: resolvedType,
+        title: item.title || 'Untitled',
+        posterPath: item.posterPath || '',
+        backdropPath: item.backdropPath || '',
+        releaseDate: item.releaseDate || '',
+        voteAverage: item.voteAverage || 0,
+        tmdbId: item.tmdbId,
+        anilistId: item.anilistId,
+        malId: item.malId,
+        mediaFormat: item.mediaFormat
+      });
+      setWatchlist(mapGuestWatchlistToRecords());
+      return added;
     }
 
-    const idStr = String(item.id);
-    const exists = watchlistRef.current.some((w) => w.tmdbId === idStr);
+    const idStr = String(resolvedType === 'anime' ? (item.anilistId || item.id) : (item.tmdbId || item.id));
+    const exists = watchlistRef.current.some((w) => (
+      w.mediaKey === seriesKey ||
+      (w.tmdbId === idStr && w.mediaType === resolvedType) ||
+      (resolvedType !== 'anime' && w.tmdbId === idStr && !w.mediaKey)
+    ));
 
     if (exists) {
-      await removeFromWatchlist(user.uid, idStr);
+      const existingItem = watchlistRef.current.find((w) => (
+        w.mediaKey === seriesKey ||
+        (w.tmdbId === idStr && w.mediaType === resolvedType) ||
+        w.tmdbId === idStr
+      ));
+      await removeFromWatchlist(user.uid, existingItem?.mediaKey || seriesKey || idStr);
+      if (existingItem?.tmdbId && existingItem.tmdbId !== existingItem.mediaKey) {
+        await removeFromWatchlist(user.uid, existingItem.tmdbId).catch(() => {});
+      }
       return false;
     } else {
       await addToWatchlist({
         userId: user.uid,
         tmdbId: idStr,
-        mediaType: item.mediaType === 'tv' ? 'tv' : 'movie',
+        mediaKey: seriesKey,
+        anilistId: item.anilistId ?? (resolvedType === 'anime' ? item.id : undefined),
+        malId: item.malId,
+        mediaType: resolvedType,
         title: item.title || 'Untitled',
         posterPath: item.posterPath || undefined,
+        backdropPath: item.backdropPath || undefined,
         voteAverage: item.voteAverage || 0,
         releaseDate: item.releaseDate || ''
       });
       return true;
     }
-  }, [user, openAuthModal]);
+  }, [user]);
 
-  // Continue Watching Actions
-  const saveContinueWatching = useCallback(async (item: {
-    tmdbId: string | number;
-    mediaType: 'movie' | 'tv';
-    title: string;
-    posterPath?: string;
-    backdropPath?: string;
-    progressSeconds: number;
-    durationSeconds: number;
-    seasonNumber?: number;
-    episodeNumber?: number;
-    episodeName?: string;
-  }): Promise<void> => {
-    if (!user) return;
-
-    const payload: any = {
-      userId: user.uid,
-      tmdbId: String(item.tmdbId),
+  // Unified Watch Progress & Continue Watching Actions (works seamlessly for BOTH guests and registered users)
+  const saveContinueWatching = useCallback(async (item: SaveContinueWatchingInput): Promise<void> => {
+    const rec = await recordWatchProgress({
+      userId: user?.uid || null,
       mediaType: item.mediaType,
+      tmdbId: item.tmdbId,
+      anilistId: item.anilistId,
+      malId: item.malId,
+      id: item.tmdbId,
+      mediaFormat: item.mediaFormat,
       title: item.title,
+      posterPath: item.posterPath,
+      backdropPath: item.backdropPath,
+      seasonNumber: item.seasonNumber,
+      episodeNumber: item.episodeNumber,
+      episodeName: item.episodeName,
       progressSeconds: item.progressSeconds,
       durationSeconds: item.durationSeconds,
-      percentage: item.durationSeconds > 0
-        ? Math.min(100, Math.max(1, Math.round((item.progressSeconds / item.durationSeconds) * 100)))
-        : 1
-    };
+      genres: item.genres,
+      serverId: item.serverId,
+      audioLang: item.audioLang,
+      forceSync: item.forceSync
+    });
 
-    if (item.posterPath) payload.posterPath = item.posterPath;
-    if (item.backdropPath) payload.backdropPath = item.backdropPath;
-    if (typeof item.seasonNumber === 'number' && !isNaN(item.seasonNumber)) {
-      payload.seasonNumber = item.seasonNumber;
+    if (!user) {
+      setContinueWatching(mapGuestContinueToRecords());
+      setWatchHistory(getGuestWatchHistory());
+      if (rec.completed) {
+        setCompletedMedia(getGuestCompletedMedia());
+      }
     }
-    if (typeof item.episodeNumber === 'number' && !isNaN(item.episodeNumber)) {
-      payload.episodeNumber = item.episodeNumber;
-    }
-    if (item.episodeName) payload.episodeName = item.episodeName;
-
-    await saveUserContinueWatching(payload);
   }, [user]);
 
   const removeContinueWatching = useCallback(async (
-    mediaType: 'movie' | 'tv',
+    mediaType: MediaType,
     tmdbId: string | number
   ): Promise<void> => {
-    if (!user) return;
+    const numId = parseInt(String(tmdbId), 10);
+    if (!isNaN(numId)) {
+      removeGuestContinueWatching(numId, mediaType);
+    }
+    if (!user) {
+      setContinueWatching(mapGuestContinueToRecords());
+      return;
+    }
     await removeUserContinueWatching(user.uid, mediaType, tmdbId);
   }, [user]);
 
   const getContinueWatchingItem = useCallback(async (
-    mediaType: 'movie' | 'tv',
-    tmdbId: string | number
+    mediaType: MediaType,
+    tmdbId: string | number,
+    seasonNumber?: number,
+    episodeNumber?: number
   ): Promise<ContinueWatchingRecord | null> => {
-    if (!user) return null;
-    return getUserContinueWatchingItem(user.uid, mediaType, tmdbId);
+    // Prefer episode-specific unified watch history if available
+    const mediaKey = buildMediaKey({
+      mediaType,
+      tmdbId: mediaType !== 'anime' ? tmdbId : undefined,
+      anilistId: mediaType === 'anime' ? Number(tmdbId) : undefined,
+      id: tmdbId,
+      seasonNumber,
+      episodeNumber
+    });
+    const localProgress = getGuestWatchProgressItem(mediaKey);
+
+    if (!user) {
+      if (localProgress) {
+        return {
+          userId: 'guest',
+          tmdbId: String(tmdbId),
+          mediaKey: localProgress.mediaKey,
+          anilistId: localProgress.anilistId,
+          malId: localProgress.malId,
+          mediaType: localProgress.mediaType,
+          title: localProgress.title,
+          posterPath: localProgress.posterPath,
+          backdropPath: localProgress.backdropPath,
+          progressSeconds: localProgress.progressSeconds,
+          durationSeconds: localProgress.durationSeconds,
+          percentage: localProgress.percentage,
+          seasonNumber: localProgress.seasonNumber,
+          episodeNumber: localProgress.episodeNumber,
+          episodeName: localProgress.episodeName,
+          completed: localProgress.completed,
+          updatedAt: localProgress.updatedAt
+        };
+      }
+      const cw = getGuestContinueWatching().find(
+        (c) => c.mediaType === mediaType && String(c.tmdbId || c.anilistId || c.id) === String(tmdbId)
+      );
+      if (!cw) return null;
+      return {
+        userId: 'guest',
+        tmdbId: String(tmdbId),
+        mediaKey: cw.mediaKey,
+        anilistId: cw.anilistId,
+        malId: cw.malId,
+        mediaType: cw.mediaType,
+        title: cw.title,
+        posterPath: cw.posterPath,
+        backdropPath: cw.backdropPath,
+        progressSeconds: cw.progressSeconds,
+        durationSeconds: cw.durationSeconds,
+        percentage: cw.percentage ?? 1,
+        seasonNumber: cw.seasonNumber,
+        episodeNumber: cw.episodeNumber,
+        episodeName: cw.episodeName,
+        completed: cw.completed,
+        updatedAt: cw.lastWatched
+      };
+    }
+
+    const cloudCw = await getUserContinueWatchingItem(user.uid, mediaType, tmdbId);
+    if (cloudCw) return cloudCw;
+
+    const historyMatch = watchHistory.find((h) => h.mediaKey === mediaKey) || localProgress;
+    if (historyMatch) {
+      return {
+        userId: user.uid,
+        tmdbId: String(tmdbId),
+        mediaKey: historyMatch.mediaKey,
+        anilistId: historyMatch.anilistId,
+        malId: historyMatch.malId,
+        mediaType: historyMatch.mediaType,
+        title: historyMatch.title,
+        posterPath: historyMatch.posterPath,
+        backdropPath: historyMatch.backdropPath,
+        progressSeconds: historyMatch.progressSeconds,
+        durationSeconds: historyMatch.durationSeconds,
+        percentage: historyMatch.percentage,
+        seasonNumber: historyMatch.seasonNumber,
+        episodeNumber: historyMatch.episodeNumber,
+        episodeName: historyMatch.episodeName,
+        completed: historyMatch.completed,
+        updatedAt: historyMatch.updatedAt
+      };
+    }
+
+    return null;
+  }, [user, watchHistory]);
+
+  const removeHistoryItem = useCallback(async (mediaKey: string): Promise<void> => {
+    await removeUserHistoryItem(user?.uid, mediaKey);
+    if (!user) {
+      setWatchHistory(getGuestWatchHistory());
+    }
+  }, [user]);
+
+  const clearWatchHistory = useCallback(async (): Promise<void> => {
+    await clearUserWatchHistory(user?.uid);
+    setWatchHistory([]);
+  }, [user]);
+
+  const removeCompletedItem = useCallback(async (mediaKey: string): Promise<void> => {
+    await removeUserCompletedItem(user?.uid, mediaKey);
+    if (!user) {
+      setCompletedMedia(getGuestCompletedMedia());
+    }
+  }, [user]);
+
+  const clearCompletedMedia = useCallback(async (): Promise<void> => {
+    await clearUserCompleted(user?.uid);
+    setCompletedMedia([]);
   }, [user]);
 
   // Auth Operations
@@ -441,10 +736,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = useCallback(async () => {
     await signOut(auth);
     setProfile(null);
-    setWatchlist([]);
-    setContinueWatching([]);
     setFollowedShows([]);
     setNotifications([]);
+    setWatchlist(mapGuestWatchlistToRecords());
+    setContinueWatching(mapGuestContinueToRecords());
+    setWatchHistory(getGuestWatchHistory());
+    setCompletedMedia(getGuestCompletedMedia());
     closeAuthModal();
   }, [closeAuthModal]);
 
@@ -458,6 +755,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     profile,
     watchlist,
     continueWatching,
+    watchHistory,
+    completedMedia,
     followedShows,
     notifications,
     unreadNotificationsCount,
@@ -475,6 +774,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     saveContinueWatching,
     removeContinueWatching,
     getContinueWatchingItem,
+    removeHistoryItem,
+    clearWatchHistory,
+    removeCompletedItem,
+    clearCompletedMedia,
     toggleFollowShow,
     isFollowingShow,
     markNotificationRead,
@@ -485,6 +788,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     profile,
     watchlist,
     continueWatching,
+    watchHistory,
+    completedMedia,
     followedShows,
     notifications,
     unreadNotificationsCount,
@@ -502,6 +807,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     saveContinueWatching,
     removeContinueWatching,
     getContinueWatchingItem,
+    removeHistoryItem,
+    clearWatchHistory,
+    removeCompletedItem,
+    clearCompletedMedia,
     toggleFollowShow,
     isFollowingShow,
     markNotificationRead,

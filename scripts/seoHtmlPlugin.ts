@@ -19,6 +19,7 @@ import { tagToSlug, slugToTag, isValidTagSlug, isPopularTag } from '../src/utils
 import { slugToGenre, itemMatchesGenre, type GenreLandingMeta } from '../src/utils/genres.ts';
 import {
   buildMediaMetadata,
+  buildBreadcrumbSchema,
   resolveRouteSeoPolicy,
   isEpisodeSeoIndexable,
   isGenuineEpisodeName,
@@ -29,6 +30,13 @@ import {
   PRIMARY_ORIGIN,
   normalizeKeywords
 } from '../src/utils/seo.ts';
+import { ANIME_GENRE_LIST } from '../src/server/api/anilist.ts';
+import {
+  fetchServerAnimeDetail,
+  fetchServerAnimeSectionList,
+  clearAnimeSeoCaches,
+  resolveAnimeGenreSlugMeta
+} from './animeDiscovery.ts';
 import {
   DETAILED_MOVIES,
   DETAILED_TV_SHOWS,
@@ -93,6 +101,10 @@ export type SeoRouteType =
   | 'tv'
   | 'watch_movie'
   | 'watch_tv'
+  | 'anime_hub'
+  | 'anime'
+  | 'anime_movie'
+  | 'watch_anime'
   | 'movies'
   | 'tv-shows'
   | 'trending'
@@ -113,12 +125,16 @@ export type SeoRouteType =
 export interface ParsedSeoRoute {
   type: SeoRouteType;
   isMatched: boolean;
-  mediaType?: 'movie' | 'tv';
+  mediaType?: 'movie' | 'tv' | 'anime';
   id?: number;
   slug?: string;
   isWatchRoute?: boolean;
   season?: number;
   episode?: number;
+  animeSection?: 'discover' | 'trending' | 'popular' | 'seasonal' | 'upcoming' | 'movies' | 'genres';
+  animeGenreName?: string;
+  animeGenreSlug?: string;
+  isAnimeGenreAlias?: boolean;
   tag?: string;
   tagSlug?: string;
   tagQuery?: string;
@@ -444,6 +460,102 @@ export function parseSeoRoute(pathname: string): ParsedSeoRoute | null {
     return { type: 'notfound', isMatched: false };
   }
 
+  // 9B. /watch/anime/:slug and /watch/anime/:slug/:episode
+  if (parts[0] === 'watch' && parts[1] === 'anime') {
+    if ((parts.length !== 3 && parts.length !== 4) || !parts[2]) {
+      return { type: 'notfound', isMatched: false };
+    }
+    const parsed = parseMediaSlug(parts[2]);
+    if (!parsed || !Number.isInteger(parsed.id) || parsed.id <= 0) {
+      return { type: 'notfound', isMatched: false };
+    }
+    if (parts.length === 4) {
+      if (!/^\d+$/.test(parts[3])) {
+        return { type: 'notfound', isMatched: false };
+      }
+      const ep = parseInt(parts[3], 10);
+      if (ep < 1) {
+        return { type: 'notfound', isMatched: false };
+      }
+      return {
+        type: 'watch_anime',
+        isMatched: true,
+        mediaType: 'anime',
+        id: parsed.id,
+        slug: parsed.slug,
+        isWatchRoute: true,
+        season: 1,
+        episode: ep
+      };
+    }
+    return {
+      type: 'watch_anime',
+      isMatched: true,
+      mediaType: 'anime',
+      id: parsed.id,
+      slug: parsed.slug,
+      isWatchRoute: true
+    };
+  }
+
+  // 9C. /anime-movie/:slug
+  if (parts[0] === 'anime-movie') {
+    if (parts.length !== 2 || !parts[1]) {
+      return { type: 'notfound', isMatched: false };
+    }
+    const parsed = parseMediaSlug(parts[1]);
+    if (parsed && Number.isInteger(parsed.id) && parsed.id > 0) {
+      return {
+        type: 'anime_movie',
+        isMatched: true,
+        mediaType: 'anime',
+        id: parsed.id,
+        slug: parsed.slug,
+        isWatchRoute: false
+      };
+    }
+    return { type: 'notfound', isMatched: false };
+  }
+
+  // 9D. /anime, /anime/:section, /anime/genres/:slug, /anime/:slug
+  if (parts[0] === 'anime') {
+    if (parts.length === 1) {
+      return { type: 'anime_hub', isMatched: true, animeSection: 'discover' };
+    }
+    if (parts.length === 2) {
+      if (['trending', 'popular', 'seasonal', 'upcoming', 'movies', 'genres'].includes(parts[1])) {
+        return { type: 'anime_hub', isMatched: true, animeSection: parts[1] as any };
+      }
+      const parsed = parseMediaSlug(parts[1]);
+      if (parsed && Number.isInteger(parsed.id) && parsed.id > 0) {
+        return {
+          type: 'anime',
+          isMatched: true,
+          mediaType: 'anime',
+          id: parsed.id,
+          slug: parsed.slug,
+          isWatchRoute: false
+        };
+      }
+      return { type: 'notfound', isMatched: false };
+    }
+    if (parts.length === 3 && parts[1] === 'genres' && parts[2]) {
+      const meta = resolveAnimeGenreSlugMeta(parts[2]);
+      if (!meta) {
+        return { type: 'notfound', isMatched: false };
+      }
+      return {
+        type: 'anime_hub',
+        isMatched: true,
+        animeSection: 'genres',
+        animeGenreName: meta.name,
+        animeGenreSlug: meta.slug,
+        isAnimeGenreAlias: meta.isAlias
+      };
+    }
+    return { type: 'notfound', isMatched: false };
+  }
+
   // 10. Private / search pages (noindex)
   if (['search', 'library', 'admin', 'settings', 'player-settings'].includes(parts[0])) {
     return { type: 'noindex', isMatched: true };
@@ -501,6 +613,16 @@ function setJsonLd(html: string, schema: Record<string, any>): string {
   const jsonString = JSON.stringify(schema, null, 2);
   const regex = /<script\s+[^>]*id=["']json-ld-schema["'][^>]*>[\s\S]*?<\/script>/i;
   const newTag = `<script type="application/ld+json" id="json-ld-schema">\n${jsonString}\n    </script>`;
+  if (regex.test(html)) {
+    return html.replace(regex, newTag);
+  }
+  return html.replace('</head>', `    ${newTag}\n  </head>`);
+}
+
+function setBreadcrumbJsonLd(html: string, items: Array<{ name: string; url: string }>): string {
+  const jsonString = JSON.stringify(buildBreadcrumbSchema(items), null, 2);
+  const regex = /<script\s+[^>]*id=["']json-ld-breadcrumb["'][^>]*>[\s\S]*?<\/script>/i;
+  const newTag = `<script type="application/ld+json" id="json-ld-breadcrumb">\n${jsonString}\n    </script>`;
   if (regex.test(html)) {
     return html.replace(regex, newTag);
   }
@@ -632,6 +754,7 @@ export function clearSeoPluginCaches(): void {
   serverPlatformCache.clear();
   serverGenreCache.clear();
   inFlightLookups.clear();
+  clearAnimeSeoCaches();
 }
 
 function coalesceLookup<T>(key: string, enabled: boolean, work: () => Promise<T>): Promise<T> {
@@ -1840,13 +1963,21 @@ function renderMediaCardsGrid(items: any[], heading = 'Featured Titles', emptyMe
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
         ${items.slice(0, PAGE_SIZE).map(item => {
           const itemTitle = item.title || item.name || '';
-          const itemSlug = createMediaSlug(itemTitle, item.id);
-          const itemType = item.mediaType === 'tv' ? 'tv' : 'movie';
-          const yearStr = String(item.releaseDate || item.firstAirDate || '').substring(0, 4);
+          const isAnimeItem = item.mediaType === 'anime' || Boolean(item.anilistId && !item.firstAirDate);
+          const idForSlug = isAnimeItem ? (item.anilistId || item.id) : item.id;
+          const itemSlug = createMediaSlug(itemTitle, idForSlug);
+          const itemFmt = String(item.mediaFormat || item.format || '').toUpperCase();
+          const itemHref = isAnimeItem
+            ? itemFmt === 'MOVIE'
+              ? `/anime-movie/${itemSlug}`
+              : `/anime/${itemSlug}`
+            : `/${item.mediaType === 'tv' ? 'tv' : 'movie'}/${itemSlug}`;
+          const posterSrc = item.posterPath || item.coverImage || '';
+          const yearStr = String(item.seasonYear || item.releaseDate || item.firstAirDate || item.startDate || '').substring(0, 4);
           return `
             <div class="bg-zinc-900/60 rounded-lg p-2 border border-white/10 flex flex-col">
-              <a href="/${itemType}/${itemSlug}" class="block hover:opacity-90">
-                ${item.posterPath ? `<img src="${escapeHtml(item.posterPath)}" alt="${escapeHtml(itemTitle)}" class="w-full rounded aspect-[2/3] object-cover mb-2" loading="lazy" />` : ''}
+              <a href="${escapeHtml(itemHref)}" class="block hover:opacity-90">
+                ${posterSrc ? `<img src="${escapeHtml(posterSrc)}" alt="${escapeHtml(itemTitle)}" class="w-full rounded aspect-[2/3] object-cover mb-2" loading="lazy" />` : ''}
                 <h3 class="text-xs font-semibold text-white truncate">${escapeHtml(itemTitle)}</h3>
                 <div class="text-[11px] text-zinc-400 flex items-center justify-between mt-1">
                   <span>${escapeHtml(yearStr)}</span>
@@ -1926,7 +2057,7 @@ export async function renderSeoResult(
     let media = options.preloadedMedia;
     if (!media) {
       try {
-        media = await fetchServerMedia(route.mediaType || 'movie', route.id || 0, route.slug, fetchImpl, tmdbApiKey);
+        media = await fetchServerMedia(route.mediaType === 'tv' ? 'tv' : 'movie', route.id || 0, route.slug, fetchImpl, tmdbApiKey);
       } catch (err: any) {
         if (err?.status === 503) {
           return {
@@ -2152,6 +2283,212 @@ export async function renderSeoResult(
       status: 200,
       canonicalUrl: meta.canonicalUrl,
       isNoindex: !isEpisodeIndexed
+    };
+  }
+
+  // 2B. Anime Detail, Anime Movie & Anime Watch Pages
+  if (route.type === 'anime' || route.type === 'anime_movie' || route.type === 'watch_anime') {
+    let rawAnime = options.preloadedMedia;
+    if (!rawAnime) {
+      try {
+        rawAnime = await fetchServerAnimeDetail(route.id || 0, fetchImpl);
+      } catch (err: any) {
+        if (err?.status === 503) {
+          return {
+            html: render503Html(result),
+            status: 503,
+            canonicalUrl: `${PRIMARY_ORIGIN}/`,
+            isNoindex: true
+          };
+        }
+      }
+    }
+
+    if (!rawAnime) {
+      return {
+        html: render404Html(result),
+        status: 404,
+        canonicalUrl: `${PRIMARY_ORIGIN}/404`,
+        isNoindex: true
+      };
+    }
+
+    const animeMedia = {
+      ...rawAnime,
+      id: rawAnime.anilistId || rawAnime.id,
+      anilistId: rawAnime.anilistId || rawAnime.id,
+      mediaType: 'anime' as const,
+      mediaFormat: rawAnime.mediaFormat || rawAnime.format || 'TV',
+      title: rawAnime.title || rawAnime.englishTitle || rawAnime.romajiTitle || 'Untitled Anime',
+      overview: rawAnime.overview || rawAnime.description || '',
+      posterPath: rawAnime.posterPath || rawAnime.coverImage || '',
+      backdropPath: rawAnime.backdropPath || rawAnime.bannerImage || rawAnime.coverImage || '',
+      releaseDate: rawAnime.releaseDate || rawAnime.startDate || (rawAnime.seasonYear ? String(rawAnime.seasonYear) : '')
+    };
+
+    const isAnimeMovie = String(animeMedia.mediaFormat || '').toUpperCase() === 'MOVIE';
+    const maxEps = Number(animeMedia.episodesCount || animeMedia.numberOfEpisodes || 0);
+    const requestedEp = route.episode;
+
+    if (route.type === 'watch_anime' && requestedEp !== undefined) {
+      if (!Number.isInteger(requestedEp) || requestedEp < 1 || (maxEps > 0 && requestedEp > maxEps)) {
+        return {
+          html: render404Html(result),
+          status: 404,
+          canonicalUrl: `${PRIMARY_ORIGIN}/404`,
+          isNoindex: true
+        };
+      }
+    }
+
+    const epList: any[] = Array.isArray(animeMedia.episodes)
+      ? animeMedia.episodes
+      : Array.isArray(animeMedia.seasons?.[0]?.episodes)
+      ? animeMedia.seasons[0].episodes
+      : [];
+    const epRecord =
+      requestedEp !== undefined
+        ? epList.find((e: any) => Number(e.episodeNumber) === requestedEp)
+        : undefined;
+    const epName = epRecord?.title || epRecord?.name || '';
+    const epOverview = (epRecord?.overview || '').trim();
+    const isEpIndexed =
+      route.type === 'watch_anime' && !isAnimeMovie && requestedEp !== undefined
+        ? !policy.noindex &&
+          isEpisodeSeoIndexable({
+            seriesId: animeMedia.anilistId,
+            episodeId: requestedEp,
+            seasonNumber: 1,
+            episodeNumber: requestedEp,
+            seasonEpisodeCount: maxEps || undefined,
+            numberOfSeasons: 1,
+            episodeName: isGenuineEpisodeName(epName) ? epName : '',
+            episodeOverview: epOverview,
+            seriesOverview: animeMedia.overview,
+            isVerifiedEpisode: Boolean(epRecord && isGenuineEpisodeName(epName) && epOverview.length >= 15)
+          })
+        : !policy.noindex;
+
+    const meta = buildMediaMetadata(animeMedia, {
+      season: 1,
+      episode: isAnimeMovie ? undefined : requestedEp,
+      episodeName: epName,
+      episodeOverview: epOverview,
+      episodeAirDate: epRecord?.airDate,
+      episodeVoteAverage: epRecord?.voteAverage,
+      episodeVoteCount: epRecord?.voteCount,
+      isWatching: route.isWatchRoute
+    });
+
+    result = setTitle(result, meta.title);
+    result = setMetaTag(result, 'name', 'title', meta.title);
+    result = setMetaTag(result, 'name', 'description', meta.description);
+    result = setMetaTag(result, 'name', 'keywords', meta.keywords);
+    result = setCanonical(result, meta.canonicalUrl);
+    result = setMetaTag(
+      result,
+      'name',
+      'robots',
+      isEpIndexed
+        ? 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1'
+        : 'noindex, follow'
+    );
+
+    result = setMetaTag(result, 'property', 'og:title', meta.title);
+    result = setMetaTag(result, 'property', 'og:description', meta.description);
+    result = setMetaTag(result, 'property', 'og:image', meta.image);
+    result = setMetaTag(result, 'property', 'og:image:secure_url', meta.image);
+    result = setMetaTag(result, 'property', 'og:image:type', meta.mimeType);
+    result = setMetaTag(result, 'property', 'og:image:alt', meta.rawTitle);
+    result = setMetaTag(result, 'property', 'og:url', meta.canonicalUrl);
+    result = setMetaTag(result, 'property', 'og:type', meta.type);
+    result = setMetaTag(result, 'property', 'og:site_name', 'T Stream');
+
+    if (meta.isDefaultOgImage) {
+      result = setMetaTag(result, 'property', 'og:image:width', '1200');
+      result = setMetaTag(result, 'property', 'og:image:height', '630');
+    } else {
+      result = removeMetaTag(result, 'property', 'og:image:width');
+      result = removeMetaTag(result, 'property', 'og:image:height');
+    }
+
+    result = setMetaTag(result, 'name', 'twitter:card', 'summary_large_image');
+    result = setMetaTag(result, 'name', 'twitter:title', meta.title);
+    result = setMetaTag(result, 'name', 'twitter:description', meta.description);
+    result = setMetaTag(result, 'name', 'twitter:image', meta.image);
+    result = setMetaTag(result, 'name', 'twitter:image:alt', meta.rawTitle);
+    result = setMetaTag(result, 'name', 'twitter:url', meta.canonicalUrl);
+
+    result = setJsonLd(result, meta.schema);
+
+    const animeSlug = createMediaSlug(animeMedia.title, animeMedia.anilistId);
+    const detailHref = isAnimeMovie ? `/anime-movie/${animeSlug}` : `/anime/${animeSlug}`;
+    const genresList = (animeMedia.genres || [])
+      .map((g: any) => (typeof g === 'string' ? g : g?.name || ''))
+      .filter(Boolean);
+    const yearDisplay = animeMedia.seasonYear ? ` (${animeMedia.seasonYear})` : '';
+
+    result = setBreadcrumbJsonLd(result, [
+      { name: 'Home', url: '/' },
+      { name: isAnimeMovie ? 'Anime Movies' : 'Anime', url: isAnimeMovie ? '/anime/movies' : '/anime' },
+      ...(route.type === 'watch_anime' && requestedEp
+        ? [
+            { name: animeMedia.title, url: detailHref },
+            { name: `Episode ${requestedEp}`, url: `/watch/anime/${animeSlug}/${requestedEp}` }
+          ]
+        : [{ name: animeMedia.title, url: detailHref }])
+    ]);
+
+    const h1Text =
+      route.type === 'watch_anime' && requestedEp && !isAnimeMovie
+        ? `Watch ${animeMedia.title} Episode ${requestedEp}${isGenuineEpisodeName(epName) ? ` — ${epName}` : ''} Free HD`
+        : `${animeMedia.title}${yearDisplay}`;
+
+    const animeBody = `
+      <main class="min-h-screen bg-[#232326] text-[#F3F3F3] p-4 sm:p-8" id="seo-prerender">
+        <nav aria-label="Breadcrumb" class="text-xs text-zinc-400 mb-4 max-w-5xl mx-auto">
+          <a href="/" class="hover:underline">Home</a> &gt;
+          <a href="${isAnimeMovie ? '/anime/movies' : '/anime'}" class="hover:underline">${isAnimeMovie ? 'Anime Movies' : 'Anime'}</a> &gt;
+          ${
+            route.type === 'watch_anime' && requestedEp && !isAnimeMovie
+              ? `<a href="${detailHref}" class="hover:underline">${escapeHtml(animeMedia.title)}</a> &gt; <span class="text-white">Episode ${requestedEp}</span>`
+              : `<span class="text-white">${escapeHtml(animeMedia.title)}</span>`
+          }
+        </nav>
+        <article class="max-w-5xl mx-auto">
+          <header class="mb-4">
+            <h1 class="text-3xl sm:text-4xl font-extrabold text-white mb-2">${escapeHtml(h1Text)}</h1>
+            <div class="flex flex-wrap gap-2 text-xs font-semibold text-amber-400">
+              <span>${escapeHtml(String(animeMedia.mediaFormat || 'ANIME'))}</span>
+              ${genresList.map((g: string) => `<span>· ${escapeHtml(g)}</span>`).join(' ')}
+              ${animeMedia.voteAverage > 0 ? `<span>· ★ ${Number(animeMedia.voteAverage).toFixed(1)}/10</span>` : ''}
+            </div>
+          </header>
+          ${
+            route.type === 'watch_anime' && requestedEp && !isAnimeMovie
+              ? epOverview
+                ? `<section class="mb-6"><h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-1">Episode Synopsis</h2><p class="text-sm sm:text-base text-zinc-300 leading-relaxed">${escapeHtml(epOverview)}</p></section>`
+                : `<section class="mb-6"><p class="text-sm sm:text-base text-zinc-300 leading-relaxed">Stream ${escapeHtml(animeMedia.title)} Episode ${requestedEp} online in HD with Japanese original audio, dubs, and subtitles on T Stream.</p></section>`
+              : animeMedia.overview
+              ? `<section class="mb-6"><h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-1">Synopsis</h2><p class="text-sm sm:text-base text-zinc-300 leading-relaxed">${escapeHtml(animeMedia.overview)}</p></section>`
+              : ''
+          }
+          <div class="mt-6 pt-4 border-t border-white/10 flex flex-wrap gap-4 text-xs text-zinc-400">
+            <a href="/watch/anime/${animeSlug}${isAnimeMovie ? '' : `/${requestedEp || 1}`}" class="text-amber-400 font-semibold hover:underline">${isAnimeMovie ? '▶ Watch Anime Movie Free' : `▶ Watch Episode ${requestedEp || 1}`}</a>
+            <a href="${detailHref}" class="hover:text-white">Series Details</a>
+            <a href="/anime" class="hover:text-white">Browse Anime Catalog</a>
+            <a href="/anime/movies" class="hover:text-white">Anime Movies</a>
+          </div>
+        </article>
+      </main>
+    `.trim();
+
+    result = setRootContent(result, animeBody);
+    return {
+      html: result,
+      status: 200,
+      canonicalUrl: meta.canonicalUrl,
+      isNoindex: !isEpIndexed
     };
   }
 
@@ -2562,6 +2899,104 @@ export async function renderSeoResult(
     if (matchingItems.length === 0) {
       emptyStateMessage = `No verified ${platConfig.name} titles are currently available for watch region ${platRes.watchRegion}. Browse Movies or TV Shows for instant playback.`;
     }
+  } else if (route.type === 'anime_hub') {
+    const sec = route.animeSection || 'discover';
+    const baseHubPath =
+      sec === 'discover'
+        ? '/anime'
+        : sec === 'genres'
+        ? route.animeGenreSlug
+          ? `/anime/genres/${route.animeGenreSlug}`
+          : '/anime/genres'
+        : `/anime/${sec}`;
+    paginationBasePath = baseHubPath;
+
+    let animeListRes: { items: any[]; totalPages: number } = { items: [], totalPages: 1 };
+    if (Array.isArray(options.preloadedMedia)) {
+      animeListRes = { items: options.preloadedMedia, totalPages: 1 };
+    } else {
+      try {
+        animeListRes = await fetchServerAnimeSectionList(sec, currentPage, route.animeGenreName, fetchImpl);
+      } catch (err: any) {
+        if (err?.status === 503) {
+          return {
+            html: render503Html(result),
+            status: 503,
+            canonicalUrl: `${PRIMARY_ORIGIN}/`,
+            isNoindex: true
+          };
+        }
+      }
+    }
+
+    matchingItems = animeListRes.items;
+    totalPages = animeListRes.totalPages;
+    const isOutOfRange =
+      Boolean(policy.isInvalidPage) ||
+      currentPage > totalPages ||
+      (matchingItems.length === 0 && (sec !== 'genres' || Boolean(route.animeGenreSlug)));
+    isNoindex = isNoindex || isOutOfRange || Boolean(route.isAnimeGenreAlias);
+    pageCanonical =
+      isNoindex || currentPage <= 1
+        ? `${PRIMARY_ORIGIN}${baseHubPath}`
+        : `${PRIMARY_ORIGIN}${baseHubPath}?page=${currentPage}`;
+    const activeSuffix = !isNoindex && currentPage > 1 ? ` — Page ${currentPage}` : '';
+
+    if (sec === 'genres') {
+      if (route.animeGenreName) {
+        pageTitle = `${route.animeGenreName} Anime Series & Films Free HD${activeSuffix} — T Stream`;
+        pageDesc = `Stream the best ${route.animeGenreName} anime series and movies online in HD with sub & dub on T Stream.`;
+        h1Heading = `Best ${route.animeGenreName} Anime Online`;
+        breadcrumbTitle = route.animeGenreName;
+      } else {
+        pageTitle = 'Browse Anime by Genre — Action, Fantasy, Sci-Fi & More — T Stream';
+        pageDesc = 'Explore curated anime genres including Action, Adventure, Comedy, Drama, Fantasy, Psychological, Sci-Fi, and Romance on T Stream.';
+        h1Heading = 'Browse Anime by Genre';
+        breadcrumbTitle = 'Anime Genres';
+        extraSectionsHtml = `
+          <section class="max-w-5xl mx-auto my-6">
+            <h2 class="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-3">All Anime Genres</h2>
+            <div class="flex flex-wrap gap-2">
+              ${ANIME_GENRE_LIST.map((g) => `<a href="/anime/genres/${tagToSlug(g)}" class="px-3 py-1 rounded bg-zinc-900 border border-white/10 text-xs text-amber-400 hover:underline">${escapeHtml(g)}</a>`).join('')}
+            </div>
+          </section>
+        `;
+      }
+    } else if (sec === 'trending') {
+      pageTitle = `Trending Anime Series Today — Free HD Sub & Dub${activeSuffix} — T Stream`;
+      pageDesc = 'Watch the hottest trending anime series streaming right now in HD with Japanese audio, English dubs, and subtitles on T Stream.';
+      h1Heading = 'Trending Anime Series Today';
+      breadcrumbTitle = 'Trending Anime';
+    } else if (sec === 'popular') {
+      pageTitle = `Most Popular Anime of All Time — Watch Online Free${activeSuffix} — T Stream`;
+      pageDesc = 'Stream the most popular all-time anime series with verified AniList metadata and fast multi-server HD playback on T Stream.';
+      h1Heading = 'Most Popular Anime Series';
+      breadcrumbTitle = 'Popular Anime';
+    } else if (sec === 'seasonal') {
+      pageTitle = `Seasonal Anime & New Simulcasts Free HD${activeSuffix} — T Stream`;
+      pageDesc = 'Track and stream currently airing seasonal anime simulcasts in HD on T Stream.';
+      h1Heading = 'Seasonal Anime & New Simulcasts';
+      breadcrumbTitle = 'Seasonal Anime';
+    } else if (sec === 'upcoming') {
+      pageTitle = `Upcoming Anime Releases & Schedules${activeSuffix} — T Stream`;
+      pageDesc = 'Discover upcoming anime series, seasonal announcements, and premiere schedules on T Stream.';
+      h1Heading = 'Upcoming Anime Releases';
+      breadcrumbTitle = 'Upcoming Anime';
+    } else if (sec === 'movies') {
+      pageTitle = `Watch Anime Movies Online Free in HD${activeSuffix} — T Stream`;
+      pageDesc = 'Stream critically acclaimed anime feature films in 4K and 1080p HD with Japanese audio, dubs, and subtitles on T Stream.';
+      h1Heading = 'Popular Anime Movies in HD';
+      breadcrumbTitle = 'Anime Movies';
+    } else {
+      pageTitle = `Watch Anime Online Free HD — Sub & Dub Catalog${activeSuffix} — T Stream`;
+      pageDesc = 'Stream anime series and anime movies in HD with verified AniList metadata, Japanese original audio, dubs, and subtitles on T Stream.';
+      h1Heading = 'Watch Anime Online Free in HD';
+      breadcrumbTitle = 'Anime';
+    }
+
+    if (matchingItems.length === 0 && sec !== 'genres') {
+      emptyStateMessage = `No anime titles found for page ${currentPage}. Browse the main Anime catalog for all series and films.`;
+    }
   } else if (route.type === 'az' && route.letter) {
     matchingItems = getMatchingCatalogForLetter(route.letter);
     pageTitle = `Titles Starting With ${route.letter} — A-Z Directory — T Stream`;
@@ -2619,6 +3054,22 @@ export async function renderSeoResult(
     }
   };
   result = setJsonLd(result, landingSchema);
+  result = setBreadcrumbJsonLd(
+    result,
+    route.type === 'home'
+      ? [{ name: 'Home', url: '/' }]
+      : route.type === 'anime_hub' && route.animeGenreName
+      ? [
+          { name: 'Home', url: '/' },
+          { name: 'Anime', url: '/anime' },
+          { name: 'Genres', url: '/anime/genres' },
+          { name: route.animeGenreName, url: `/anime/genres/${route.animeGenreSlug}` }
+        ]
+      : [
+          { name: 'Home', url: '/' },
+          { name: breadcrumbTitle, url: pageCanonical }
+        ]
+  );
 
   const mediaGridHtml = renderMediaCardsGrid(matchingItems, 'Featured Titles', emptyStateMessage);
   const paginationNavHtml = paginationBasePath ? renderPaginationNav(paginationBasePath, currentPage, totalPages) : '';
@@ -2642,6 +3093,9 @@ export async function renderSeoResult(
         <a href="/" class="hover:text-white">Home</a>
         <a href="/movies" class="hover:text-white">Movies</a>
         <a href="/tv-shows" class="hover:text-white">TV Shows</a>
+        <a href="/anime" class="hover:text-white">Anime</a>
+        <a href="/anime/trending" class="hover:text-white">Trending Anime</a>
+        <a href="/anime/movies" class="hover:text-white">Anime Movies</a>
         <a href="/trending" class="hover:text-white">Trending</a>
         <a href="/top-rated" class="hover:text-white">Top Rated</a>
         <a href="/collections" class="hover:text-white">Franchises</a>

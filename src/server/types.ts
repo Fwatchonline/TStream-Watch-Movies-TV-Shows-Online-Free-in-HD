@@ -5,6 +5,17 @@ export interface Subtitle {
     language?: string;
 }
 
+export interface StreamRequest {
+    mediaType: "movie" | "tv" | "anime";
+    tmdbId?: string;
+    anilistId?: number;
+    malId?: number;
+    title?: string;
+    season?: number;
+    episode?: number;
+    audioType?: "sub" | "dub";
+}
+
 export interface StreamResult {
     success: boolean;
     type?: "hls" | "mp4" | "dash";
@@ -36,6 +47,8 @@ export interface VideoProvider {
         season?: number,
         episode?: number
     ): Promise<StreamResult>;
+
+    resolveStream?(request: StreamRequest): Promise<StreamResult>;
 }
 
 export interface ProviderConfig {
@@ -45,4 +58,20 @@ export interface ProviderConfig {
     retries?: number;
     priority?: number;
     enabled?: boolean;
+}
+
+export interface ProviderHealthRecord {
+    key: string;
+    label: string;
+    priority: number;
+    enabled: boolean;
+    averageResponseMs: number | null;
+    successRate: number;
+    totalRequests: number;
+    successfulStarts: number;
+    timeoutCount: number;
+    playbackFailures: number;
+    lastSuccessfulCheck: string | null;
+    lastError: string | null;
+    healthScore: number;
 }
